@@ -78,7 +78,7 @@ def test_no_set_e_fallback_chains_must_degrade() -> None:
 
 def test_default_source_is_github_tarball() -> None:
     body = INSTALL.read_text()
-    assert "codeload.github.com" in body
+    assert "github.com/" in body and "/archive/" in body and ".tar.gz" in body
     assert "archive/refs/heads/" not in body
     assert 'github) echo "$TARBALL"' in body
     # PyPI stays an explicit opt-in until the name is actually published.
@@ -229,7 +229,7 @@ def test_default_ref_is_the_stamp() -> None:
         env.pop(knob, None)
     res = subprocess.run([_bash_executable(), str(INSTALL), "--print-source"], env=env,
                          capture_output=True, text=True)
-    assert res.stdout.strip().endswith("/tar.gz/" + _stamp_of(INSTALL))
+    assert res.stdout.strip() == f"https://github.com/lanex-eda/lanex/archive/{_stamp_of(INSTALL)}.tar.gz"
 
 
 def test_stamper_writes_both_scripts_and_refuses_non_tags(tmp_path: Path, monkeypatch) -> None:

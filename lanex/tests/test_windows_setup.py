@@ -127,7 +127,7 @@ def test_universal_source_resolves_branch_tag_and_sha(ref: str) -> None:
     result = subprocess.run([BASH, str(INSTALL), "--print-source"], env=env,
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == f"https://codeload.github.com/someone/lanex-fork/tar.gz/{ref}"
+    assert result.stdout.strip() == f"https://github.com/someone/lanex-fork/archive/{ref}.tar.gz"
 
 
 def test_universal_source_preserves_local_wheel(tmp_path: Path) -> None:

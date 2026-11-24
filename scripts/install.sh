@@ -77,9 +77,9 @@ LANEX_RELEASE_REF="main"
 
 REPO="${LANEX_REPO:-lanex-eda/lanex}"
 REF="${LANEX_REF:-$LANEX_RELEASE_REF}"
-# codeload's ref-aware endpoint resolves branches, tags, and full commit SHAs.
-# The old branch-qualified archive URL silently made tags and SHAs impossible.
-TARBALL="https://codeload.github.com/${REPO}/tar.gz/${REF}"
+# GitHub archive endpoint with .tar.gz resolves branches, tags, and full
+# commit SHAs, and is recognized by pipx with either pip or uv backend.
+TARBALL="https://github.com/${REPO}/archive/${REF}.tar.gz"
 
 if [ -n "${LANEX_PIP_CONSTRAINT:-}" ]; then
     [ -f "$LANEX_PIP_CONSTRAINT" ] \
@@ -134,7 +134,15 @@ setup_privileges() {
         fi
         SUDO=""     # genuinely root (container, WSL root user): fine.
     elif command -v sudo >/dev/null 2>&1; then
-        SUDO="sudo"
+        if sudo -n true 2>/dev/null; then
+            SUDO="sudo"
+        elif [ "${LANEX_ASSUME_YES:-0}" = "1" ] || [ -n "${CI:-}" ]; then
+            SUDO=""
+            warn "LANEX_ASSUME_YES=1 and sudo requires a password — skipping system packages."
+            PKG="none"
+        else
+            SUDO="sudo"
+        fi
     else
         SUDO=""
         warn "Neither root nor sudo available — skipping system packages."
@@ -149,7 +157,7 @@ net_check() {
     if [ "$source" != "github" ] && [ "$source" != "pypi" ] && [ -e "$source" ]; then
         return 0
     fi
-    local url="https://codeload.github.com/${REPO}/tar.gz/${REF}" out rc detail
+    local url="${TARBALL}" out rc detail
     if command -v curl >/dev/null 2>&1; then
         out="$(mktemp)" || die "Could not create a temporary network diagnostic."
         curl -fsSL -I --connect-timeout 10 --max-time 15 --retry 2 \
@@ -357,6 +365,20 @@ system_deps() {
 PY=""
 best_python() {
     local c
+    # Prefer an interpreter that can successfully create a virtual environment.
+    for c in python3.13 python3.12 python3.11 python3.10 python3; do
+        if command -v "$c" >/dev/null 2>&1 \
+           && "$c" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+            local tmp; tmp="$(mktemp -d 2>/dev/null || mktemp -d -t lanex-pycheck)" || true
+            if [ -n "$tmp" ] && "$c" -m venv "$tmp" >/dev/null 2>&1; then
+                rm -rf "$tmp"
+                command -v "$c"
+                return 0
+            fi
+            [ -n "$tmp" ] && rm -rf "$tmp"
+        fi
+    done
+    # Fallback to any python >= 3.10 if none passed the venv probe (e.g. before python3-venv is installed).
     for c in python3.13 python3.12 python3.11 python3.10 python3; do
         if command -v "$c" >/dev/null 2>&1 \
            && "$c" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
@@ -418,7 +440,7 @@ install_with_venv() {
     # The universal bottom of the chain: nothing but python3 + venv.
     say "Installing LanEx into its own virtualenv (~/.lanex/venv)"
     local venv="$HOME/.lanex/venv"
-    "$PY" -m venv "$venv" 2>/dev/null || {
+    "$PY" -m venv --clear "$venv" 2>/dev/null || {
         # Two known causes: Debian splits venv out of python3 (apt_stage
         # installs it, but a 'none' package-manager path can miss it), or
         # ~/.lanex is root-owned from an earlier sudo mishap.
