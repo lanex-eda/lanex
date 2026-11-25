@@ -428,6 +428,36 @@ def test_finalizer_joins_docker_group_after_installing_docker(
     assert not [f for f in report["installFailures"] if f["component"] == "engine:docker"]
 
 
+def test_pdk_archives_are_removed_once_installed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Field report 2026-11-24: ~/.cache/lanex/pdk-assets kept 0.7 GB of
+    # archives that ciel had already unpacked.
+    from lanex.controller import pdkfeed
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    cache = pdkfeed.cache_dir("sky130", "a" * 40)
+    cache.mkdir(parents=True)
+    (cache / "common.tar.zst").write_bytes(b"x" * 1000)
+    feed = cache.parent / f"feed-sky130-{'a' * 40}"
+    feed.mkdir()
+    (feed / "index.json").write_text("{}")
+    other = pdkfeed.cache_dir("gf180mcu", "b" * 40)   # another PDK still downloading
+    other.mkdir()
+    (other / "common.tar.zst.part").write_bytes(b"y" * 10)
+    assert pdkfeed.remove_cache("sky130", "a" * 40) == 1002
+    assert not cache.exists() and not feed.exists()
+    assert other.exists()                              # untouched
+    assert pdkfeed.remove_cache("gf180mcu", "b" * 40) == 10
+    assert not (tmp_path / "lanex").exists()          # empty parents go too
+
+
+def test_pdk_archives_are_kept_when_install_fails() -> None:
+    src = (Path(__file__).resolve().parents[1] / "controller" / "installer.py").read_text(encoding="utf-8")
+    fail = src.index('reason = "PDK installed but readiness failed for: "')
+    remove = src.index("pdkfeed.remove_cache(family, version)")
+    done = src.index('"label": "ciel fetch+enable"', remove)
+    assert fail < remove < done
+
+
 def test_base_step_ignores_docker_desktops_windows_stub() -> None:
     repo = Path(__file__).resolve().parents[2]
     provision = (repo / "windows/provision/provision.sh").read_text()

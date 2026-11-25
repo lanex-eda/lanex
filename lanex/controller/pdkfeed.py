@@ -93,6 +93,32 @@ def cache_dir(family: str, version: str) -> Path:
     return Path(base) / "lanex" / "pdk-assets" / f"{family}-{version}"
 
 
+def remove_cache(family: str, version: str) -> int:
+    """Delete the verified archives (and the local feed) of one installed PDK
+    version. Returns the bytes freed. Called only after ciel unpacked them and
+    every library checked ready: from then on they are a second copy."""
+    import shutil
+
+    freed = 0
+    cache = cache_dir(family, version)
+    for target in (cache, cache.parent / f"feed-{family}-{version}"):
+        if not target.exists():
+            continue
+        for f in target.rglob("*"):
+            try:
+                if f.is_file() and not f.is_symlink():
+                    freed += f.stat().st_size
+            except OSError:
+                pass
+        shutil.rmtree(target, ignore_errors=True)
+    try:
+        cache.parent.rmdir()          # pdk-assets/, only when now empty
+        cache.parent.parent.rmdir()   # ~/.cache/lanex/, only when now empty
+    except OSError:
+        pass
+    return freed
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
