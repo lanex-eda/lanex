@@ -144,6 +144,67 @@ jobs:
       - name: Probe (sim over HTTP -> save file -> real GTKWave under Xvfb)
         run: xvfb-run -a python scripts/ci/gtkwave_probe.py
 
+  # The whole life of a macOS/Linux install, as a person does it: the real
+  # install.sh (this checkout, Minimal profile), LanEx starting and answering,
+  # then the one-command uninstall, after which nothing of LanEx may be left
+  # but the projects folder. Tester report 2026-11-24: the old manual removal
+  # left 3.5 GB behind and no test noticed.
+  lifecycle:
+    name: Install, start, uninstall (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: shellcheck install.sh (errors)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck -S error scripts/install.sh
+      - name: Install with the real installer (this checkout, Minimal)
+        env:
+          LANEX_FROM: ${{ github.workspace }}
+          LANEX_REF: ${{ github.sha }}
+          LANEX_NO_UI: "1"
+        run: bash scripts/install.sh --profile minimal --yes < /dev/null
+      - name: LanEx starts and answers
+        run: |
+          set -e
+          lanex --version
+          lanex --no-browser --port 8799 > "$RUNNER_TEMP/lanex.log" 2>&1 &
+          for i in $(seq 1 90); do
+            curl -fsS http://127.0.0.1:8799/api/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8799/api/health || { cat "$RUNNER_TEMP/lanex.log"; exit 1; }
+          kill %1 || true
+          sleep 2
+      - name: Uninstall with one command; nothing of LanEx may be left
+        run: |
+          set -e
+          ls -la "$HOME/.lanex" > /dev/null   # it existed
+          bash scripts/install.sh --uninstall --yes < /dev/null
+          hash -r
+          left=""
+          for p in "$HOME/.lanex" "$HOME/.cache/lanex" "$HOME/.local/share/pipx/venvs/lanex" \
+                   "$HOME/.local/bin/lanex" "$HOME/.local/share/applications/lanex.desktop" \
+                   "$HOME/Applications/LanEx.app" /usr/local/bin/lanex; do
+            if [ -e "$p" ] || [ -L "$p" ]; then left="$left $p"; fi
+          done
+          if command -v lanex; then left="$left (lanex still on PATH)"; fi
+          if grep -s -l "Added by the LanEx installer" "$HOME/.bashrc" "$HOME/.zshrc"; then
+            left="$left (PATH line)"
+          fi
+          if [ -n "$left" ]; then echo "left behind:$left"; exit 1; fi
+          echo "clean: nothing of LanEx is left"
+
   # I2 — advance warning when librelane's pre-release/main breaks a private-API
   # touchpoint LanEx depends on. Non-blocking (continue-on-error): it never fails
   # a PR, it just surfaces the break early via the compat canary.

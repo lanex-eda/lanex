@@ -2864,7 +2864,9 @@ find_installed_launcher() {  # -> LAUNCHER of an existing install; 1 when none w
 remove_path_lines() {  # the "# Added by the LanEx installer" line pair, from every rc file
     local rc tmp
     for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.profile"; do
-        [ -f "$rc" ] && grep -qxF '# Added by the LanEx installer' "$rc" 2>/dev/null || continue
+        if [ ! -f "$rc" ] || ! grep -qxF '# Added by the LanEx installer' "$rc" 2>/dev/null; then
+            continue
+        fi
         tmp="$(mktemp 2>/dev/null || mktemp -t lanex-rc)" || continue
         awk 'skip { skip = 0; if ($0 ~ /^export PATH=/) next }
              $0 == "# Added by the LanEx installer" { skip = 1; next }
