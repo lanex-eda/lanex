@@ -2930,8 +2930,8 @@ begin
   Freed := DropCachedFile(RootfsPath) + DropCachedFile(RootfsPath + '.part')
     + DropCachedFile(BakedRootfsPath) + DropCachedFile(BakedRootfsPath + '.part');
   if Freed > 0 then
-    LogLine(Format('freed %d MB of downloads the installed environment no longer needs',
-      [Integer(Freed div 1048576)]));
+    LogLine('freed ' + IntToStr(Integer(Freed div 1048576))
+      + ' MB of downloads the installed environment no longer needs');
 end;
 
 // EnsureRootfs puts an importable image on disk and sets ImportPath to it.
