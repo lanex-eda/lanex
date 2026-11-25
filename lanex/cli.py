@@ -138,6 +138,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="remove the desktop shortcut made by --install-shortcut and exit")
     parser.add_argument("--from-shortcut", action="store_true",
                         help=argparse.SUPPRESS)
+    parser.add_argument("--uninstall", action="store_true",
+                        help="remove LanEx's settings, caches, browser profile and shortcut "
+                             "(macOS/Linux); keeps your projects and asks about PDKs and the "
+                             "container image. install.sh --uninstall also removes the program")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="with --uninstall: list what would be removed, remove nothing")
+    parser.add_argument("--yes", action="store_true",
+                        help="with --uninstall: do not ask (removes only the defaults and what "
+                             "the --remove-* options name)")
+    parser.add_argument("--remove-projects", action="store_true",
+                        help="with --uninstall: also delete the projects folder")
+    parser.add_argument("--remove-pdks", action="store_true",
+                        help="with --uninstall: also delete the PDKs (shared with other LibreLane)")
+    parser.add_argument("--remove-image", action="store_true",
+                        help="with --uninstall: also delete the LibreLane container image")
+    parser.add_argument("--all", action="store_true",
+                        help="with --uninstall: same as --remove-pdks --remove-image "
+                             "(projects still need --remove-projects)")
     parser.add_argument("--verbose", action="store_true")
     # Not argparse's `action="version"`: that evaluates its version string while
     # the parser is being built, and get_version() imports librelane — a cost
@@ -151,6 +169,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         sys.stdout.write(f"lanex {get_version_line()}\n")
         return 0
+
+    if args.uninstall:
+        from .controller import uninstall
+
+        return uninstall.main(dry_run=args.dry_run, yes=args.yes,
+                              remove_projects=args.remove_projects,
+                              remove_pdks=args.remove_pdks or args.all,
+                              remove_image=args.remove_image or args.all)
 
     if args.install_shortcut or args.remove_shortcut:
         from .controller import shortcut

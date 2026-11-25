@@ -95,6 +95,37 @@ def test_build_app_argv_shape():
 def test_build_app_argv_without_profile():
     argv = appwindow.build_app_argv("/snap/bin/chromium", "http://x")
     assert not any(a.startswith("--user-data-dir") for a in argv)
+    # The lean flags ride only with LanEx's own profile, never the user's.
+    assert not any(a in argv for a in appwindow.LEAN_PROFILE_FLAGS)
+
+
+def test_dedicated_profile_is_kept_lean():
+    # Tester report 2026-11-24: ~/.lanex/app-profile reached 2.8 GB (on-device
+    # model, component downloads, GPU caches).
+    argv = appwindow.build_app_argv("/usr/bin/chromium", "http://x", profile_dir="/p")
+    for flag in ("--disable-component-update", "--disable-background-networking"):
+        assert flag in argv
+    assert any("OptimizationGuideOnDeviceModel" in a for a in argv if a.startswith("--disable-features="))
+    assert sum(a.startswith("--disable-features=") for a in argv) == 1
+
+
+def test_slim_profile_removes_caches_but_not_page_storage(tmp_path):
+    p = tmp_path / "app-profile"
+    for rel in ("OptGuideOnDeviceModel/model.bin", "component_crx_cache/a.crx",
+                "Default/Cache/data_0", "GrShaderCache/s", "Default/Local Storage/leveldb/x",
+                "Default/IndexedDB/y", "Default/Preferences"):
+        f = p / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"z" * 10)
+    assert appwindow.slim_profile(p) == 40
+    assert not (p / "OptGuideOnDeviceModel").exists() and not (p / "Default" / "Cache").exists()
+    assert (p / "Default" / "Local Storage" / "leveldb" / "x").exists()
+    assert (p / "Default" / "IndexedDB" / "y").exists() and (p / "Default" / "Preferences").exists()
+    # A profile a browser has open is never touched.
+    (p / "GrShaderCache").mkdir()
+    (p / "GrShaderCache" / "s").write_bytes(b"z")
+    (p / "lockfile").write_text("")
+    assert appwindow.slim_profile(p) == 0 and (p / "GrShaderCache" / "s").exists()
 
 
 def test_app_window_opens_maximized(monkeypatch):
