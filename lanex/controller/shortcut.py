@@ -380,6 +380,34 @@ def install(home: Optional[Path] = None, python: Optional[str] = None) -> Dict[s
                 "the lanex command; run lanex --install-shortcut to try again."}
 
 
+def existing_paths(home: Optional[Path] = None) -> List[Path]:
+    """What :func:`remove` would delete, without deleting anything."""
+    h = _home(home)
+    out: List[Path] = []
+    try:
+        if sys.platform == "darwin":
+            app = h / "Applications" / f"{APP_NAME}.app"
+            link = h / "Desktop" / f"{APP_NAME}.app"
+            if link.is_symlink() and os.path.realpath(link) == os.path.realpath(app):
+                out.append(link)
+            if app.exists() and _is_our_bundle(app):
+                out.append(app)
+        elif sys.platform.startswith("linux"):
+            share = h / ".local" / "share"
+            cands = [share / "applications" / DESKTOP_FILE]
+            desk = _desktop_dir(h)
+            if desk is not None:
+                cands.append(desk / DESKTOP_FILE)
+            out += [p for p in cands if p.is_file() and _is_ours(p)]
+            for size in ("512x512", "192x192"):
+                icon = share / "icons" / "hicolor" / size / "apps" / "lanex.png"
+                if icon.is_file():
+                    out.append(icon)
+    except Exception:
+        pass
+    return out
+
+
 def remove(home: Optional[Path] = None) -> Dict[str, Any]:
     """Remove what :func:`install` created. Never raises."""
     h = _home(home)

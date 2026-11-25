@@ -638,7 +638,30 @@ Apps → Installed apps → LanEx → Uninstall**); what it keeps, what it can r
 and how to find the name of LanEx's environment before removing it by hand are
 in [Uninstalling on Windows](#windows-uninstall).
 
-Otherwise, removal is in three layers — the app, its data, and the heavy things
+**macOS and Linux: one command.**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash -s -- --uninstall
+```
+
+It lists everything with its size, then removes LanEx's settings, logs, app-window
+profile, download cache and shortcut, the program itself, the `lanex` command and
+the PATH line the installer added. It **keeps your projects** (it says where) and
+**asks** about the PDKs and the LibreLane container image, because another
+LibreLane on the same computer may use them.
+
+| Option | Effect |
+|---|---|
+| `--dry-run` | list what would be removed, remove nothing |
+| `--yes` | do not ask (removes only the defaults, plus what the options below name) |
+| `--remove-pdks`, `--remove-image`, `--all` | also remove the PDKs / the container image / both |
+| `--remove-projects` | also delete the projects folder |
+
+`lanex --uninstall` (same options) removes only LanEx's data and keeps the program.
+Docker, Homebrew/apt tools and other programs LanEx helped you install are never
+touched; layer 3 below shows how to remove those.
+
+**By hand**, if you prefer — three layers: the app, its data, and the heavy things
 it *helped* you install (the container image, PDKs, EDA tools). Do as many as you
 want; each is independent.
 
@@ -680,10 +703,15 @@ If the installer added a `PATH` line for `~/.local/bin` to your `~/.bashrc` /
 GDS3D copy, the image digest lock, the app-window profile):
 
 ```bash
-rm -rf ~/.lanex
+rm -rf ~/.lanex ~/.cache/lanex
+rm -rf ~/Applications/LanEx.app                       # macOS shortcut, if made
+rm -f ~/.local/share/applications/lanex.desktop        # Linux shortcut, if made
 ```
 
-Nothing outside `~/.lanex` holds LanEx state — this is a clean wipe.
+`~/.lanex` holds settings, logs, the app-window profile and tools LanEx built;
+`~/.cache/lanex` holds PDK downloads that did not finish installing. Your designs
+are in `~/lanex-projects` unless you chose another folder; delete it only if you
+no longer want them.
 
 **3 · Remove the heavy things LanEx installed for you** (all optional — skip any
 you still use elsewhere):

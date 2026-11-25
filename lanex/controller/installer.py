@@ -3164,6 +3164,16 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
             reason = "PDK installed but readiness failed for: " + ", ".join(failed_libraries)
             _emit("installer_error", {"key": key, "message": reason})
             return {"ok": False, "reason": reason, "missingLibraries": failed_libraries}
+        if feed:
+            # ciel has unpacked and enabled these files and every library
+            # checked ready: the verified archives are now a second copy of the
+            # PDK (~0.7 GB for sky130). Kept only while an install can still be
+            # resumed, i.e. on any failure above.
+            freed = pdkfeed.remove_cache(family, version)
+            if freed:
+                _emit("installer_line", {"key": key, "label": label,
+                                         "line": f"removed the downloaded archives ({_human_bytes(freed)}); "
+                                                 "the PDK is installed"})
         _emit("installer_done", {"key": key, "rc": 0, "label": "ciel fetch+enable",
                                   "method": "ciel", "version": version,
                                   "verified": bool(feed)})

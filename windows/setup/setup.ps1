@@ -1070,6 +1070,23 @@ function Register-OwnerResume {
         throw 'The staged resume installer is missing or has changed.'
     }
     if ([string]$state.boot.lastIdentity -eq $BootIdentity) {
+        # Setup run again before the restart it asked for (field report
+        # 2026-11-24: the user saw "could not arrange to open again"). The
+        # trigger written earlier in this boot is still the one restart; when
+        # it is intact, confirm it without counting another attempt.
+        $command = '"' + [string]$state.resume.installerPath + '" /RESUME=1 /SP-'
+        $existing = Get-ResumePaths
+        $intact = if ($TestResumeRoot) {
+            (Test-Path -LiteralPath $existing.trigger -PathType Leaf) -and
+                ([IO.File]::ReadAllText($existing.trigger) -eq $command)
+        } else {
+            ([string](Get-ItemPropertyValue -LiteralPath $existing.trigger -Name 'LanExSetupResume' -ErrorAction SilentlyContinue) -eq $command)
+        }
+        if ($intact -and $state.resume.triggerRegistered) {
+            $state.phase = 'restart-required'
+            Write-AtomicJson $StatePath $state
+            return $state
+        }
         throw 'An automatic restart was already requested during this boot.'
     }
     if ([int]$state.boot.restartAttempts -ge 2) {

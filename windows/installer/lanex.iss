@@ -340,6 +340,9 @@ var
   // $RecommendedMemoryBytes), so the words on screen always match the check.
   MemoryMinGBValue, MemoryRecGBValue: String;
   WslVersionValue: String;
+  // From the last preflight: WSL or Virtual Machine Platform is still being
+  // turned on, so only a restart can finish it.
+  FeaturesPendingValue: Boolean;
   ConfigurePage: TWizardPage;
   ProfileRadioRecommended, ProfileRadioComplete, ProfileRadioCustom, ProfileRadioMinimal: TRadioButton;
   ProfileDescLabel, SharedHelperLabel, ChangeChoicesLabel: TLabel;
@@ -1242,6 +1245,7 @@ begin
     + '$p.decision.firmwareNotice; $p.memory.low; $p.memory.gb; '
     + '(''m'' + $p.memory.minGb); (''m'' + $p.memory.recommendedGb); '
     + '(''v'' + $p.wsl.version); '
+    + '(''f'' + $p.features.wsl + ''|'' + $p.features.virtualMachinePlatform); '
     + '($p | ConvertTo-Json -Depth 20 -Compress)';
   Result := PowerShellCapture(Snippet, Output);
   if not Result then
@@ -1261,6 +1265,8 @@ begin
   if MemoryMinGBValue = '' then MemoryMinGBValue := '5';
   if MemoryRecGBValue = '' then MemoryRecGBValue := '7';
   WslVersionValue := Copy(TakeLine(Output), 2, 64);
+  // Restarting only helps a feature Windows is still turning on.
+  FeaturesPendingValue := Pos('pending', Lowercase(TakeLine(Output))) > 0;
   JsonLine := TakeLine(Output);
   LogLine('preflight: ' + JsonLine);
   Result := (PreflightDecision <> '') and (BootIdentityValue <> '');
@@ -2898,6 +2904,36 @@ begin
   end;
 end;
 
+// DeleteCachedImages removes the downloaded environment images (verified and
+// partial) from installer-cache after a verified install. Only these exact
+// names are touched; LanEx-Setup.exe and everything else stays.
+function DropCachedFile(const Path: String): Int64;
+var
+  Size: Int64;
+begin
+  Result := 0;
+  if not FileExists(Path) then Exit;
+  if not FileSize64(Path, Size) then Size := 0;
+  if DeleteFile(Path) then
+  begin
+    Result := Size;
+    LogLine('removed cached download: ' + Path);
+  end
+  else
+    LogLine('could not remove cached download: ' + Path);
+end;
+
+procedure DeleteCachedImages;
+var
+  Freed: Int64;
+begin
+  Freed := DropCachedFile(RootfsPath) + DropCachedFile(RootfsPath + '.part')
+    + DropCachedFile(BakedRootfsPath) + DropCachedFile(BakedRootfsPath + '.part');
+  if Freed > 0 then
+    LogLine('freed ' + IntToStr(Integer(Freed div 1048576))
+      + ' MB of downloads the installed environment no longer needs');
+end;
+
 // EnsureRootfs puts an importable image on disk and sets ImportPath to it.
 // Returns '' on success or a message for the user.
 function EnsureRootfs: String;
@@ -3400,6 +3436,31 @@ begin
     Result := 'Your choices are saved. If Setup does not open by itself after you sign in, '
       + 'open "Continue LanEx Setup" from the Start menu.';
     Exit;
+  end;
+
+  // A restart some other program or update is waiting for is not a reason to
+  // stop when the WSL features are already on and only the WSL package is
+  // missing (field report 2026-11-24: after the restart Setup just installed
+  // WSL and went on). Install it now and look again; the restart is asked for
+  // only when WSL still cannot start, exactly as before.
+  if (PreflightDecision = 'restart-required') and (not FeaturesPendingValue) and (WslVersionValue = '') then
+  begin
+    LogLine('a restart is pending, but the WSL features are on and only the WSL package is '
+      + 'missing: installing it before asking for a restart');
+    SetPhase(1, 6, 'Installing Windows Subsystem for Linux (Windows asks for permission)...');
+    if RunLogged(WslExe, '--install --no-distribution', Code) and (Code = 0) and (not CancelRequested) then
+    begin
+      if RunPreflight(False, Output) then
+        LogLine('after installing WSL the check says: ' + PreflightDecision)
+      else
+      begin
+        LogLine('the check after installing WSL did not finish: ' + Output);
+        PreflightDecision := 'restart-required';
+      end;
+    end
+    else
+      LogLine('installing WSL before the restart did not finish; asking for the restart instead');
+    if PreflightDecision = '' then PreflightDecision := 'restart-required';
   end;
 
   if PreflightDecision = 'restart-required' then
@@ -4310,6 +4371,12 @@ begin
   if not PowerShellCapture('& ' + PSQuote(Worker) + ' -Action ClearResume -StatePath '
       + PSQuote(StateFile), Output) then
     LogLine('WARNING: could not clear owned continuation shortcut: ' + Output);
+
+  // 7. The downloaded environment image is now inside the imported distro:
+  //    the copy in installer-cache (~374 MB) and any partial download are a
+  //    second copy of it. Repair downloads it again (resuming) if it ever has
+  //    to re-import. LanEx-Setup.exe in the same folder stays: Repair runs it.
+  DeleteCachedImages;
 
   LogLine('=== installation successfully completed and verified ===');
 end;

@@ -49,6 +49,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import platform_env
@@ -127,6 +128,56 @@ def _sandboxed_browser(path: str) -> bool:
     return any(m in real or m in path for m in parts)
 
 
+# The dedicated profile only ever shows LanEx's own page. Left to itself,
+# Chromium fills it with things LanEx never uses — the on-device AI model,
+# component and extension downloads, GPU shader caches — which reached 2.8 GB
+# on a tester's Mac (2026-11-24). These flags apply only together with
+# --user-data-dir, so the person's own browser profile is never affected.
+LEAN_PROFILE_FLAGS = [
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,"
+    "OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel,"
+    "Translate,MediaRouter",
+    "--disk-cache-size=67108864",
+]
+
+# Regenerable caches and downloads inside the dedicated profile. Never the
+# page's own storage (Local Storage, IndexedDB, Preferences).
+_PROFILE_BULK = (
+    "OptGuideOnDeviceModel", "optimization_guide_model_store",
+    "OptimizationGuidePredictionModels", "OnDeviceHeadSuggestModel",
+    "component_crx_cache", "extensions_crx_cache", "Safe Browsing",
+    "segmentation_platform", "GrShaderCache", "GraphiteDawnCache", "ShaderCache",
+    os.path.join("Default", "Cache"), os.path.join("Default", "Code Cache"),
+    os.path.join("Default", "GPUCache"), os.path.join("Default", "DawnGraphiteCache"),
+    os.path.join("Default", "DawnWebGPUCache"),
+)
+
+
+def slim_profile(profile: Path) -> int:
+    """Delete the bulk caches in a dedicated profile no browser has open.
+
+    Returns the bytes freed (0 when the profile is in use: Chromium holds
+    ``SingletonLock`` on macOS/Linux and ``lockfile`` on Windows while it runs).
+    """
+    if os.path.lexists(profile / "SingletonLock") or os.path.lexists(profile / "lockfile"):
+        return 0
+    freed = 0
+    for rel in _PROFILE_BULK:
+        target = profile / rel
+        if not target.is_dir() or target.is_symlink():
+            continue
+        for f in target.rglob("*"):
+            try:
+                if f.is_file() and not f.is_symlink():
+                    freed += f.stat().st_size
+            except OSError:
+                pass
+        shutil.rmtree(target, ignore_errors=True)
+    return freed
+
+
 def _profile_dir_for(browser_path: str) -> Optional[str]:
     """The dedicated profile dir for *browser_path*, or None to skip the flag."""
     if _sandboxed_browser(browser_path):
@@ -134,6 +185,10 @@ def _profile_dir_for(browser_path: str) -> Optional[str]:
     try:
         d = platform_env.home() / "app-profile"
         d.mkdir(parents=True, exist_ok=True)
+        try:
+            slim_profile(d)
+        except Exception:
+            pass
         return str(d)
     except OSError:
         # Unwritable home (disk full, root-owned ~/.lanex, …) must not block
@@ -172,6 +227,7 @@ def build_app_argv(browser: str, url: str, *, profile_dir: Optional[str] = None)
     ]
     if profile_dir:
         argv.append(f"--user-data-dir={profile_dir}")
+        argv.extend(LEAN_PROFILE_FLAGS)
     if sys.platform.startswith("linux"):
         # X11/Wayland window class — lets the DE (and a user .desktop file with
         # StartupWMClass=lanex) group/pin the window as its own app.
@@ -300,6 +356,13 @@ def _windows_app_commands(url: str) -> List[Tuple[List[str], Optional[str]]]:
         install_id = os.environ.get("LANEX_INSTANCE_ID", "")
         if re.fullmatch(r"[0-9a-fA-F-]{36}", install_id):
             flags.append(f"--user-data-dir={lad}\\LanEx\\app-profile\\{install_id}")
+            flags.extend(LEAN_PROFILE_FLAGS)
+            # The same profile seen from WSL (C:\... -> /mnt/c/...).
+            mnt = "/mnt/" + lad[0].lower() + lad[2:].replace("\\", "/")
+            try:
+                slim_profile(Path(mnt) / "LanEx" / "app-profile" / install_id)
+            except Exception:
+                pass
 
     # 1) Direct exe via the interop bridge — args pass verbatim, no cmd quoting.
     for root in _WSL_PROGRAM_FILES:

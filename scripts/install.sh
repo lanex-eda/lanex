@@ -2841,6 +2841,123 @@ run_release_installer() {
     warn "Could not fetch the installer of LanEx ${LANEX_RELEASE_REF}; this copy installs that release instead."
 }
 
+# --------------------------------------------------------------- uninstall --
+# `install.sh --uninstall`: everything this installer and LanEx put on the
+# computer, in one command (tester report 2026-11-24: the old three manual
+# steps left 3.5 GB behind). LanEx's own `lanex --uninstall` removes its data,
+# caches, browser profile and shortcut and asks about PDKs and the image; this
+# then removes the program, the `lanex` link and the PATH line.
+find_installed_launcher() {  # -> LAUNCHER of an existing install; 1 when none works
+    local c
+    for c in "$(command -v lanex 2>/dev/null || true)" "$HOME/.local/bin/lanex" \
+             "$HOME/.local/share/pipx/venvs/lanex/bin/lanex" \
+             "$HOME/.local/pipx/venvs/lanex/bin/lanex" "$HOME/.lanex/venv/bin/lanex"; do
+        if [ -n "$c" ] && [ -x "$c" ] && "$c" --help 2>/dev/null | grep -q -- '--uninstall'; then
+            LAUNCHER="$c"
+            return 0
+        fi
+    done
+    LAUNCHER=""
+    return 1
+}
+
+remove_path_lines() {  # the "# Added by the LanEx installer" line pair, from every rc file
+    local rc tmp
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+        if [ ! -f "$rc" ] || ! grep -qxF '# Added by the LanEx installer' "$rc" 2>/dev/null; then
+            continue
+        fi
+        tmp="$(mktemp 2>/dev/null || mktemp -t lanex-rc)" || continue
+        awk 'skip { skip = 0; if ($0 ~ /^export PATH=/) next }
+             $0 == "# Added by the LanEx installer" { skip = 1; next }
+             { print }' "$rc" > "$tmp" && cat "$tmp" > "$rc" && note "removed LanEx's PATH line from $rc"
+        rm -f "$tmp"
+    done
+}
+
+uninstall_fallback() {  # no working lanex: remove its folders without its help
+    local yes="$1" d
+    note "No working LanEx program was found, so this removes LanEx's folders directly."
+    for d in "$HOME/.lanex" "$HOME/.librelane-gui" "${XDG_CACHE_HOME:-$HOME/.cache}/lanex"; do
+        [ -e "$d" ] && note "will remove $d ($(du -sh "$d" 2>/dev/null | cut -f1))"
+    done
+    if [ "$yes" != "1" ]; then
+        local ans=""
+        printf '   Remove these? Your projects and PDKs are kept. [y/N] '
+        read -r ans < /dev/tty 2>/dev/null || ans=""
+        case "$ans" in y|Y|yes|YES) ;; *) note "Nothing was removed."; return 3 ;; esac
+    fi
+    rm -rf "$HOME/.lanex" "$HOME/.librelane-gui" "${XDG_CACHE_HOME:-$HOME/.cache}/lanex"
+    rm -f "$HOME/.local/share/applications/lanex.desktop" \
+          "$HOME/.local/share/icons/hicolor/512x512/apps/lanex.png" \
+          "$HOME/.local/share/icons/hicolor/192x192/apps/lanex.png" 2>/dev/null
+    if [ -f "$HOME/Applications/LanEx.app/Contents/Info.plist" ] \
+       && grep -q 'lanex' "$HOME/Applications/LanEx.app/Contents/Info.plist" 2>/dev/null; then
+        rm -rf "$HOME/Applications/LanEx.app"
+        [ -L "$HOME/Desktop/LanEx.app" ] && rm -f "$HOME/Desktop/LanEx.app"
+    fi
+    return 0
+}
+
+uninstall_main() {
+    local a yes=0 dry=0 rc=0 link=/usr/local/bin/lanex
+    local -a pass=()
+    for a in "$@"; do
+        case "$a" in
+            --uninstall) ;;
+            --dry-run) dry=1; pass+=("$a") ;;
+            --yes|-y) yes=1; pass+=(--yes) ;;
+            --remove-projects|--remove-pdks|--remove-image|--all) pass+=("$a") ;;
+            -h|--help) usage; return 0 ;;
+            *) printf 'Unknown option with --uninstall: %s\n\n' "$a" >&2; usage >&2; return 2 ;;
+        esac
+    done
+    if [ -f /etc/lanex/appliance.json ]; then
+        die "This is LanEx's environment inside Windows. Remove LanEx from Windows instead:
+   Start menu > LanEx (EDA) > Uninstall or remove LanEx."
+    fi
+    say "Uninstalling LanEx"
+    if find_installed_launcher; then
+        "$LAUNCHER" --uninstall ${pass[@]+"${pass[@]}"} || rc=$?
+    elif [ "$dry" = "1" ]; then
+        note "No working LanEx program was found; a real run removes ~/.lanex and ~/.cache/lanex."
+    else
+        uninstall_fallback "$yes" || rc=$?
+    fi
+    [ "$dry" = "1" ] && return 0
+    [ "$rc" = "3" ] && return 0      # the person said no: nothing else is touched
+    say "Removing the LanEx program"
+    if command -v pipx >/dev/null 2>&1 && pipx list --short 2>/dev/null | grep -q '^lanex '; then
+        pipx uninstall lanex >/dev/null 2>&1 && note "removed the pipx install of lanex"
+    fi
+    # The hash-checked install (pipx's layout, without pipx) and its link.
+    if [ -d "$HOME/.local/share/pipx/venvs/lanex" ] && ! { command -v pipx >/dev/null 2>&1 \
+            && pipx list --short 2>/dev/null | grep -q '^lanex '; }; then
+        rm -rf "$HOME/.local/share/pipx/venvs/lanex" && note "removed $HOME/.local/share/pipx/venvs/lanex"
+    fi
+    if [ -L "$HOME/.local/bin/lanex" ] && [ ! -e "$HOME/.local/bin/lanex" ]; then
+        rm -f "$HOME/.local/bin/lanex"
+    fi
+    rm -rf "$HOME/.lanex/venv" 2>/dev/null
+    rmdir "$HOME/.lanex" 2>/dev/null || true
+    if [ -L "$link" ] && lanex_link_is_ours "$link"; then
+        if rm -f "$link" 2>/dev/null || { command -v sudo >/dev/null 2>&1 && sudo rm -f "$link"; }; then
+            note "removed $link"
+        else
+            warn "could not remove $link (needs sudo); remove it with:  sudo rm $link"
+        fi
+    fi
+    remove_path_lines
+    hash -r 2>/dev/null || true
+    if [ "$rc" = "0" ]; then
+        say "LanEx is uninstalled"
+    else
+        warn "LanEx is uninstalled, but something above could not be removed."
+    fi
+    note "Docker, Homebrew/apt tools and other programs LanEx helped install are untouched."
+    return "$rc"
+}
+
 usage() {
     cat << 'EOFUSAGE'
 LanEx installer
@@ -2854,7 +2971,13 @@ Unattended:
   ... | bash -s -- --choices my-choices.json  # a Setup choices file (custom)
   ... | LANEX_ASSUME_YES=1 bash               # the app (classic, no profile)
 
-Options: --profile NAME, --choices FILE, --yes, --no-ui, --help
+Remove LanEx (keeps your projects; asks about PDKs and the container image):
+
+  ... | bash -s -- --uninstall                # add --dry-run to only list, --yes to not ask
+  ... | bash -s -- --uninstall --all --remove-projects   # everything LanEx downloaded, too
+
+Options: --profile NAME, --choices FILE, --yes, --no-ui, --uninstall, --dry-run,
+         --remove-projects, --remove-pdks, --remove-image, --all, --help
 EOFUSAGE
 }
 
@@ -2866,6 +2989,13 @@ main() {
         return 0
     fi
     run_release_installer "$@"
+    local a
+    for a in "$@"; do
+        if [ "$a" = "--uninstall" ]; then
+            uninstall_main "$@"
+            return $?
+        fi
+    done
     local profile="${LANEX_PROFILE:-}" choices="${LANEX_CHOICES:-}"
     while [ $# -gt 0 ]; do
         case "$1" in

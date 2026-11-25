@@ -289,6 +289,31 @@ def test_hide_distro_shortcuts_removes_only_wsls_own_files_for_our_distro(tmp_pa
             f.unlink(missing_ok=True)
 
 
+def test_downloaded_image_is_deleted_only_after_a_verified_install() -> None:
+    # Field report 2026-11-25: the 374 MB image stayed in installer-cache for
+    # good, a second copy of what the imported distro already holds.
+    inno = INNO.read_text(encoding="utf-8")
+    done = inno.index("=== installation successfully completed and verified ===")
+    ready = inno.index("if not RecordReadyWithRetry then")
+    call = inno.index("  DeleteCachedImages;")
+    assert ready < call < done
+    body = inno[inno.index("procedure DeleteCachedImages;"):inno.index("function EnsureRootfs: String;")]
+    for name in ("RootfsPath)", "RootfsPath + '.part')", "BakedRootfsPath)", "BakedRootfsPath + '.part')"):
+        assert name in body
+    assert "LanEx-Setup.exe" not in body.split("begin", 1)[1]
+
+
+def test_unrelated_pending_restart_installs_wsl_before_asking_for_one() -> None:
+    inno = INNO.read_text(encoding="utf-8")
+    block = inno[inno.index("(PreflightDecision = 'restart-required') and (not FeaturesPendingValue)"):]
+    block = block[:block.index("if PreflightDecision = 'restart-required' then")]
+    assert "(WslVersionValue = '')" in inno[inno.index("(not FeaturesPendingValue)") - 80:][:200]
+    assert "'--install --no-distribution'" in block and "RunPreflight(False, Output)" in block
+    # Any failure falls back to the restart that was asked for before.
+    assert block.count("PreflightDecision := 'restart-required'") == 2
+    assert "FeaturesPendingValue := Pos('pending'" in inno
+
+
 def test_wizard_removes_wsl_distro_shortcuts_on_every_run() -> None:
     inno = INNO.read_text(encoding="utf-8")
     assert "-Action HideDistroShortcuts" in inno
@@ -485,6 +510,22 @@ def test_owner_bound_resume_is_verified_and_bounded(tmp_path: Path) -> None:
     assert registered["boot"]["restartAttempts"] == 1
     assert (resume_root / "runonce.txt").exists()
     assert (resume_root / "Continue LanEx Setup.lnk.json").exists()
+    # Setup opened again before the restart (field report 2026-11-24): the
+    # trigger from this boot is confirmed, no second attempt is counted.
+    again = _run_setup(
+        "-Action", "RegisterResume", "-StatePath", state,
+        "-BootIdentity", "boot-a", "-TestResumeRoot", resume_root,
+        "-TestOwnerSid", OWNER,
+    )
+    assert again["boot"]["restartAttempts"] == 1 and again["phase"] == "restart-required"
+    # ...but a trigger that vanished in this boot is still refused, not rewritten.
+    trigger_text = (resume_root / "runonce.txt").read_text(encoding="utf-8")
+    (resume_root / "runonce.txt").unlink()
+    gone = _run_setup("-Action", "RegisterResume", "-StatePath", state,
+                      "-BootIdentity", "boot-a", "-TestResumeRoot", resume_root,
+                      "-TestOwnerSid", OWNER, ok=False)
+    assert "already requested during this boot" in gone.stderr
+    (resume_root / "runonce.txt").write_text(trigger_text, encoding="utf-8")
 
     same_boot = _run_setup(
         "-Action", "InitializeState", "-StatePath", state,
