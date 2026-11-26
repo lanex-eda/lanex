@@ -43,6 +43,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -428,6 +429,30 @@ def _write_atomic(p: Path, text: str) -> None:
         raise
 
 
+# Saves and removals read the file, change one entry and write it back: two at
+# once (two windows, a double click) would each write the list they read, and
+# the first change would be lost. One at a time, and the file is read again
+# inside the lock.
+_SAVE_LOCK = threading.Lock()
+
+
+def _file_sig(design_dir: str | Path) -> Optional[Tuple[int, int]]:
+    try:
+        st = _waiver_path(design_dir).stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return None
+
+
+def _write_if_unchanged(design_dir: str | Path, sig: Optional[Tuple[int, int]], text: str) -> None:
+    """Write the waiver file, unless something changed it since *sig* was
+    taken (an editor or a terminal, outside this lock)."""
+    if _file_sig(design_dir) != sig:
+        raise WaiverError(f"{WAIVER_FILE} changed on disk while LanEx was saving (an edit in another program). "
+                          "Reload the warnings and try again.")
+    _write_atomic(_waiver_path(design_dir), text)
+
+
 def _check_mtime(cur: Dict[str, Any], mtime: Optional[int]) -> None:
     if mtime is not None and cur.get("mtime") is not None and int(mtime) != int(cur["mtime"]):
         raise WaiverError(f"{WAIVER_FILE} changed on disk since this page read it (another window, or an edit). "
@@ -445,6 +470,13 @@ def save_waiver(design_dir: str | Path, entry: Dict[str, Any], *, mtime: Optiona
     this waiver matches ("ask again if the count changes")."""
     if not design_dir or not Path(design_dir).is_dir():
         raise WaiverError("Open the project first: waivers are saved in the project folder.")
+    with _SAVE_LOCK:
+        return _save_waiver_locked(design_dir, entry, mtime=mtime, run_dir=run_dir)
+
+
+def _save_waiver_locked(design_dir: str | Path, entry: Dict[str, Any], *, mtime: Optional[int],
+                        run_dir: Optional[str | Path]) -> Dict[str, Any]:
+    sig = _file_sig(design_dir)
     cur = load_waivers(design_dir)
     _check_mtime(cur, mtime)
     code = str(entry.get("code") or "").strip()
@@ -476,20 +508,22 @@ def save_waiver(design_dir: str | Path, entry: Dict[str, Any], *, mtime: Optiona
             k += 1
         w["id"] = f"W{k}"
         entries.append(w)
-    _write_atomic(_waiver_path(design_dir), _dump(entries))
+    _write_if_unchanged(design_dir, sig, _dump(entries))
     res = load_waivers(design_dir)
     res["saved"] = w["id"]
     return res
 
 
 def remove_waiver(design_dir: str | Path, wid: str, *, mtime: Optional[int] = None) -> Dict[str, Any]:
-    cur = load_waivers(design_dir)
-    _check_mtime(cur, mtime)
-    entries = [e for e in cur["entries"] if e["id"] != wid]
-    if len(entries) == len(cur["entries"]):
-        raise WaiverError(f"No waiver {wid} in {WAIVER_FILE}; it may have been removed already. Reload the warnings.")
-    _write_atomic(_waiver_path(design_dir), _dump(entries))
-    return load_waivers(design_dir)
+    with _SAVE_LOCK:
+        sig = _file_sig(design_dir)
+        cur = load_waivers(design_dir)
+        _check_mtime(cur, mtime)
+        entries = [e for e in cur["entries"] if e["id"] != wid]
+        if len(entries) == len(cur["entries"]):
+            raise WaiverError(f"No waiver {wid} in {WAIVER_FILE}; it may have been removed already. Reload the warnings.")
+        _write_if_unchanged(design_dir, sig, _dump(entries))
+        return load_waivers(design_dir)
 
 
 def _base_step(s: Optional[str]) -> str:
