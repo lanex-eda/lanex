@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import math
 import re
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -1222,6 +1223,38 @@ def _dpl_0015(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None
             "learn": ["row-site", "core"]}
 
 
+# The settings LibreLane's own SDC turns into the OpenSTA argument a
+# STA-0572 names (scripts/base.sdc: create_clock -period, set_max_transition,
+# set_load, set_max_fanout, set_input_delay / set_output_delay).
+_STA_ARG_VAR = {"period": "CLOCK_PERIOD", "-period": "CLOCK_PERIOD", "transition": "MAX_TRANSITION_CONSTRAINT",
+                "slew": "MAX_TRANSITION_CONSTRAINT", "capacitance": "OUTPUT_CAP_LOAD", "cap": "OUTPUT_CAP_LOAD",
+                "load": "OUTPUT_CAP_LOAD", "fanout": "MAX_FANOUT_CONSTRAINT"}
+
+
+def _sta_0572(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    # [ERROR STA-0572] transition '-0.1' is not a positive float.  OpenSTA's
+    # check for any number argument (create_clock, set_load,
+    # set_max_transition, set_input_transition, set_wire_rc, …).
+    cfg = ev.get("cfg") or {}
+    arg, val = m.group("arg"), m.group("val")
+    var = _STA_ARG_VAR.get(arg.lower().lstrip("-")) or _STA_ARG_VAR.get(arg.lower())
+    sdc = cfg.get("PNR_SDC_FILE") or cfg.get("SIGNOFF_SDC_FILE")
+    fixes: List[Dict[str, Any]] = []
+    if sdc:
+        rel = _rel(str(sdc), cfg)
+        fixes.append(_open("Open %s" % Path(rel).name, {"tab": "ide", "rel": rel, "line": 1},
+                           "Look for the command with %s %s." % (arg, val)))
+    if var:
+        fixes.append(_open("Open %s" % var, {"tab": "setup", "setting": var},
+                           "LibreLane's own constraints take %s from this setting." % arg))
+    return {"title": "A timing value has to be above zero: %s %s" % (arg, val),
+            "plain": "OpenSTA read a command whose %s is %s, and that number has to be above zero. The command comes "
+                     "from %s%s, so check the value there, and any setting that went into it." % (
+                         arg, val or "empty", "your SDC (%s)" % Path(str(sdc)).name if sdc else "the constraints LibreLane writes",
+                         (" (LibreLane fills %s from %s)" % (arg, var)) if var and not sdc else ""),
+            "evidence": [m.group(0).strip()[:300]], "fixes": fixes, "learn": ["sdc"] if sdc else []}
+
+
 def _corner_wildcard(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
     var = m.group("var")
     base = "TIMING_VIOLATION_CORNERS" if var.endswith("VIOLATION_CORNERS") else var
@@ -1328,6 +1361,9 @@ KB: List[Dict[str, Any]] = [
     {"id": "ifp-margins", "code": "STA-0572", "rx": re.compile(r"-core_area '[^']*' is not a positive float"),
      "fn": _code_card(_ifp_core), "source": "forced: DIE_AREA 0 0 8 8", "stage": "floorplan",
      "about": "The die is smaller than its margins: no core is left."},
+    {"id": "sta-0572", "code": "STA-0572", "rx": re.compile(r"(?P<arg>\S+) '(?P<val>[^']*)' is not a positive float"),
+     "fn": lambda ev, m: _sta_0572(ev, _Groups(m)), "source": "OpenSTA in the 3.0.4 image (sdc.tcl check_positive_float, text)",
+     "stage": "any", "about": "A timing command got a number that has to be above zero."},
     {"id": "cts-0127", "code": "CTS-0127", "also": ["CTS-0126", "CTS-0074"], "fn": _code_card(_cts_0127),
      "source": "forced: CTS_CLK_BUFFERS names no cell", "stage": "cts",
      "about": "The clock tree names a buffer the library doesn't have."},
@@ -1458,13 +1494,15 @@ _MISSING_RX = re.compile(r"\b(" + "|".join(_LOCAL_TOOLS) + r")\b[^\n]{0,40}(comm
 
 
 def _match(rule: Dict[str, Any], ev: Dict[str, Any], code: Optional[str]) -> Any:
+    """True or the pattern's match when *rule* explains this error. A rule
+    with a pattern needs the pattern: a code alone can mean other things
+    (OpenSTA's STA-0572 "is not a positive float" comes from every command
+    with a number argument, not only the floorplan's -core_area)."""
     if rule.get("steps") and not any(str(ev.get("step") or "").startswith(s) for s in rule["steps"]):
         return None
-    if code and code in [rule.get("code")] + list(rule.get("also") or []):
-        return True
     rx = rule.get("rx")
     if rx is None:
-        return None
+        return True if code and code in [rule.get("code")] + list(rule.get("also") or []) else None
     for where in ("text", "log", "outcome"):
         m = rx.search(ev.get(where) or "")
         if m:
@@ -2058,7 +2096,10 @@ def cluster(items: List[Dict[str, Any]], radius: float) -> List[Dict[str, Any]]:
 
 def drc_groups(run_dir: Path) -> Dict[str, Any]:
     """Each DRC checker's violations as rules and places, plus a note when
-    the checkers disagree. Markers are the run's own report databases."""
+    the checkers disagree. Markers are the run's own report databases. The
+    count is the metric LibreLane judged the run on (what Verify shows); the
+    rules and places come from the report, and the places from at most the
+    first ``layoutview._MAX_MARKERS`` markers (``sampled`` says so)."""
     from . import layoutview
     die = _die(run_dir)
     diag = math.hypot(die[2] - die[0], die[3] - die[1]) if die else 100.0
@@ -2068,17 +2109,82 @@ def drc_groups(run_dir: Path) -> Dict[str, Any]:
         if src.get("id") == "xor":
             continue
         cats = src.get("categories") or []
-        places = cluster(src.get("items") or [], radius)
+        items = src.get("items") or []
+        places = cluster(items, radius)
         for p in places:
             cx, cy = (p["bbox"][0] + p["bbox"][2]) / 2, (p["bbox"][1] + p["bbox"][3]) / 2
             p["center"] = [round(cx, 2), round(cy, 2)]
             p["where"] = _region(cx, cy, die)
-        out.append({"id": src["id"], "label": src["label"], "total": src.get("total") or 0, "path": src.get("path"),
+        in_file = int(src.get("total") or 0)
+        metric = (src.get("metric") or {}).get("value")
+        total = int(metric) if isinstance(metric, (int, float)) and not isinstance(metric, bool) else in_file
+        out.append({"id": src["id"], "label": src["label"], "total": total, "in_file": in_file, "path": src.get("path"),
                     "rules": [{"name": c["name"], "count": c["count"], "description": c.get("description") or "",
                                "plain": rule_in_words(c["name"], c.get("description") or "")} for c in cats],
                     "places": places[:12], "more_places": max(0, len(places) - 12),
-                    "listed": len(src.get("items") or [])})
+                    "listed": len(items), "sampled": in_file > len(items)})
     return {"sources": out, "radius": round(radius, 1), "die": die}
+
+
+# A big DRC report (an SRAM's 279,094 Magic markers are a 71 MB file) takes
+# seconds to read, so it is read once per file version, on a worker thread;
+# a request waits a moment for it, then answers without the places.
+_DRC_CACHE: Dict[str, Any] = {}
+_DRC_JOBS: Dict[str, Any] = {}
+_DRC_LOCK = threading.Lock()
+
+
+def _drc_sig(run_dir: Path) -> tuple:
+    """The marker files layoutview.markers reads (size, mtime) and the metrics."""
+    from . import layoutview
+    sig: List[tuple] = []
+    for d in layoutview._step_dirs(run_dir):
+        key = layoutview._step_key(d.name)
+        for src in layoutview._MARKER_SOURCES:
+            if src["step"] == key:
+                for p in sorted(d.glob(src["glob"])):
+                    try:
+                        st = p.stat()
+                        sig.append((d.name, p.name, st.st_size, st.st_mtime_ns))
+                    except OSError:
+                        pass
+    try:
+        sig.append(("metrics", (run_dir / "final" / "metrics.json").stat().st_mtime_ns))
+    except OSError:
+        pass
+    return tuple(sig)
+
+
+def drc_groups_soon(run_dir: Path, wait: float = 0.3) -> Optional[Dict[str, Any]]:
+    """:func:`drc_groups`, remembered per report version and read on a worker
+    thread: the result when it is known or arrives within *wait* seconds,
+    else None (the next call has it)."""
+    run_dir = Path(run_dir).resolve()
+    key = str(run_dir)
+    sig = _drc_sig(run_dir)
+    hit = _DRC_CACHE.get(key)
+    if hit and hit[0] == sig:
+        return hit[1]
+    with _DRC_LOCK:
+        job = _DRC_JOBS.get(key)
+        if not job or job[0] != sig:
+            def work(sig=sig) -> None:
+                try:
+                    res = drc_groups(run_dir)
+                except Exception as ex:      # a report LanEx can't read: say so, don't retry forever
+                    res = {"sources": [], "radius": 0, "die": None, "error": str(ex)}
+                with _DRC_LOCK:
+                    if len(_DRC_CACHE) > 16:
+                        _DRC_CACHE.clear()
+                    _DRC_CACHE[key] = (sig, res)
+                    if (_DRC_JOBS.get(key) or (None,))[0] == sig:
+                        _DRC_JOBS.pop(key, None)
+            job = (sig, threading.Thread(target=work, name="lanex-drc-groups", daemon=True))
+            _DRC_JOBS[key] = job
+            job[1].start()
+    job[1].join(wait)
+    hit = _DRC_CACHE.get(key)
+    return hit[1] if hit and hit[0] == sig else None
 
 
 def checker_note(rep: Dict[str, Any], groups: Dict[str, Any]) -> Optional[str]:
@@ -2116,13 +2222,24 @@ def drc_problems(run_dir: Path, rep: Dict[str, Any]) -> List[Dict[str, Any]]:
     bad = [cid for cid in ("magic_drc", "klayout_drc", "route_drc") if (by.get(cid) or {}).get("status") in ("fail", "warn")]
     if not bad:
         return []
-    groups = drc_groups(run_dir)
+    groups = drc_groups_soon(run_dir, wait=_DRC_WAIT)
+    pending = groups is None
+    if pending:
+        # The report is still being read (a worker thread): the counts are the
+        # checks' own metrics; rules and places come with the next request.
+        labels = {"magic_drc": "Magic DRC", "klayout_drc": "KLayout DRC", "route_drc": "Routing DRC"}
+        srcs = sorted(({"id": cid, "label": labels[cid], "total": int(_num((by.get(cid) or {}).get("value")) or 0),
+                        "rules": [], "places": [], "more_places": 0} for cid in bad), key=lambda s: -s["total"])
+        srcs = [s for s in srcs if s["total"]]
+        groups = {"sources": srcs, "radius": 0, "die": None, "pending": True}
     srcs = sorted((s for s in groups["sources"] if s["total"]), key=lambda s: -s["total"])
     total = sum(s["total"] for s in srcs)
     rules = {r["name"] for s in srcs for r in s["rules"] if r["count"]}
     places = sum(len(s["places"]) + s["more_places"] for s in srcs)
     head = srcs[0] if srcs else None
-    if head:
+    if head and pending:
+        title = "%d DRC violation%s (%s)" % (head["total"], "" if head["total"] == 1 else "s", head["label"])
+    elif head:
         title = "%d DRC violation%s: %d rule%s in %d place%s" % (
             head["total"], "" if head["total"] == 1 else "s", len([r for r in head["rules"] if r["count"]]),
             "" if len([r for r in head["rules"] if r["count"]]) == 1 else "s",
@@ -2153,15 +2270,33 @@ def drc_problems(run_dir: Path, rep: Dict[str, Any]) -> List[Dict[str, Any]]:
                                   "settled by then, so this helps least.", "More routing passes", sure="try"))
     rep2 = dict(rep, _cfg=_cfg(run_dir))
     note = checker_note(rep2, groups)
+    if pending:
+        plain = ("%d in all. LanEx is reading the report to group them by rule and by place; that takes a few "
+                 "seconds for a report this size." % total)
+    else:
+        plain = ("%d in all, across %d rule%s and %d place%s. Engineers read DRC this way: a few rules in a few "
+                 "places, where fixing one often clears several." % (total, len(rules), "" if len(rules) == 1 else "s",
+                                                                        places, "" if places == 1 else "s"))
+        sampled = [s for s in srcs if s.get("sampled")]
+        if sampled:
+            s = sampled[0]
+            plain += (" The places are from the first %s of the %s markers in %s's report, so there may be more."
+                      % ("{:,}".format(s["listed"]), "{:,}".format(s.get("in_file") or s["total"]), s["label"]))
+        odd = [s for s in srcs if s.get("in_file") is not None and s["in_file"] != s["total"]]
+        if odd:
+            s = odd[0]
+            plain += (" The count is LibreLane's metric (%s), as Verify shows it; the report file lists %s markers."
+                      % ("{:,}".format(s["total"]), "{:,}".format(s["in_file"])))
     return [{
         "id": "drc", "severity": "fail" if any((by.get(c) or {}).get("status") == "fail" for c in bad) else "warn",
-        "kind": "check", "title": title,
-        "plain": "%d in all, across %d rule%s and %d place%s. Engineers read DRC this way: a few rules in a few "
-                 "places, where fixing one often clears several." % (total, len(rules), "" if len(rules) == 1 else "s",
-                                                                        places, "" if places == 1 else "s"),
+        "kind": "check", "title": title, "plain": plain,
         "where": {"check": bad[0], "stage": "signoff"}, "evidence": [],
         "diag": {"kind": "drc", **groups}, "fixes": fixes, "notes": [note] if note else [], "learn": ["drc"],
+        "pending": pending,
     }]
+
+
+_DRC_WAIT = 0.3        # seconds a request waits for a DRC report being read
 
 
 # ---------------------------------------------------------------- other checks
@@ -2641,8 +2776,9 @@ def kb_index(design_dir: Optional[str | Path] = None, max_runs: int = 60) -> Dic
                 m = _CODE_RX.search(text)
                 code = m.group(1) if m else None
                 for rule in KB:
-                    if (code and code in [rule.get("code")] + list(rule.get("also") or [])) or \
-                            (rule.get("rx") is not None and rule["rx"].search(text)):
+                    # as _match: a rule with a pattern needs the pattern
+                    if (rule["rx"].search(text) if rule.get("rx") is not None
+                            else code and code in [rule.get("code")] + list(rule.get("also") or [])):
                         seen.setdefault(rule["id"], []).append(rd.name)
                         break
             if sig:
@@ -2660,6 +2796,8 @@ def run_problems(run_dir: str | Path) -> Dict[str, Any]:
     if hit and hit[0] == sig:
         return hit[1]
     out = _run_problems(run_dir)
+    if out.get("pending"):
+        return out                     # not remembered: the next call has the DRC places
     if len(_CACHE) > 32:
         _CACHE.clear()
     _CACHE[key] = (sig, out)
@@ -2742,7 +2880,10 @@ def _run_problems(run_dir: Path) -> Dict[str, Any]:
     for p in problems:
         p["fixes"] = finish(p["fixes"], flow) if p["kind"] != "halted" else p["fixes"]
     problems.sort(key=lambda p: (p["severity"] != "fail", p["kind"] != "halted"))
-    return {"tag": run_dir.name, "flow": flow, "verdict": (rep.get("verdict") or {}).get("state"),
-            "counts": {"fail": sum(1 for p in problems if p["severity"] == "fail"),
-                       "warn": sum(1 for p in problems if p["severity"] == "warn")},
-            "problems": problems}
+    out = {"tag": run_dir.name, "flow": flow, "verdict": (rep.get("verdict") or {}).get("state"),
+           "counts": {"fail": sum(1 for p in problems if p["severity"] == "fail"),
+                      "warn": sum(1 for p in problems if p["severity"] == "warn")},
+           "problems": problems}
+    if any(p.get("pending") for p in problems):
+        out["pending"] = True          # ask again: a DRC report is still being read
+    return out
