@@ -1318,9 +1318,13 @@ class Scheduler:
             recover = [k for k, q in self._queues.items() if q.pop("_recover", False)]
         if recover:
             # A queue first read after start-up (a project opened later) that
-            # lists runs going from an earlier boot.
+            # lists runs going from an earlier boot. Every known queue is
+            # passed: only stale jobs are touched, and the orphan check sees
+            # every project this home knows, not just the new one.
             try:
-                self.recover_all(recover)
+                with self._lock:
+                    every = list(self._queues.keys())
+                self.recover_all(every)
             except Exception:
                 _log.exception("queue recovery failed")
         for j in ending:
