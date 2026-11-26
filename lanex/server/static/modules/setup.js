@@ -1315,7 +1315,10 @@ function wireRunMenu() {
   const res = document.getElementById("run-resume-from");
   if (res) {
     res.innerHTML = "<option value=''>The start (a fresh run)</option>";
-    res.addEventListener("change", () => paintRunLabel());
+    // The note under Start speaks about a stage: it shows once one is picked.
+    const syncNote = () => { const n = document.getElementById("run-resume-note"); if (n && n.textContent.startsWith("Reuses ")) n.hidden = !res.value; };
+    res.addEventListener("change", () => { syncNote(); paintRunLabel(); });
+    res._syncNote = syncNote;
     document.getElementById("run-opts-btn")?.addEventListener("click", () => fillResume());
     // It resumes the run on the results pages: picking another run disarms it.
     document.addEventListener("g:context", (e) => {
@@ -1390,6 +1393,7 @@ async function fillResume() {
   const changed = (d.settings || []).map((x) => x.var).concat((d.files || []).map((f) => f.path));
   if (note) note.textContent = (d.versions || []).length && p.blocked ? p.blocked
     : "Reuses " + tag + "'s results up to that stage." + (changed.length ? " Changed since: " + changed.slice(0, 3).join(", ") + "." : "");
+  if (sel._syncNote) sel._syncNote(); else if (note) note.hidden = false;
   paintRunLabel();
 }
 
