@@ -66,11 +66,11 @@ const km = (r, k) => num((r.key_metrics || {})[k]);
 const keyOf = (r) => r._k || (r._k = normDir(r._design) + "|" + r.tag);
 const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
 
-// A run whose registers no clock reached (Verify's verdict, no_clock): OpenSTA
-// timed no path, so its slack numbers say nothing. Timing cells read
-// "not timed", never 0.00.
+// A run in which no flip-flop had a clock (Verify's verdict, no_clock): its
+// register timing was never checked, so its slack numbers say nothing about
+// the clock. Timing cells read "not timed", never 0.00.
 const untimed = (r) => !!(r.verdict && r.verdict.no_clock);
-const UNTIMED_TIP = "Timing not checked: no clock reached the registers, so OpenSTA timed no path. Verify says which clock port the config names.";
+const UNTIMED_TIP = "Timing not checked: no flip-flop had a clock, so no register path was timed (input-to-output paths may have been). Verify says which clock port the config names.";
 
 // ------------------------------------------------------------------ columns
 // dir: +1 higher is better, -1 lower is better, 0 no direction (no colour).
@@ -114,14 +114,16 @@ const COLS = [
 const HEADS = { die: "Die", cells: "Std cells", checks: "Checks", changed: "Changed" };
 const VERDICT_ORDER = { running: 0, passed: 1, warning: 2, incomplete: 3, stopped: 4, failed: 5 };
 const TIMING = new Set(["wns", "tns", "hold"]);
-// One prefix per power column, from the runs shown (renderRuns).
+// One prefix per power or voltage column, from the runs shown (renderRuns):
+// the cells and the column's unit say the same thing (MF.scaleOf).
 const _scales = new Map();
+const scaled = (key) => { const u = MF.unitOf(MF.parseKey(key).base); return u === "W" || u === "V"; };
 function metricCol(id, label, key, def, tip) {
   return {
     id, label, key, def, tip, dir: MF.direction(key, null),
     get: (r) => km(r, key),
-    f: (v) => (MF.unitOf(MF.parseKey(key).base) === "W" ? MF.showAt(key, v, _scales.get(id)) : MF.show(key, v, { compact: true })).text,
-    get unit() { const u = MF.unitOf(MF.parseKey(key).base); return u === "W" ? (_scales.get(id) ? _scales.get(id).unit : "W") : MF.show(key, 1).unit; },
+    f: (v) => (scaled(key) ? MF.showAt(key, v, _scales.get(id)) : MF.show(key, v, { compact: true })).text,
+    get unit() { return scaled(key) ? (_scales.get(id) ? _scales.get(id).unit : MF.unitOf(MF.parseKey(key).base)) : MF.show(key, 1).unit; },
   };
 }
 // Any metric (m:) or setting (s:) as a column: values from /api/runs-values.
@@ -135,11 +137,12 @@ function extraCol(xk) {
   const timing = isM && u === "ns";
   return {
     id, extra: xk, key: isM ? key : null, setting: !isM,
-    label: key, tip: (isM ? "LibreLane metric " : "Setting ") + key + (isM ? " (final/metrics.json)" : " (the run's resolved.json)"),
+    label: key, tip: (isM ? "LibreLane metric " : "Setting ") + key + (isM ? " (final/metrics.json)" : " (the run's resolved.json)") +
+      (isM && MF.isCornerSum(key) ? ". " + MF.CORNER_SUM_NOTE : ""),
     dir: isM ? MF.direction(key, _keysDirs) : 0, timing,
     get: (r) => { const v = (XV.get(r.run_dir) || {})[xk]; return isM ? num(v) : v; },
-    f: (v) => (isM ? (u === "W" ? MF.showAt(key, v, _scales.get(id)) : MF.show(key, v, { compact: true })).text : showSetting(v)),
-    get unit() { return isM ? (u === "W" ? (_scales.get(id) ? _scales.get(id).unit : "W") : MF.show(key, 1).unit) : ""; },
+    f: (v) => (isM ? (scaled(key) ? MF.showAt(key, v, _scales.get(id)) : MF.show(key, v, { compact: true })).text : showSetting(v)),
+    get unit() { return isM ? (scaled(key) ? (_scales.get(id) ? _scales.get(id).unit : u) : MF.show(key, 1).unit) : ""; },
     sort: isM ? null : (r) => { const v = (XV.get(r.run_dir) || {})[xk]; return v == null ? null : typeof v === "number" ? v : showSetting(v).toLowerCase(); },
   };
 }
@@ -672,9 +675,9 @@ function paintChips(runs) {
   const el = document.getElementById("rn-status");
   const vis = runs.filter((r) => archivedOk(r));
   const cnt = (fn) => vis.filter(fn).length;
-  const all = [["", "All", vis.length], ["passed", "Clean", cnt((r) => verdictOf(r).state === "passed")],
-    ["warning", "Warnings", cnt((r) => verdictOf(r).state === "warning")], ["failed", "Failed", cnt((r) => verdictOf(r).state === "failed")],
-    ["stopped", "Stopped", cnt((r) => /stopped|incomplete/.test(verdictOf(r).state))]];
+  const all = [["", "All", vis.length], ["passed", "Clean", cnt((r) => resultBucket(verdictOf(r)) === "passed")],
+    ["warning", "Warnings", cnt((r) => resultBucket(verdictOf(r)) === "warning")], ["failed", "Failed", cnt((r) => resultBucket(verdictOf(r)) === "failed")],
+    ["stopped", "Stopped", cnt((r) => resultBucket(verdictOf(r)) === "stopped")]];
   if (el) {
     const opts = all.filter(([v, , n]) => v === "" || n > 0 || T.status === v);
     el.hidden = opts.length <= 1;
@@ -695,13 +698,21 @@ function archivedOk(r) {
   if (T.archived === "show") return true;
   return !r.archived;
 }
+// Which Result chip a run counts under. A run in which no flip-flop had a
+// clock finished, but its timing was never checked: a warning, not a stop.
+export function resultBucket(v) {
+  const st = (v && v.state) || "";
+  if (v && v.no_clock) return "warning";
+  if (/stopped|incomplete/.test(st)) return "stopped";
+  return st;
+}
 function matches(r) {
   if (!archivedOk(r)) return false;
-  const v = verdictOf(r).state;
+  const v = resultBucket(verdictOf(r));
   if (T.status === "passed" && v !== "passed") return false;
   if (T.status === "failed" && v !== "failed") return false;
   if (T.status === "warning" && v !== "warning") return false;
-  if (T.status === "stopped" && !/stopped|incomplete/.test(v)) return false;
+  if (T.status === "stopped" && v !== "stopped") return false;
   if (T.origin === "pinned" && !r.pinned) return false;
   if (T.origin === "fix" && originOf(r).kind !== "fix") return false;
   if (T.origin === "imported" && !r.imported) return false;
@@ -806,7 +817,7 @@ export async function renderRuns({ cached = false } = {}) {
   wrap.hidden = false; empty.hidden = true;
   const cols = visibleCols(scope);
   _scales.clear();
-  for (const c of cols) if (c.key && MF.unitOf(MF.parseKey(c.key).base) === "W") _scales.set(c.id, MF.scaleOf(c.key, shown.map((r) => c.get(r))));
+  for (const c of cols) if (c.key && scaled(c.key)) _scales.set(c.id, MF.scaleOf(c.key, shown.map((r) => c.get(r))));
   _baseMemo = new Map();
   _model = { items: buildItems(sortRuns(shown)), cols, a: 0, b: 0, windowed: false };
   fitHeight();
@@ -1244,7 +1255,7 @@ function cellHtml(c, r, base) {
     const parts = [k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "ant " + k.ant : ""].filter(Boolean);
     return "<td class='" + cls + " is-num'><span class='rn-bad'>" + esc(parts.join(" · ")) + "</span></td>";
   }
-  // A run no clock reached: its slack says nothing (OpenSTA timed no path).
+  // A run in which no flip-flop had a clock: its slack says nothing about the clock.
   if ((TIMING.has(c.id) || c.timing) && untimed(r)) return "<td class='" + cls + " is-num muted rn-untimed' title='" + esc(UNTIMED_TIP) + "'>not timed</td>";
   if (c.extra && c.get(r) === undefined && !XV.has(r.run_dir)) return "<td class='" + cls + (c.setting ? "" : " is-num") + " muted'>…</td>";
   const v = c.get(r);
@@ -1758,21 +1769,20 @@ export async function compareRuns(runs) {
 
 // ------------------------------------------------------------------ bulk actions
 let _undo = null;              // the Undo of the toast showing now (Ctrl+Z)
+// The Undo toast is kept outside the toast cap and clear(): four newer toasts
+// or a sheet opening used to push it out and purge the deleted runs at once.
+// onGone runs only when it timed out or was closed, never when Undo was used.
 function undoToast(message, run, { ttl = 10000, onGone = null } = {}) {
   let done = false;
   const act = { label: "Undo", run: () => { done = true; _undo = null; run(); } };
-  toast.show(message, "success", ttl, [act]);
-  const el = toast.container && toast.container.lastElementChild;
   _undo = act.run;
-  if (!el) return;
-  // When the toast goes (timed out, closed, pushed out), Undo goes with it.
-  const mo = new MutationObserver(() => {
-    if (el.isConnected) return;
-    mo.disconnect();
-    if (_undo === act.run) _undo = null;
-    if (!done && onGone) onGone();
-  });
-  mo.observe(toast.container, { childList: true });
+  toast.show(message, "success", ttl, [act], { keep: true, onClose: (why) => undoClosed(why, { done: () => done, act, onGone }) });
+}
+export function undoClosed(why, { done, act, onGone }) {
+  if (_undo === act.run) _undo = null;
+  if (why === "action" || done()) return false;
+  if (onGone) onGone();
+  return true;
 }
 function bulkFailures(res) {
   const f = (res && res.failed) || [];
@@ -2651,3 +2661,6 @@ async function showFilesModal(tag) {
     "<div class='muted' style='margin-bottom:8px'>" + rows.length + " files: click to open or download</div>" +
     rows.join("");
 }
+
+// Pure parts, for frontend_test.mjs.
+export const _test = { extraCol, resultBucket, UNTIMED_TIP };

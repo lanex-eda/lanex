@@ -2348,14 +2348,16 @@ def h_power_hold(handler: Any) -> None:
                        "note": st.get("note") or ""})
 
 
-_LOG_RANGE_MAX = 64 * 1024 * 1024
+_LOG_RANGE_MAX = 8 * 1024 * 1024
 
 
 def h_run_log(handler: Any) -> None:
-    """A run's whole console output, by byte range: ``?tag=&design_dir=&from=&to=``
-    (JSON ``{text, from, to, size, source}``) or ``&download=1`` (the file,
-    as an attachment). The console LanEx kept (``lanex-console.log``) when
-    there is one, else LibreLane's ``flow.log``."""
+    """A run's whole console output: by byte range, ``?tag=&design_dir=&from=&to=``
+    (JSON ``{text, from, to, size, source}``, at most 8 MB a request), or the
+    whole file streamed from disk as plain text: ``&raw=1`` (the page's "Load
+    the full log") or ``&download=1`` (an attachment). The console LanEx kept
+    (``lanex-console.log``) when there is one, else LibreLane's ``flow.log``.
+    Nothing is read whole into memory: a big run's log is tens of MB."""
     tag = _query_param(handler.path, "tag")
     dd = _queue_design({"design_dir": _query_param(handler.path, "design_dir")})
     if not dd or not tag or _bad_tag(tag):
@@ -2370,19 +2372,14 @@ def h_run_log(handler: Any) -> None:
     if path is None:
         _respond(handler, f"This run has no log yet ({run}).", 404)
         return
-    if _query_param(handler.path, "download") == "1":
+    download = _query_param(handler.path, "download") == "1"
+    if download or _query_param(handler.path, "raw") == "1":
+        extra = {"Content-Disposition": f'attachment; filename="{tag}-{path.name}"'} if download else {}
+        extra["X-LanEx-Log-Source"] = path.name
         try:
-            data = path.read_bytes()
+            handler._send_file(str(path), "text/plain; charset=utf-8", headers=extra)
         except OSError as ex:
             _respond(handler, f"Couldn't read {path.name}: {ex}", 500)
-            return
-        handler.send_response(200)
-        handler.send_header("Content-Type", "text/plain; charset=utf-8")
-        handler.send_header("Content-Disposition", f'attachment; filename="{tag}-{path.name}"')
-        handler.send_header("Content-Length", str(len(data)))
-        handler.send_header("Cache-Control", "no-store")
-        handler.end_headers()
-        handler.wfile.write(data)
         return
     try:
         size = path.stat().st_size
@@ -3662,43 +3659,6 @@ def h_trends(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
-def h_run_delete(handler: Any) -> None:
-    """Delete one run dir (irreversible). Refuses the in-progress run."""
-    body = getattr(handler, "_body", {})
-    tag = body.get("tag")
-    run_dir = _resolve_run_dir(tag)
-    if run_dir is None:
-        _respond(handler, "run not found", 404)
-        return
-    try:
-        from ..server.app import get_runner
-
-        live = getattr(get_runner(), "_run_dir", None)
-        if live and Path(live).resolve() == run_dir:
-            _respond(handler, "that run is still in progress — stop it first", 409)
-            return
-    except Exception:
-        pass
-    # Runs resumed from this one read files in its folders: say which, and
-    # delete only when asked again (``force``).
-    try:
-        from ..controller import branch
-        kids = branch.children(run_dir.parent.parent, tag)
-    except Exception:
-        kids = []
-    if kids and not body.get("force"):
-        handler._send_json({"ok": False, "error": "resumed-from", "children": kids}, 409)
-        return
-    try:
-        import shutil
-
-        shutil.rmtree(run_dir)
-        _respond(handler, {"ok": True, "deleted": tag, "broke": kids})
-    except Exception as ex:
-        _log.exception("delete_run failed")
-        _respond(handler, str(ex), 500)
-
-
 # ---------------------------------------------------------------------------
 # Runs page (lane 2): tags, archive, bulk delete with undo, the project's
 # baseline and saved views, free columns, "changed vs baseline", export.
@@ -3734,7 +3694,9 @@ def _runs_live_dirs() -> List[str]:
 
 
 def _runs_design_arg(raw: Any) -> Optional[Path]:
-    """A design folder from a request: known to LanEx, or one with a runs/."""
+    """A design folder from a request, when LanEx knows it (opened on Setup,
+    or the active one). A folder that merely has a runs/ is not enough: these
+    routes write into the project (``.gui-runs.json``)."""
     if not isinstance(raw, str) or not raw:
         return None
     try:
@@ -3743,9 +3705,29 @@ def _runs_design_arg(raw: Any) -> Optional[Path]:
         return None
     if not p.is_dir():
         return None
-    if str(p) in _runs_known_designs() or (p / "runs").is_dir():
+    if str(p) in _runs_known_designs():
         return p
     return None
+
+
+def purge_old_trash(design_dirs: Optional[List[str]] = None, *, background: bool = True) -> None:
+    """Free the space of runs deleted more than 10 minutes ago, in every
+    known project (at server start; bulk calls purge their own project).
+    Never from a GET: opening a page must not delete anything."""
+    from ..controller import runsmeta
+
+    def work() -> None:
+        for d in (design_dirs if design_dirs is not None else _runs_known_designs()):
+            try:
+                runsmeta.purge_stale(d, background=False)
+            except Exception:
+                _log.debug("trash purge failed for %s", d, exc_info=True)
+
+    if background:
+        import threading
+        threading.Thread(target=work, name="lanex-trash-start", daemon=True).start()
+    else:
+        work()
 
 
 def h_runs_meta(handler: Any) -> None:
@@ -3768,7 +3750,6 @@ def h_runs_meta(handler: Any) -> None:
     if d is None:
         _respond(handler, runsmeta._empty_meta())
         return
-    runsmeta.purge_stale(d)
     _respond(handler, runsmeta.read_meta(d))
 
 
@@ -4625,7 +4606,11 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                                      kind="point", group=sweep_id)
         except ValueError as ex:
             return {"ok": False, "kind": "error", "reason": str(ex)}
-        fin = jobs.scheduler.wait_job(job["id"]) or {}
+        fin = jobs.scheduler.wait_job(job["id"])
+        if fin is None:
+            # It left the queue before it ran (removed from the queue page):
+            # a skipped point, never a finished one with no folder.
+            return {"ok": False, "kind": "skipped", "reason": "taken out of the queue", "skipped": True}
         st = fin.get("state")
         if st == "skipped":
             return {"ok": False, "kind": "skipped", "reason": fin.get("reason") or "not run", "skipped": True}
@@ -4656,6 +4641,10 @@ def _launch_point(job: Dict[str, Any], runner: Any, share: Optional[Dict[str, An
     the point's ``gui-run.json`` (``sweep``) and the exact CLI command."""
     spec = dict(job.get("spec") or {})
     design_dir = job["design_dir"]
+    # A point's planned name comes from the queue file: the same check as a
+    # Run click, so it can't make a folder outside runs/.
+    if _bad_tag(spec.get("tag")):
+        return _bad_tag(spec.get("tag")), 400
     config_file = _config_file_for(design_dir)
     if config_file is None:
         return "This project has no config file any more.", 400
@@ -4725,7 +4714,7 @@ def _job_launcher(job: Dict[str, Any], runner: Any, share: Optional[Dict[str, An
     reserve = None
     if job.get("kind") == "continue":
         tag = spec.get("tag")
-        if not tag or not (Path(dd) / "runs" / tag).is_dir():
+        if not tag or _bad_tag(tag) or not (Path(dd) / "runs" / tag).is_dir():
             return "The run folder to continue is not there any more.", 409
         cont = jobs._gui_meta(str(Path(dd) / "runs" / tag)) or {}
         jobs.scheduler.note_tag(job["id"], tag)
@@ -4812,6 +4801,8 @@ def start_job_service() -> None:
     if a:
         dirs.insert(0, a)
     jobs.scheduler.start_service(dirs)
+    # Runs deleted in an earlier session whose Undo window has passed.
+    purge_old_trash()
 
 
 wire_jobs()
@@ -5022,16 +5013,45 @@ def h_dse_plan(handler: Any) -> None:
 
 
 def h_dse_cancel(handler: Any) -> None:
-    """Stop the sweep: its waiting points leave the queue, its running ones stop."""
+    """Stop a study (sweep). ``{sweep_id?, after_running?}``.
+
+    Stop now (the default): the sweep's own cancel, so its end is recorded as
+    stopped; its waiting points are kept in the queue as skipped and its
+    running ones stop. ``after_running``: the waiting points are skipped and
+    the running ones finish; the end is recorded as stopped too. A study with
+    no sweep thread (its points still queued after a restart) is stopped in
+    the queue alone. Neither is ever read as the study failing."""
     from ..controller import dse, jobs
-    sid = dse.job.sweep_id
-    dse.job.cancel()
-    if sid:
-        jobs.scheduler.remove(group=sid, reason="Not run: the sweep was stopped")
-        for j in jobs.scheduler.jobs_snapshot_live():
-            if j.get("group") == sid:
-                jobs.scheduler.stop(j["id"])
-    _respond(handler, {"ok": True})
+    body = getattr(handler, "_body", {}) or {}
+    sid = str(body.get("sweep_id") or "") or dse.job.sweep_id
+    after = bool(body.get("after_running"))
+    mine = bool(sid) and dse.job.active and dse.job.sweep_id == sid
+    if not sid:
+        _respond(handler, {"ok": True, "skipped": [], "stopped": []})
+        return
+    was_skipped = {j["id"] for j in jobs.scheduler.group_jobs(sid) if j.get("state") == "skipped"}
+    if after:
+        if mine:
+            dse.job.stop_after_running()
+        why = "Not run: you stopped the study after the points that were running"
+    else:
+        if mine or not body.get("sweep_id"):
+            dse.job.cancel()
+        why = "Not run: you stopped the study"
+    jobs.scheduler.skip_group(sid, why)       # the sweep's own stop already did, when it runs
+    group = jobs.scheduler.group_jobs(sid)
+    skipped = [j["id"] for j in group if j.get("state") == "skipped" and j["id"] not in was_skipped]
+    stopped: List[str] = []
+    if not after:
+        for j in group:
+            if j.get("state") in jobs.LIVE or (j.get("state") == "queued" and j.get("resume_pending")):
+                stopped += jobs.scheduler.stop(j["id"])
+    if not mine and (skipped or stopped):
+        # No sweep thread records this study's end (its points were still
+        # queued after a restart): note it here, as you stopping it.
+        for dd in {j["design_dir"] for j in group}:
+            dse.record_end(dd, sid, {"reason": "stopped", "detail": why})
+    _respond(handler, {"ok": True, "skipped": skipped, "stopped": stopped})
 
 
 def h_dse_status(handler: Any) -> None:
@@ -6705,7 +6725,6 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/run-import-bundle", h_run_import_bundle),
     ("/api/run-bundle", h_run_bundle),
     ("/api/trends", h_trends),
-    ("/api/run-delete", h_run_delete),
     ("/api/reveal", h_reveal),
     ("/api/desktop-tools", h_desktop_tools),
     ("/api/container-tools", h_container_tools),
@@ -6806,7 +6825,7 @@ _POST_ROUTES = {
     "/api/custom-cells/save", "/api/custom-cells/remove", "/api/custom-cells/enable",
     "/api/custom-macros/save", "/api/custom-macros/remove", "/api/custom-macros/enable",
     "/api/upload", "/api/bye", "/api/run-pin", "/api/run-import-dir",
-    "/api/run-import-bundle", "/api/run-delete", "/api/reveal", "/api/container-tools/open",
+    "/api/run-import-bundle", "/api/reveal", "/api/container-tools/open",
     "/api/xquartz/restart", "/api/open-in-tool", "/api/layout/open", "/api/write-config",
     "/api/set-design-dir", "/api/diff", "/api/cli-command", "/api/manual/run",
     "/api/manual/cancel", "/api/run/start", "/api/run/cancel", "/api/run/resume",

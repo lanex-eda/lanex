@@ -331,11 +331,13 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(blob)
 
-    def _send_file(self, path: str, content_type: str, status: int = 200) -> None:
+    def _send_file(self, path: str, content_type: str, status: int = 200,
+                   headers: Optional[Dict[str, str]] = None) -> None:
         """Stream a file (a run's GDS or log can be tens of MB) with
         ``sendfile`` instead of reading it into memory. Opening it may raise
         (nothing is sent then); a file that shrinks while it is sent ends the
-        connection, since the promised length can no longer be met."""
+        connection, since the promised length can no longer be met. Up to its
+        size when opened: a log still growing is sent as it was then."""
         f = open(path, "rb")
         try:
             size = os.fstat(f.fileno()).st_size
@@ -343,6 +345,8 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(size))
             self.send_header("Cache-Control", "no-store")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             if self.command == "HEAD" or size == 0:
                 return

@@ -356,7 +356,36 @@ function fillGoal(id) {
   }
 }
 
-// An SDC file that sets the clock period itself (a number, not
+// Whether an SDC sets the clock period itself: any create_clock whose
+// -period is not LibreLane's CLOCK_PERIOD ($::env(CLOCK_PERIOD), directly, in
+// an expr, or through a variable set from it). A number, or a variable the SDC
+// sets to anything else, is the SDC's own clock. Pure.
+// -> {sets: bool, value: "10" | "$clk_period" | ..., line}
+export function sdcClockSource(text) {
+  const src = String(text || "").replace(/\\\r?\n/g, " ");
+  const lines = src.split(/\r?\n/).map((l) => l.replace(/(^|;)\s*#.*$/, "$1"));
+  const usesEnv = (s) => /(::)?env\(\s*CLOCK_PERIOD\s*\)/.test(s);
+  const sets = new Map();          // tcl variable -> its value text (the last set wins)
+  for (const l of lines) {
+    const m = /^\s*set\s+(?:::)?([A-Za-z_][\w]*)\s+(.+?)\s*;?\s*$/.exec(l);
+    if (m) sets.set(m[1], m[2]);
+  }
+  const fromEnv = (tok, seen = new Set()) => {
+    if (usesEnv(tok)) return true;
+    const vars = [...tok.matchAll(/\$\{?(?:::)?([A-Za-z_]\w*)\}?/g)].map((x) => x[1]).filter((v) => v !== "env");
+    return vars.some((v) => !seen.has(v) && sets.has(v) && (seen.add(v), fromEnv(sets.get(v), seen)));
+  };
+  for (const l of lines) {
+    if (!/\bcreate_clock\b/.test(l)) continue;
+    const m = /-period\s+(\[[^\]]*\]|\{[^}]*\}|"[^"]*"|\S+)/.exec(l);
+    if (!m) continue;
+    const tok = m[1].replace(/^[{"]|[}"]$/g, "");
+    if (!fromEnv(tok)) return { sets: true, value: tok, line: l.trim() };
+  }
+  return { sets: false, value: null, line: "" };
+}
+
+// An SDC file that sets the clock period itself (a number, or anything but
 // $::env(CLOCK_PERIOD)) makes a clock sweep change synthesis only, never the
 // timing it is judged by: say so, and hold Start.
 async function sdcGuard(...entries) {
@@ -367,9 +396,10 @@ async function sdcGuard(...entries) {
     const path = v.replace(/^dir::/, (state.designDir || "").replace(/[\\/]+$/, "") + "/");
     let text = "";
     try { const r = await api.readText(path); text = (r && (r.text ?? (r.data || {}).text)) || ""; } catch (_e) { continue; }
-    const m = /create_clock[^\n]*-period\s+([0-9.]+)/.exec(text);
-    if (m && !/CLOCK_PERIOD/.test(text)) {
-      S.sdcBlock = "Your SDC file (" + v.replace(/^dir::/, "") + ") sets the clock period itself (" + m[1] + " ns), so changing CLOCK_PERIOD would only change synthesis, not timing. " +
+    const clk = sdcClockSource(text);
+    if (clk.sets) {
+      const what = /^[0-9.]+$/.test(clk.value) ? clk.value + " ns" : "-period " + clk.value;
+      S.sdcBlock = "Your SDC file (" + v.replace(/^dir::/, "") + ") sets the clock period itself (" + what + "), so changing CLOCK_PERIOD would only change synthesis, not timing. " +
         "Make the SDC use $::env(CLOCK_PERIOD) as LibreLane's own base.sdc does, or change the period in the SDC.";
       break;
     }
@@ -704,13 +734,22 @@ export function sweepPoints(sw, runs, verdictOf, jobs = null) {
 const metTiming = (p) => p.r && p.finished && num(p.r, "timing__setup__ws") != null && num(p.r, "timing__setup__ws") >= 0 &&
   !(num(p.r, "timing__hold__ws") != null && num(p.r, "timing__hold__ws") < 0);
 
+// Planned points with no run yet that still wait (or run) in the job queue:
+// planned, not left. A study restarted with points queued offered "Run the N
+// left" for them and queued each a second time.
+const inQueue = (p) => p.key === "queued" || p.key === "running";
+export function pointsLeft(pts) { return pts.filter((p) => p.missing && !inQueue(p)); }
+export function pointsWaiting(pts) { return pts.filter((p) => p.missing && inQueue(p)); }
+
 // Why a sweep has fewer runs than it planned, in plain words ("" when it
 // ran them all or is still running).
 export function endReason(sw, pts) {
   if (sw.active) return "";
   const live = pts.filter((p) => !p.missing && !p.superseded);
   const ran = live.length;
-  const left = pts.filter((p) => p.missing).length;
+  const waiting = pointsWaiting(pts).length;
+  if (waiting) return waiting + " point" + (waiting === 1 ? " still waits" : "s still wait") + " in the queue: " + (waiting === 1 ? "it runs" : "they run") + " by " + (waiting === 1 ? "itself" : "themselves") + " (the queue may be paused).";
+  const left = pointsLeft(pts).length;
   const e = sw.ended || {};
   if (!left) {
     // Every point has a run, but LanEx stopped while one of them ran.
@@ -787,7 +826,7 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
     : "";
   const why = endReason(sw, pts);
   const redo = live.filter((p) => !p.ok && !p.finished && p.state !== "running").map((p) => p.tag);
-  const left = pts.filter((p) => p.missing).map((p) => p.tag);
+  const left = pointsLeft(pts).map((p) => p.tag);
   const busy = !!(state.status && state.status.running) || !!sw.active;
   const busyT = busy ? " disabled title='A run or sweep is going'" : "";
   // Compare takes up to twelve: past that, the reference (the best by the
@@ -1334,4 +1373,4 @@ export async function checkRun(p) {
   document.addEventListener("g:queue", onQ);
 }
 
-export const _test = { planPoints, parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, typedValue, stillWins, stageLabel: FS.stageLabel };
+export const _test = { planPoints, parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, pointsLeft, pointsWaiting, sdcClockSource, typedValue, stillWins, stageLabel: FS.stageLabel };

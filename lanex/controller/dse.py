@@ -213,9 +213,10 @@ def stamp_run(run_dir: str | Path, sweep_id: str, values: Dict[str, Any]) -> Non
         if not isinstance(doc, dict):
             doc = {}
         doc["sweep"] = {"id": sweep_id, "values": dict(values)}
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(p)
+        # A temp file of its own (a fixed name raced the queue's own write of
+        # the peak memory into the same gui-run.json).
+        from . import platform_env
+        platform_env.atomic_write_text(p, json.dumps(doc, indent=2) + "\n")
     except Exception:
         pass
 
@@ -561,7 +562,7 @@ _SHORT = {
 
 
 def _slug(v: Any) -> str:
-    out = "".join(c if (c.isalnum() or c in ".-") else "_" for c in str(v).strip())
+    out = "".join(c if ((c.isascii() and c.isalnum()) or c in ".-") else "_" for c in str(v).strip())
     return out.strip("_") or "x"
 
 
@@ -919,6 +920,7 @@ class DseJob:
         self.end_detail: Optional[str] = None
         self._early: Dict[str, int] = {}
         self._failed_fast: Optional[str] = None
+        self._user_stop = False
 
     @property
     def active(self) -> bool:
@@ -982,6 +984,7 @@ class DseJob:
             self._early = {}
             self._ended_fps = []
             self._failed_fast = None
+            self._user_stop = False
             self._thread = threading.Thread(
                 target=self._run, args=(start_one, list(overrides_list), list(tags)),
                 daemon=True, name="librelane.gui.DseJob",
@@ -991,6 +994,15 @@ class DseJob:
 
     def cancel(self) -> None:
         self._cancel.set()
+
+    def stop_after_running(self) -> None:
+        """You stopped the study after the points running now: the waiting
+        ones are not run (the caller skips them in the queue), the running
+        ones finish, and the end is recorded as stopped (by you), never as a
+        stop rule or a failure."""
+        with self._lock:
+            self._user_stop = True
+        self._stop_rest("stopped", "Not run: you stopped the study after the points that were running")
 
     @property
     def cancelled(self) -> bool:
@@ -1057,6 +1069,8 @@ class DseJob:
         # its limit fails like that, and with points running N at a time the
         # failures end first. The study summary says so and offers Stop; it
         # never stops by itself. A clock too fast is a result, never a failure.)
+        if self._user_stop:
+            return              # you stopped it: no stop rule speaks after you
         if not self._cancel.is_set() and not failed_before_any_step(res):
             why = proof_stop(res, list(ov.keys()))
             with self._lock:
@@ -1126,7 +1140,7 @@ class DseJob:
             for t in ths:
                 t.join()
         cancelled = self._cancel.is_set()
-        reason = ("stopped" if cancelled else "first-clean" if self.stopped_early
+        reason = ("stopped" if cancelled or self._user_stop else "first-clean" if self.stopped_early
                   else "failed-fast" if self._failed_fast else "done")
         with self._lock:
             self.end_reason = reason

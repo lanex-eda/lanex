@@ -144,7 +144,7 @@ def test_frontend_calls_use_each_routes_method():
     "/api/bye?id=page",                      # feeds close-to-quit
     "/api/fs/native-pick",                   # pops a dialog
     "/api/celllib/view?pdk=a&scl=b&cell=c",  # opens a viewer session
-    "/api/run/cancel", "/api/run-delete", "/api/project/delete", "/api/manual/run",
+    "/api/run/cancel", "/api/runs-bulk", "/api/project/delete", "/api/manual/run",
     "/api/file/write", "/api/upload?filename=x",
 ])
 def test_side_effect_routes_refuse_get(open_server, path):
