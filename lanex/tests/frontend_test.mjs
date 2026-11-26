@@ -3501,6 +3501,112 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   });
 }
 
+// ---------- Macros: placement rules and the exclusion guard (lane 7) ---------------
+{
+  const MP = await import(toUrl(resolve(MOD, "macro-place.js")));
+  // the sky130 floorplan a 700 x 600 µm die makes (checked against IFP-0101 on a real run)
+  const model = () => ({
+    ok: true, die: { box: [0, 0, 700, 600], from: "config" }, core: { box: [5.52, 10.88, 694.14, 587.52] },
+    site: { name: "unithd", w: 0.46, h: 2.72 }, mfg: 0.005, halo: { h: 10, v: 10 }, endcap_w: 1.38,
+    pdn: { vlayer: "met4", hlayer: "met5", v: { w: 1.6, s: 1.7, pitch: 153.6, off: 16.32 }, h: { w: 1.6, s: 1.7, pitch: 153.18, off: 16.65 } },
+    macros: {
+      sram: { ok: true, w: 479.78, h: 397.5, grid: "default", orients: ["N", "S", "FN", "FS"], symmetry: "X Y R90",
+        prects: [["vccd1", "power", "met4", 4.76, 0, 6.5, 397.5], ["vssd1", "ground", "met4", 1.36, 0, 3.1, 397.5],
+                 ["vccd1", "power", "met4", 473.28, 0, 475.02, 397.5], ["vssd1", "ground", "met4", 476.68, 0, 478.42, 397.5]], pins: [] },
+      tiny: { ok: true, w: 20, h: 8, grid: "default", orients: ["N", "S", "FN", "FS"],
+        prects: [["VDD", "power", "met4", 1, 0, 2, 8], ["VSS", "ground", "met4", 3, 0, 4, 8]], pins: [] },
+    },
+  });
+  const at = (x, y, o = "N", name = "u_sram", macro = "sram") => ({ macro, name, location: [x, y], orientation: o });
+  const codes = (pl) => MP.problems(model(), pl).map((p) => p.code + (p.hard ? "!" : "")).sort();
+
+  check("macros: footprints and pins turn the way LibreLane's orientations do", () => {
+    assert.deepEqual(MP.footprint(480, 400, "W"), [400, 480]);
+    assert.deepEqual(MP.footprint(480, 400, "FS"), [480, 400]);
+    assert.deepEqual(MP.xformRect([0, 0, 10, 5], 100, 50, "S"), [90, 45, 100, 50]);
+    assert.deepEqual(MP.xformRect([0, 0, 10, 5], 100, 50, "FN"), [90, 0, 100, 5]);
+    assert.deepEqual(MP.xformRect([0, 0, 10, 5], 100, 50, "FS"), [0, 45, 10, 50]);
+    assert.deepEqual(MP.xformPoint(10, 5, 100, 50, "E"), [5, 90]);
+    assert.equal(MP.snap(110.43, 0.46), 110.4);
+    assert.equal(MP.snapUp(10.9, 2.72), 13.6);
+  });
+  check("macros: the research's clean position passes, with power straps on both supplies", () => {
+    assert.deepEqual(codes([at(110.4, 100.64)]), []);
+    const c = MP.crossings(model(), at(110.4, 100.64));
+    assert.ok(c.power >= 2 && c.ground >= 2, JSON.stringify(c));
+  });
+  check("macros: outside the core, overlap, a 90° turn and no strap are refused before a run", () => {
+    assert.deepEqual(codes([at(0, 0)]), ["outside!"]);
+    assert.match(MP.problems(model(), [at(0, 0)])[0].message, /5\.52 µm on the left \(the core starts at x = 5\.52 µm\)/);
+    assert.ok(codes([at(110.4, 100.64), at(200.1, 100.64, "N", "u_b")]).includes("overlap!"));
+    assert.ok(codes([at(110.4, 100.64, "E")]).some((c) => c === "orient!"));
+    assert.match(MP.problems(model(), [at(110.4, 100.64, "E")]).find((p) => p.code === "orient").message, /PDN-0233/);
+    // an 8 µm tall block between two horizontal straps gets no power
+    const t = { macro: "tiny", name: "u_t", location: [299.92, 35.36], orientation: "N" };
+    assert.deepEqual(MP.problems(model(), [t]).map((p) => p.code), ["power"]);
+    assert.equal(MP.problems(model(), [{ macro: "tiny", name: "u_t", location: null, orientation: "N" }])[0].code, "unplaced");
+  });
+  check("macros: off the site grid and a narrow strip of rows are warnings, not refusals", () => {
+    assert.deepEqual(codes([at(110.5, 100.64)]), ["grid"]);
+    // keep-out ends 4.26 µm before the right core edge: rows survive, no strap fits
+    const ps = MP.problems(model(), [at(200.1, 100.64)]);
+    assert.deepEqual(ps.map((p) => p.code), ["channel"]);
+    assert.match(ps[0].message, /4\.26 µm strip/);
+    assert.match(ps[0].message, /PDN-0179/);
+    assert.match(ps[0].fix, /at least 20 µm/);
+    // the 7 µm strip Arrange first left beside a real SRAM failed detailed placement: warned too
+    assert.match(MP.problems(model(), [at(22.54, 21.76)]).find((p) => p.code === "channel").message, /DPL-0036/);
+  });
+  check("macros: Arrange puts every block inside the core, on the site grid, crossed by power", () => {
+    const m = model();
+    const res = MP.arrange(m, [{ macro: "sram", name: "u_sram", location: null, orientation: "N" }, { macro: "tiny", name: "u_t", location: null, orientation: "N" }]);
+    assert.deepEqual(res.failed, []);
+    assert.deepEqual(MP.problems(m, res.placements).filter((p) => p.hard), []);
+    for (const p of res.placements) {
+      assert.ok(Math.abs(p.location[0] / 0.46 - Math.round(p.location[0] / 0.46)) < 1e-6, "x on the site grid");
+      assert.ok(Math.abs(p.location[1] / 2.72 - Math.round(p.location[1] / 2.72)) < 1e-6, "y on the row grid");
+    }
+    // a die too small for the block says so instead of overlapping
+    const small = Object.assign(model(), { core: { box: [5.52, 10.88, 300, 300] } });
+    assert.deepEqual(MP.arrange(small, [{ macro: "sram", name: "u_sram", location: null, orientation: "N" }]).failed, ["u_sram"]);
+  });
+  check("macros: 'nearest legal spot' moves a block back inside the core", () => {
+    const n = MP.nearestLegal(model(), [at(-50, 100.64)], "u_sram");
+    assert.ok(n && n.location[0] >= 5.52 - 1e-9);
+    assert.deepEqual(MP.problems(model(), [at(n.location[0], n.location[1])]).filter((p) => p.hard), []);
+  });
+  check("cells: the exclusion guard blocks losing every buffer, the clock tree's cells or a synthesis cell", () => {
+    const cell = (n, cat, ex = {}) => ({ cell: "sg13g2_" + n, category: cat, has_lib: true, excluded: ex });
+    const lib = {
+      prefix: "sg13g2_",
+      cells: [cell("buf_1", "buffer"), cell("buf_2", "buffer"), cell("buf_4", "buffer"), cell("buf_8", "buffer"), cell("buf_16", "buffer"),
+              cell("inv_1", "inverter"), cell("dfrbp_1", "flipflop"), cell("fill_1", "physical"), cell("tiehi", "tie")],
+      rules: { roles: [
+        { key: "CTS_ROOT_BUFFER", cells: ["sg13g2_buf_16"] }, { key: "CTS_CLK_BUFFERS", cells: ["sg13g2_buf_8", "sg13g2_buf_4", "sg13g2_buf_2"] },
+        { key: "SYNTH_BUFFER_CELL", cells: ["sg13g2_buf_1"] }, { key: "SYNTH_TIEHI_CELL", cells: ["sg13g2_tiehi"] },
+        { key: "FILL_CELLS", cells: ["sg13g2_fill_1"] }] },
+    };
+    const all = CM.exclusionImpact([], ["sg13g2_buf_*"], lib);
+    const keys = all.blocks.map((b) => b.key).sort();
+    assert.deepEqual(keys, ["CTS_CLK_BUFFERS", "CTS_ROOT_BUFFER", "SYNTH_BUFFER_CELL", "buffer"]);
+    assert.ok(all.blocks.some((b) => b.tool === "No clock buffer candidates could be found from any libraries."));
+    assert.deepEqual(CM.exclusionImpact([], ["sg13g2_buf_16"], lib).blocks.map((b) => b.key), ["CTS_ROOT_BUFFER"]);
+    assert.deepEqual(CM.exclusionImpact([], ["sg13g2_buf_8"], lib).blocks, []);
+    assert.deepEqual(CM.exclusionImpact([], ["sg13g2_tie*"], lib).blocks.map((b) => b.key), ["SYNTH_TIEHI_CELL"]);
+    assert.deepEqual(CM.exclusionImpact([], ["*fill*"], lib).warns.map((w) => w.key), ["FILL_CELLS"]);
+    assert.deepEqual(CM.exclusionImpact([], ["sg13g2_inv_*"], lib).blocks.map((b) => b.key), ["inverter"]);
+    // a pattern already in the list is not blamed again
+    assert.deepEqual(CM.exclusionImpact(["sg13g2_buf_16"], ["sg13g2_buf_16", "sg13g2_inv_1"], lib).blocks.map((b) => b.key), ["inverter"]);
+  });
+  check("macros: every exclusion path goes through the guard, and the canvas uses the shared rules", () => {
+    const cj = readFileSync(resolve(MOD, "cells.js"), "utf8");
+    assert.match(cj, /async function setUserExcluded[\s\S]{0,600}exclusionImpact\(before, list, S\.lib\)/);
+    const fc = readFileSync(resolve(MOD, "floorplan-canvas.js"), "utf8");
+    assert.match(fc, /from "\.\/macro-place\.js"/);
+    assert.match(readFileSync(resolve(MOD, "cells-macros.js"), "utf8"), /createFloorplanCanvas\(/);
+  });
+}
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

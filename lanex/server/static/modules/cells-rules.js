@@ -99,8 +99,12 @@ function wireMine(host, names) {
       const v = inp.value.trim();
       const hit = v ? matchList([v], names) : [];
       btn.disabled = !v;
+      const cur = C.lib.rules.user.patterns || [];
+      const imp = v && hit.length ? M.exclusionImpact(cur, cur.concat([v]), C.lib) : { blocks: [], warns: [] };
       prev.innerHTML = !v ? "" : hit.length
-        ? "Catches " + hit.length + " cell" + (hit.length === 1 ? "" : "s") + ": " + cellLinks(hit, 12)
+        ? "Catches " + hit.length + " cell" + (hit.length === 1 ? "" : "s") + ": " + cellLinks(hit, 12) +
+          (imp.blocks.length ? "<div class='cr-guard is-block'>…including " + esc(imp.blocks.map((b) => b.text).join("; ")) + ". The run would stop, so LanEx won't save it.</div>" : "") +
+          (imp.warns.length ? "<div class='cl-warn-t cr-guard'>…including " + esc(imp.warns.map((b) => b.text).join("; ")) + ".</div>" : "")
         : "<span class='cl-warn-t'>Matches no cell in " + esc(C.scl) + ".</span> It would still be saved, and apply if you switch library.";
     };
     inp.addEventListener("input", upd);
@@ -111,6 +115,7 @@ function wireMine(host, names) {
       if (cur.includes(v)) { toast.show(v + " is already excluded", "info"); return; }
       btn.disabled = true;
       if (await C.setUserExcluded(cur.concat([v]))) toast.show("Excluded " + v + " from the next run.", "success");
+      else btn.disabled = false;
     };
     btn.addEventListener("click", add);
     inp.addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
