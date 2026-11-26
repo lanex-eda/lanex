@@ -1239,6 +1239,7 @@ def _preflight_config(design_dir: Optional[str], pdk: Optional[str], scl: Option
         pf = None
     chk = configcheck.check(design_dir=design_dir, config_files=[str(cf)], pdk=pdk, scl=scl,
                             pdk_ready=pf, run_mode=run_mode, flow=flow)
+    chk = _with_macro_checks(chk, design_dir, pdk, scl)
     return {"flow": flow, "check": chk}
 
 
@@ -1368,7 +1369,7 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
     macro_warning: Optional[str] = None
     try:
         from ..controller import custommacros
-        overlay = custommacros.write_overlay(design_dir)
+        overlay = custommacros.write_overlay(design_dir, pdk=pdk, scl=scl)
         if overlay:
             extra_config_files.append(overlay)
             # Honest heads-up when the overlay will REPLACE (not merge with) a
@@ -1749,6 +1750,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             design_dir=design_dir, config_files=[str(config_file)] + extra_config_files,
             pdk=pdk, scl=scl, pdk_ready=pf, run_mode=run_mode, overrides=overrides,
             extra_sources=body.get("sources") or None, flow=flowsel, reuse_failures=False)
+        chk = _with_macro_checks(chk, design_dir, pdk, scl)
         if chk["blocking"] or (chk["problems"] and not body.get("checks_ack")):
             return {"ok": False, "started": False, "config_check": chk,
                     "reason": " ".join(configcheck.blockers_text(chk))}, 200
@@ -4110,6 +4112,15 @@ def h_project_new(handler: Any) -> None:
     if not result.get("ok"):
         _respond(handler, result.get("error") or "could not create project", 400)
         return
+    # A template with hard macros (the SRAM example) gets them, placed and
+    # powered, on the Cells & macros tab (lane 7).
+    try:
+        from ..controller import custommacros
+        added = custommacros.apply_template_macros(result["design_dir"], template, pdk or None, scl)
+        if added:
+            result["macros"] = added
+    except Exception:
+        _log.exception("template macros failed")
     # Adopt the freshly-created design (mirrors h_set_design_dir).
     _set_active_design_dir(result["design_dir"])
     _respond(handler, result)
@@ -5832,6 +5843,11 @@ def h_custom_macro_save(handler: Any) -> None:
     if not result.get("ok"):
         _respond(handler, result.get("error", "save failed"), 400)
         return
+    if body.get("views"):
+        # new files: the ports-only header, relaxed timing, power from the LEF
+        fin = custommacros.finish_upload(dd, result["macro"]["name"], body.get("pdk") or None, body.get("scl") or None)
+        if fin.get("ok"):
+            result = fin
     _respond(handler, result)
 
 
@@ -5970,9 +5986,18 @@ def h_macro_add(handler: Any) -> None:
     refs = copies = None
     name = (body.get("name") or "").strip()
     if kind == "pdk":
-        refs = {k: v for k, v in (src.get("views") or {}).items() if isinstance(v, str)}
-        label = f"{src.get('library') or 'PDK'} ({src.get('pdk') or ''})".strip()
-        source = {"kind": "pdk", "label": label, "pdk": src.get("pdk"), "library": src.get("library")}
+        # The block's files are looked up on the server by name (never taken
+        # from the request), with the header, per-corner timing and power
+        # hookup LanEx makes for it.
+        result = custommacros.add_pdk_macro(dd, src.get("pdk") or "", body.get("scl") or src.get("scl"),
+                                            name, src.get("library"), power=body.get("power"),
+                                            instances=body.get("instances") or [],
+                                            enabled=body.get("enabled", True))
+        if not result.get("ok"):
+            _respond(handler, result.get("error", "save failed"), 400)
+            return
+        _respond(handler, result)
+        return
     elif kind == "run":
         rv = macrolib.run_views(src.get("design_dir") or "", src.get("tag") or "")
         if not rv.get("ok"):
@@ -5992,7 +6017,8 @@ def h_macro_add(handler: Any) -> None:
     if not result.get("ok"):
         _respond(handler, result.get("error", "save failed"), 400)
         return
-    _respond(handler, result)
+    fin = custommacros.finish_upload(dd, result["macro"]["name"], body.get("pdk") or None, body.get("scl") or None)
+    _respond(handler, fin if fin.get("ok") else result)
 
 
 def h_macro_inspect(handler: Any) -> None:
@@ -6014,6 +6040,16 @@ def h_macro_inspect(handler: Any) -> None:
         p = macrolib.resolve_view(lef if isinstance(lef, str) else "", dd,
                                   pdk or (m.get("source") or {}).get("pdk") or data.get("PDK"))
         info = macrolib.macro_pins(p, m["name"]) if p and p.is_file() else {"ok": False, "error": "LEF file not found"}
+        # the GDS must hold a cell of the macro's name (the layout Magic and
+        # KLayout stream in); say which cells it does have when it doesn't
+        gds = (m.get("views") or {}).get("gds")
+        gp = macrolib.resolve_view(gds if isinstance(gds, str) else "", dd,
+                                   pdk or (m.get("source") or {}).get("pdk") or data.get("PDK"))
+        names = macrolib.gds_cells(gp) if gp is not None else None
+        if names is not None:
+            info["gds_has_cell"] = m["name"] in names
+            if m["name"] not in names:
+                info["gds_cells"] = names[-5:]
         out[m["name"]] = info
     # The die as the last run drew it, for the floorplan sketch when the config
     # leaves sizing to LibreLane (FP_SIZING relative).
@@ -6026,11 +6062,99 @@ def h_macro_inspect(handler: Any) -> None:
                 break
     except Exception:
         last_die = None
+    # The design's power nets: the config's VDD_NETS/GND_NETS, else the PDK's
+    # (VPWR/VGND on sky130 and IHP, VDD/VSS on gf180), never a guess.
+    nets = custommacros.design_nets(Path(dd), pdk or data.get("PDK"), _query_param(handler.path, "scl") or data.get("STD_CELL_LIBRARY"))
     _respond(handler, {"ok": True, "macros": out, "scan": scan,
                        "die_area": data.get("DIE_AREA"), "fp_sizing": data.get("FP_SIZING"),
                        "last_die": last_die, "top": data.get("DESIGN_NAME"),
-                       "vdd": (data.get("VDD_NETS") or [None])[0] if isinstance(data.get("VDD_NETS"), list) else data.get("VDD_NETS"),
-                       "gnd": (data.get("GND_NETS") or [None])[0] if isinstance(data.get("GND_NETS"), list) else data.get("GND_NETS")})
+                       "vdd": nets["vdd"], "gnd": nets["gnd"]})
+
+
+def h_macro_floorplan(handler: Any) -> None:
+    """What the Arrange canvas draws and checks: die, core, site grid, power
+    straps, each macro's footprint and power pins, and the problems
+    (macrolib.floorplan). Pure arithmetic over the config and the PDK."""
+    from ..controller import macrolib
+    dd = _custom_cells_dir(handler)
+    if not dd or not Path(dd).is_dir():
+        _respond(handler, "no active design dir", 400)
+        return
+    try:
+        res = macrolib.floorplan(dd, _query_param(handler.path, "pdk") or None, _query_param(handler.path, "scl") or None)
+    except Exception as ex:
+        _log.exception("macro floorplan failed")
+        _respond(handler, f"couldn't read the floorplan: {ex}", 500)
+        return
+    _respond(handler, res)
+
+
+def h_macro_place(handler: Any) -> None:
+    """Save every macro instance's position and orientation at once (Arrange's
+    Save), or only check them (``check: true``), and answer the floorplan."""
+    from ..controller import custommacros, macrolib
+    body = getattr(handler, "_body", {}) or {}
+    dd = _custom_cells_dir(handler)
+    if not dd or not Path(dd).is_dir():
+        _respond(handler, "no active design dir", 400)
+        return
+    placements = body.get("placements")
+    if not isinstance(placements, list):
+        _respond(handler, "placements must be a list of {macro, name, location, orientation}", 400)
+        return
+    if body.get("check"):
+        _respond(handler, macrolib.floorplan(dd, body.get("pdk") or None, body.get("scl") or None, placements=placements))
+        return
+    res = custommacros.set_instances(dd, placements)
+    if not res.get("ok"):
+        _respond(handler, res.get("error", "save failed"), 400)
+        return
+    _respond(handler, macrolib.floorplan(dd, body.get("pdk") or None, body.get("scl") or None))
+
+
+def _with_macro_checks(chk: Optional[Dict[str, Any]], design_dir: Optional[str], pdk: Optional[str],
+                       scl: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The config check with the macro findings added (custommacros.run_problems):
+    a macro without a position, outside the core, overlapping or out of the
+    power grid's reach refuses the start; the others ask first."""
+    if chk is None or not design_dir:
+        return chk
+    try:
+        from ..controller import custommacros
+        extra = custommacros.run_problems(design_dir, pdk, scl)
+    except Exception:
+        _log.exception("macro run check failed")
+        return chk
+    if not extra:
+        return chk
+    chk = dict(chk)
+    chk["problems"] = list(chk.get("problems") or []) + extra
+    chk["blocking"] = any(p.get("hard") for p in chk["problems"])
+    chk["ok"] = not chk["problems"]
+    return chk
+
+
+def h_celllib_doc(handler: Any) -> None:
+    """The library's own datasheet PDF, when the PDK ships one (IHP does, one
+    per corner, in ``libs.ref/<scl>/doc``). Offline, from the installed PDK."""
+    from ..controller import celllib
+    p = handler.path
+    f = celllib.datasheet(_query_param(p, "pdk"), _query_param(p, "scl"), _query_param(p, "corner"))
+    if f is None:
+        _respond(handler, "this library ships no datasheet", 404)
+        return
+    try:
+        data = f.read_bytes()
+    except OSError as ex:
+        _respond(handler, f"couldn't read the datasheet: {ex}", 500)
+        return
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/pdf")
+    handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Content-Disposition", 'inline; filename="' + re.sub(r"[^A-Za-z0-9._-]+", "_", f.name) + '"')
+    handler.end_headers()
+    handler.wfile.write(data)
 
 
 def h_macro_settings(handler: Any) -> None:
@@ -6526,7 +6650,10 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/celllib/layout", h_celllib_layout),
     ("/api/celllib/view", h_celllib_view),
     ("/api/celllib/view/close", h_celllib_view_close),
+    ("/api/celllib/doc", h_celllib_doc),
     ("/api/celllib", h_celllib),
+    ("/api/macros/floorplan", h_macro_floorplan),
+    ("/api/macros/place", h_macro_place),
     ("/api/macros/catalog", h_macro_catalog),
     ("/api/macros/projects", h_macro_projects),
     ("/api/macros/add", h_macro_add),
@@ -6679,7 +6806,7 @@ _POST_ROUTES = {
     "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave",
     "/api/sim/run-all", "/api/sim/preview", "/api/ide/index", "/api/ide/definition", "/api/ide/references",
     "/api/ide/symbols", "/api/ide/hierarchy", "/api/ide/search", "/api/ide/replace", "/api/ide/schematic", "/api/celllib/view",
-    "/api/celllib/view/close", "/api/macros/add", "/api/macros/settings",
+    "/api/celllib/view/close", "/api/macros/add", "/api/macros/settings", "/api/macros/place",
     "/api/custom-cells/save", "/api/custom-cells/remove", "/api/custom-cells/enable",
     "/api/custom-macros/save", "/api/custom-macros/remove", "/api/custom-macros/enable",
     "/api/upload", "/api/bye", "/api/run-pin", "/api/run-import-dir",
@@ -6713,6 +6840,7 @@ _GET_ROUTES = {
     "/api/ide/schematic-result", "/api/celllib/cell",
     "/api/celllib/layout", "/api/celllib", "/api/macros/catalog", "/api/macros/projects",
     "/api/macros/inspect", "/api/cells", "/api/custom-cells", "/api/custom-macros",
+    "/api/macros/floorplan", "/api/celllib/doc",
     "/api/health", "/api/presence", "/api/hello", "/api/about", "/api/steps", "/api/variables",
     "/api/design-formats", "/api/flows", "/api/pdks", "/api/scls", "/api/pdk-ready", "/api/runs",
     "/api/known-designs", "/api/run-step-log", "/api/run-files", "/api/run-images",

@@ -120,7 +120,10 @@ def test_location_string_and_list_both_parse(tmp_path):
     inst = macros["m"]["instances"]
     assert inst["a"]["location"] == [100.0, 200.0]
     assert inst["b"]["location"] == [10.0, 20.0]
-    assert inst["c"]["location"] is None        # blank => automatic placement
+    # blank: no position, so not written (LibreLane has no automatic placer;
+    # the run check refuses the start, custommacros.run_problems)
+    assert "c" not in inst
+    assert cm.list_macros(str(tmp_path))["macros"][0]["instances"][2] == {"name": "c", "location": None, "orientation": "N"}
     assert inst["b"]["orientation"] == "FS"
 
 
@@ -255,7 +258,8 @@ def test_overlay_compiles_via_librelane(tmp_path):
     assert len(macro.gds) == 1 and len(macro.lef) == 1
     assert "*" in macro.lib
     assert isinstance(macro.instances["u_sram"], Instance)
-    # location is Decimal-typed; auto-place instance keeps None.
+    # location is Decimal-typed. An instance without a position is left out:
+    # LibreLane would skip it and stop at PDN-0235, so the run check refuses
+    # the start instead (custommacros.run_problems).
     assert macro.instances["u_sram"].location is not None
-    assert macro.instances["u_sram2"].location is None
-    assert str(macro.instances["u_sram2"].orientation) == "FS"
+    assert "u_sram2" not in macro.instances

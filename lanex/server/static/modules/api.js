@@ -471,6 +471,12 @@ export const api = {
     _fetch("/api/macros/inspect?design_dir=" + encodeURIComponent(designDir || "") + "&pdk=" + encodeURIComponent(pdk || "")),
   macroSettings: (designDir, settings) =>
     _fetch("/api/macros/settings", { method: "POST", body: JSON.stringify({ design_dir: designDir, settings }) }),
+  // Arrange: the die, core, site grid, straps and each macro's footprint, and
+  // one save of every instance's position (lane 7).
+  macroFloorplan: (designDir, pdk, scl) =>
+    _fetch("/api/macros/floorplan?design_dir=" + encodeURIComponent(designDir || "") + "&pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "")),
+  macroPlace: (designDir, placements, pdk, scl) =>
+    _fetch("/api/macros/place", { method: "POST", body: JSON.stringify({ design_dir: designDir, placements, pdk, scl }) }),
   // ---------- custom cells (advanced cell swap-out, per run)
   customCells: (designDir) =>
     _fetch("/api/custom-cells" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : "")),

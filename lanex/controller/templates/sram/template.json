@@ -1,0 +1,28 @@
+{
+  "name": "sram",
+  "title": "SRAM macro (sky130)",
+  "description": "A 1 KB SRAM from the sky130 PDK behind a registered read port: a hard macro placed in the floorplan and powered by the grid. sky130A or sky130B only.",
+  "teaches": "Hard macros: a memory block placed by hand inside the core, its keep-out, its power hookup and the views it needs (Cells & macros, Arrange).",
+  "top": "sram_demo",
+  "clock_port": "clk",
+  "clock_period": 25.0,
+  "sources": [
+    "src/sram_demo.v"
+  ],
+  "testbench": "verify/sram_demo_tb.v",
+  "order": 6,
+  "config": {
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [0, 0, 700, 600]
+  },
+  "macros": [
+    {
+      "pdk": "sky130*",
+      "library": "sky130_sram_macros",
+      "name": "sky130_sram_1kbyte_1rw1r_32x256_8",
+      "instances": [
+        {"name": "u_sram", "location": [110.4, 100.64], "orientation": "N"}
+      ]
+    }
+  ]
+}

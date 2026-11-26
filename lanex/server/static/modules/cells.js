@@ -227,11 +227,11 @@ function buildFamilies() {
     let f = map.get(key);
     if (!f) {
       const lib = c.cell.startsWith(S.lib.prefix) ? "" : c.cell.slice(0, c.cell.lastIndexOf(c.family)).replace(/_+$/, "");
-      f = { fam: c.family, lib, cat: c.category, desc: c.desc, cells: [] };
+      f = { fam: c.family, lib, cat: c.category, desc: c.desc, descSrc: c.desc_src, cells: [] };
       map.set(key, f);
     }
     f.cells.push(c);
-    if (!f.desc && c.desc) f.desc = c.desc;
+    if (!f.desc && c.desc) { f.desc = c.desc; f.descSrc = c.desc_src; }
   }
   for (const f of map.values()) {
     f.cells.sort((a, b) => M.driveKey(a.drive) - M.driveKey(b.drive) || a.cell.localeCompare(b.cell));
@@ -535,12 +535,14 @@ function headHtml(c, fam) {
         "<b>" + esc(x.drive || "·") + "</b>" + (x.used ? "<i>" + x.used + "×</i>" : "") + "</button>").join("") +
       "<span class='cl-dt-help has-tip' title='The number after the name is the drive strength: how hard the output pushes. Bigger drives are faster into heavy loads but are larger, load their own inputs more and leak more. Synthesis and the resizer choose per instance.'>drive</span></div>"
     : "";
-  const desc = fam && fam.desc ? "<p class='cl-desc" + (fam.descGenerated ? " is-gen" : "") + "'>" + esc(fam.desc) + "</p>" : "";
+  const desc = fam && fam.desc ? "<p class='cl-desc" + (fam.descGenerated ? " is-gen" : "") + "'" +
+    (fam.descSrc === "lanex" ? " title='LanEx wrote this from the cell&#39;s name and Liberty function: this library&#39;s files carry no description.'" : "") + ">" + esc(fam.desc) + "</p>" : "";
+  const links = docLinks(c);
   return "<header class='cl-head'>" +
     "<div class='an-eyebrow'>" + esc(L.categories[c.category] || c.category) + " · " + esc(c.family) + " family</div>" +
     "<div class='cl-title-row'><h3 class='cl-title'>" + esc(c.cell) + "</h3>" +
       "<button class='btn btn-ghost btn-sm cl-copy' data-copy='" + esc(c.cell) + "' title='Copy the cell name'>" + icon("file", { size: 13 }) + " Copy</button></div>" +
-    desc +
+    desc + links +
     (chips.length ? "<div class='cl-chips'>" + chips.join("") + "</div>" : "") +
     drives +
     "<dl class='cl-facts'>" +
@@ -552,6 +554,24 @@ function headHtml(c, fam) {
       fact("Leakage", c.leakage != null ? M.fmtPower(c.leakage) : "–", "Static power, averaged over input states") +
     "</dl></header>";
 }
+// Where the cell is documented: the PDK's own page per family (sky130,
+// gf180), or the library's datasheet PDF that ships in the PDK (IHP, served
+// offline by /api/celllib/doc) and the same file on GitHub.
+function docLinks(c) {
+  const d = S.lib.docs || {};
+  const out = [];
+  if (d.family) {
+    const url = d.family.replace("{lib}", encodeURIComponent(S.scl)).replace("{family}", encodeURIComponent(c.family)).replace("{cell}", encodeURIComponent(c.cell));
+    out.push("<a class='cl-doc' href='" + esc(url) + "' target='_blank' rel='noopener noreferrer'>" + icon("book", { size: 12 }) + " Datasheet: " + esc(/gf180/.test(S.pdk) ? "GF180MCU docs" : "SkyWater docs") + " ↗</a>");
+  }
+  if (d.pdf) {
+    out.push("<a class='cl-doc' href='/api/celllib/doc?pdk=" + encodeURIComponent(S.pdk) + "&scl=" + encodeURIComponent(S.scl) + "&corner=" + encodeURIComponent(S.lib.corner || "") +
+      "' target='_blank' rel='noopener'>" + icon("book", { size: 12 }) + " Datasheet (PDF in your PDK, " + esc(d.pdf.replace(S.scl, "").replace(/^_+/, "")) + ")</a>");
+  }
+  if (d.public) out.push("<a class='cl-doc' href='" + esc(d.public) + "' target='_blank' rel='noopener noreferrer'>IHP on GitHub ↗</a>");
+  return out.length ? "<div class='cl-docs'>" + out.join("") + "</div>" : "";
+}
+
 function fact(k, v, tip) {
   return "<div class='cl-fact' title='" + esc(tip) + "'><dt>" + esc(k) + "</dt><dd>" + esc(v) + "</dd></div>";
 }
@@ -940,6 +960,31 @@ function flowHtml(c) {
 
 async function setUserExcluded(patterns) {
   const list = [...new Set(patterns.filter(Boolean))];
+  // The guard: an exclusion that leaves the flow without a buffer, a clock
+  // buffer, the clock root, an inverter, a flip-flop or a cell synthesis
+  // inserts by name never reaches the config (every exclusion path ends here).
+  const before = (S.lib && S.lib.rules && S.lib.rules.user && S.lib.rules.user.patterns) || [];
+  const impact = M.exclusionImpact(before, list, S.lib);
+  if (impact.blocks.length) {
+    const { customDialog } = await import("./dialog.js");
+    const added = list.filter((p) => !before.includes(p));
+    const tools = [...new Set(impact.blocks.map((b) => b.tool).filter(Boolean))];
+    await customDialog({
+      title: "This exclusion would break the run",
+      bodyHtml: "<p>" + (added.length ? "<code>" + esc(added.join(", ")) + "</code> excludes " : "This change excludes ") + impact.removed.length + " cell" + (impact.removed.length === 1 ? "" : "s") + ", and with " + (impact.removed.length === 1 ? "it" : "them") + ":</p>" +
+        "<ul class='cl-guard'>" + impact.blocks.map((b) => "<li><span class='vf-mark is-fail'></span> " + esc(b.text) + "</li>").join("") + "</ul>" +
+        (tools.length ? "<p class='muted'>OpenROAD would stop: <span class='mono'>" + esc(tools.join(" / ")) + "</span></p>" : "<p class='muted'>Synthesis or the flow would stop: it needs at least one of each.</p>") +
+        "<p class='muted'>Exclude fewer cells (one drive strength rather than the family), or keep at least one of each. Nothing was saved.</p>",
+      buttons: [{ label: "OK", value: null, cls: "btn-primary" }],
+    });
+    return false;
+  }
+  if (impact.warns.length) {
+    const { confirmDialog } = await import("./dialog.js");
+    const ok = await confirmDialog({ title: "Exclude cells the flow places by name?", confirmText: "Exclude anyway",
+      body: "This excludes " + impact.warns.map((w) => w.text).join(" and ") + ". The flow inserts these by name from the PDK's settings, so excluding them is rarely what you want." });
+    if (!ok) return false;
+  }
   try {
     if (list.length) await api.configSet({ EXTRA_EXCLUDED_CELLS: list }, []);
     else await api.configSet({}, ["EXTRA_EXCLUDED_CELLS"]);
@@ -967,6 +1012,7 @@ function wireDetail(host, c) {
       const cur = S.lib.rules.user.patterns || [];
       on.disabled = true;
       if (await setUserExcluded(cur.concat([on.dataset.exOn]))) toast.show("The flow won't use " + on.dataset.exOn + " from the next run.", "success");
+      else on.disabled = false;
       return;
     }
     const off = e.target.closest("[data-ex-off]");

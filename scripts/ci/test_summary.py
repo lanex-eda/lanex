@@ -47,6 +47,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_accuracy_round47": "Timing reads the FINAL post-PnR STA; Netgen LVS verdict-anchored; probe timeouts bounded.",
     "test_accuracy_round52": "Input hygiene (whitespace, atomic sidecars, list overrides) + viewer tech-file guards + 3-state DRC.",
     "test_custom_macros": "A custom hard macro (MACROS overlay) reaches the flow exactly as configured.",
+    "test_macro_flow": "A macro is placed inside the core OpenROAD will make, on the site grid, powered by the grid, with the views and settings a real run needs to reach a clean GDS.",
     "test_container_run": "The dockerized argv LanEx builds equals the librelane command a user would type (CLI≡GUI).",
     "test_cancel_container": "Stop ends the flow's own processes and its named container, and nothing else: viewers, simulations and Console commands keep running.",
     "test_configcheck": "A run's config is loaded by LibreLane, its top module and clock port checked before it starts, and the flow is the config's own (meta.flow), never a silent substitute.",
