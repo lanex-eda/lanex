@@ -435,10 +435,10 @@ export const api = {
   ideHierarchy: (payload) => _fetch("/api/ide/hierarchy", { method: "POST", body: JSON.stringify(payload || {}) }),
   ideSearch: (payload) => _fetch("/api/ide/search", { method: "POST", body: JSON.stringify(payload) }),
   ideReplace: (payload) => _fetch("/api/ide/replace", { method: "POST", body: JSON.stringify(payload) }),
-  ideCaps: (wait) => _fetch("/api/ide/caps" + (wait ? "?wait=1" : ""), { timeout: 40000 }),
+  ideCaps: (wait) => _fetch("/api/ide/caps", { method: "POST", body: JSON.stringify({ wait: !!wait }), timeout: 40000 }),
   ideSchematic: (payload) => _fetch("/api/ide/schematic", { method: "POST", body: JSON.stringify(payload || {}) }),
-  ideSchematicResult: (id, cancel) =>
-    _fetch("/api/ide/schematic-result?id=" + encodeURIComponent(id || "") + (cancel ? "&cancel=1" : "")),
+  ideSchematicResult: (id) => _fetch("/api/ide/schematic-result?id=" + encodeURIComponent(id || "")),
+  ideSchematicCancel: () => _fetch("/api/ide/schematic-cancel", { method: "POST", body: "{}" }),
   simRunAll: (payload) => _fetch("/api/sim/run-all", { method: "POST", body: JSON.stringify(payload) }),
   simBatch: (log) => _fetch("/api/sim/batch" + (log === undefined || log === null ? "" : "?log=" + encodeURIComponent(log))),
   simPreview: (payload) => _fetch("/api/sim/preview", { method: "POST", body: JSON.stringify(payload) }),

@@ -5660,11 +5660,13 @@ def h_ide_replace(handler: Any) -> None:
 
 def h_ide_caps(handler: Any) -> None:
     """What the IDE can run here: VHDL through the image's GHDL, Yosys for
-    the schematic (GET; ?wait=1 waits for the first probe)."""
+    the schematic. POST, because the first ask starts a container that probes
+    the image (G20); ``{wait: true}`` waits for that probe."""
     from ..controller import container_run, vhdltools
+    body = getattr(handler, "_body", {}) or {}
     eng = tools_mod.resolve_engine()
     engine = eng.get("engine") if eng.get("ready") else None
-    wait = 20.0 if _query_param(handler.path, "wait") else 0.0
+    wait = 20.0 if body.get("wait") else 0.0
     try:
         image = container_run.image_ref() if engine else None
     except Exception:
@@ -5691,12 +5693,18 @@ def h_ide_schematic(handler: Any) -> None:
 
 
 def h_ide_schematic_result(handler: Any) -> None:
-    """The schematic job's state, and the netlist once it is done (GET ?id=)."""
+    """The schematic job's state, and the netlist once it is done (GET ?id=).
+    A read only: stopping the job is POST /api/ide/schematic-cancel."""
     from ..controller import schematic
     jid = _query_param(handler.path, "id")
-    if _query_param(handler.path, "cancel"):
-        schematic.job.cancel()
     _respond(handler, schematic.job.result(jid))
+
+
+def h_ide_schematic_cancel(handler: Any) -> None:
+    """Stop the schematic's Yosys read (POST)."""
+    from ..controller import schematic
+    schematic.job.cancel()
+    _respond(handler, {"cancelled": True})
 
 
 def _final_gds(run_dir: Path) -> Optional[Path]:
@@ -6646,6 +6654,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/ide/caps", h_ide_caps),
     ("/api/ide/schematic", h_ide_schematic),
     ("/api/ide/schematic-result", h_ide_schematic_result),
+    ("/api/ide/schematic-cancel", h_ide_schematic_cancel),
     ("/api/celllib/cell", h_celllib_cell),
     ("/api/celllib/layout", h_celllib_layout),
     ("/api/celllib/view", h_celllib_view),
@@ -6805,7 +6814,8 @@ _POST_ROUTES = {
     "/api/file/write", "/api/file/delete", "/api/file/rename", "/api/lint",
     "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave",
     "/api/sim/run-all", "/api/sim/preview", "/api/ide/index", "/api/ide/definition", "/api/ide/references",
-    "/api/ide/symbols", "/api/ide/hierarchy", "/api/ide/search", "/api/ide/replace", "/api/ide/schematic", "/api/celllib/view",
+    "/api/ide/symbols", "/api/ide/hierarchy", "/api/ide/search", "/api/ide/replace", "/api/ide/schematic",
+    "/api/ide/schematic-cancel", "/api/ide/caps", "/api/celllib/view",
     "/api/celllib/view/close", "/api/macros/add", "/api/macros/settings", "/api/macros/place",
     "/api/custom-cells/save", "/api/custom-cells/remove", "/api/custom-cells/enable",
     "/api/custom-macros/save", "/api/custom-macros/remove", "/api/custom-macros/enable",
@@ -6836,7 +6846,7 @@ _GET_ROUTES = {
     "/api/templates", "/api/project/defaults", "/api/project/files", "/api/run-export",
     "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems", "/api/kb/errors", "/api/floorplan/estimate",
     "/api/timing-paths", "/api/dse/sweeps", "/api/dse/status", "/api/system-resources",
-    "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/sim/batch", "/api/ide/caps",
+    "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/sim/batch",
     "/api/ide/schematic-result", "/api/celllib/cell",
     "/api/celllib/layout", "/api/celllib", "/api/macros/catalog", "/api/macros/projects",
     "/api/macros/inspect", "/api/cells", "/api/custom-cells", "/api/custom-macros",
