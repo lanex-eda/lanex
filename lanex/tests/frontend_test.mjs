@@ -892,6 +892,11 @@ check("study charts: failed points stay on the chart, the front is the points no
 const SW = (await import(toUrl(resolve(MOD, "sweeps.js"))))._test;
 check("sweeps: a range typo is an error, never one text value; values are type-checked", () => {
   assert.deepEqual(SW.parseValuesStrict("35:65:15"), { values: ["35", "50", "65"], error: "" });
+  // N points and a log spread (the advanced sheet's value modes).
+  assert.deepEqual(SW.parseValuesStrict("35..65/4").values, ["35", "45", "55", "65"]);
+  assert.deepEqual(SW.parseValuesStrict("1..100/5 log").values, ["1", "3.16", "10", "31.6", "100"]);
+  assert.match(SW.parseValuesStrict("0..10/3 log").error, /above 0/);
+  assert.match(SW.parseValuesStrict("1..2/1").error, /between 2 and/);
   assert.deepEqual(SW.parseValuesStrict("10, 9, 8").values, ["10", "9", "8"]);
   assert.match(SW.parseValuesStrict("35:65:x").error, /isn't a range/);
   assert.match(SW.parseValuesStrict("35:65").error, /isn't a range/);

@@ -62,7 +62,21 @@ export function parseValuesStrict(text, kind = "", choices = []) {
   const t = String(text || "").trim();
   if (!t) return { values: [], error: "" };
   let values;
-  if (!/::/.test(t) && /^-?[\d.]+\s*:/.test(t)) {
+  // N points between two ends, "35..65/4", evenly spaced; "1..100/5 log" in
+  // equal ratios (for settings that act over decades).
+  const np = /^(-?\d+(?:\.\d+)?)\s*\.\.\s*(-?\d+(?:\.\d+)?)\s*\/\s*(\d+)(\s+log)?$/i.exec(t);
+  if (np) {
+    const [a, b, n, log] = [Number(np[1]), Number(np[2]), Number(np[3]), !!np[4]];
+    if (n < 2 || n > MAX_RUNS) return { values: [], error: "Give between 2 and " + MAX_RUNS + " points, like 35..65/4." };
+    if (log && (a <= 0 || b <= 0)) return { values: [], error: "A log spread needs both ends above 0." };
+    const dec = Math.max(...[np[1], np[2]].map((x) => (x.split(".")[1] || "").length));
+    values = [];
+    for (let i = 0; i < n; i++) {
+      const v = log ? a * Math.pow(b / a, i / (n - 1)) : a + (b - a) * i / (n - 1);
+      const r = Number(v.toFixed(Math.max(dec, Math.abs(v) >= 100 ? 0 : Math.abs(v) >= 10 ? 1 : 2)));
+      if (!values.includes(String(r))) values.push(String(r));
+    }
+  } else if (!/::/.test(t) && /^-?[\d.]+\s*:/.test(t)) {
     const m = /^(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(t);
     if (!m) return { values: [], error: "'" + t + "' isn't a range. Write start:stop:step with numbers, like 35:65:10." };
     const [a, b, s] = [Number(m[1]), Number(m[2]), Number(m[3])];
@@ -237,7 +251,7 @@ function build() {
     "<div class='sw-body'>" +
     "<div class='sw-lbl'>What are you after?</div><div class='sw-goals' role='radiogroup'>" +
     GOALS.map((g) => "<button class='sw-goal' role='radio' data-goal='" + g.id + "'><b>" + esc(g.title) + "</b><span>" + esc(g.sub) + "</span></button>").join("") + "</div>" +
-    "<div class='sw-lbl'>Settings and values <span class='muted'>A list like 35, 50, 65, or start:stop:step like 35:65:15.</span></div>" +
+    "<div class='sw-lbl'>Settings and values <span class='muted'>A list like 35, 50, 65; start:stop:step like 35:65:15; or N points like 35..65/4 (add log for equal ratios, like 1..100/5 log).</span></div>" +
     "<div id='sw-axes'></div><datalist id='sw-vars'></datalist>" +
     "<button class='btn btn-ghost btn-sm' data-sw='add'>" + icon("plus", { size: 12 }) + " Another setting</button>" +
     "<p class='sw-note' id='sw-note' hidden></p>" +
