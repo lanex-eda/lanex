@@ -20,6 +20,7 @@ import { fmtDur } from "./reportcard.js";
 import { verdictOfRun, runVerdict } from "./verdict.js";
 import { openLayer, closeLayer } from "./overlay.js";
 import * as MF from "./metricfmt.js";
+import { EMPTY_WORDS } from "./empty.js";
 
 const esc = (s) => fmt.escape(String(s ?? ""));
 let _seq = 0;
@@ -40,7 +41,7 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
     const lt = live && live();
     if (lt) paintLive(host.querySelector("[data-rb='run']"), lt);
     else paintPick(host.querySelector("[data-rb='run']"), ctx.contextRow(),
-      { empty: ctx.runsLoadFailed() ? "Couldn't load runs. Retrying…" : "No runs yet" });
+      { empty: ctx.runsLoadFailed() ? "Couldn't load runs. Retrying…" : state.designDir ? EMPTY_WORDS.noRuns.title : EMPTY_WORDS.noProject.title });
     const b = host.querySelector("[data-rb='base']");
     if (b) {
       const tag = ctx.contextBaseline();
