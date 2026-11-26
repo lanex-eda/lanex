@@ -27,6 +27,8 @@ const esc = (s) => fmt.escape(s == null ? "" : String(s));
 // corner.tcl sets ns).
 let U = "ns";
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
+// OpenSTA writes about 1e30 for "no path": that is not a slack.
+const timed = (v) => (isNum(v) && Math.abs(v) < 1e12 ? v : null);
 
 export const KIND_WORDS = {
   "in-reg": { short: "in → reg", tip: "From an input pin to a flip-flop. Its budget includes the input delay the SDC sets (IO_DELAY_CONSTRAINT, a share of the clock)." },
@@ -132,8 +134,9 @@ function gridsHtml(t) {
       (g === true ? "\nA " + kind + " violation here fails the run" : g === false ? "\nA " + kind + " violation here only warns" : "");
   };
   const card = (kind, title) => {
-    const vals = rows.map((r) => r[kind + "_ws"]).filter(isNum);
-    const fail = rows.filter((r) => isNum(r[kind + "_ws"]) && r[kind + "_ws"] < 0);
+    const ws = (r) => timed(r[kind + "_ws"]);
+    const vals = rows.map(ws).filter(isNum);
+    const fail = rows.filter((r) => isNum(ws(r)) && ws(r) < 0);
     const worst = vals.length ? Math.min(...vals) : null;
     const wr = rows.find((r) => r[kind + "_ws"] === worst);
     const sum = !vals.length ? "not timed" : fail.length
@@ -141,7 +144,7 @@ function gridsHtml(t) {
       : "all " + rows.length + " corners pass · worst " + ns(worst) + " " + U;
     return "<section class='an-card tx-gcard" + (S.kind === kind ? " is-on" : "") + (fail.length ? " is-fail" : "") + "' data-tx-gkind='" + kind + "'>" +
       "<div class='tx-gh'><span class='an-eyebrow'>" + esc(title) + "</span><span class='an-u'>" + esc(U) + "</span></div>" +
-      cornerGridHtml(rows, { value: (r) => r[kind + "_ws"], selected: S.kind === kind ? (S.corner || "") : "", gate: (r) => (r.gates || {})[kind],
+      cornerGridHtml(rows, { value: ws, selected: S.kind === kind ? (S.corner || "") : "", gate: (r) => (r.gates || {})[kind],
         fmt: (v) => ns(v), tip: tip(kind), kind, label: title }) +
       "<p class='tx-gsum" + (fail.length ? " is-fail" : "") + "'>" + esc(sum) + "</p></section>";
   };

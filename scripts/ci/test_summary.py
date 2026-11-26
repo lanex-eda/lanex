@@ -40,6 +40,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_goldens": "Metric passthrough is byte/value-faithful; non-finite metrics never reach the wire raw (Fear A).",
     "test_failing_run": "A run that FAILED signoff (real DRC/LVS/timing) is never shown as tape-out ready (Fear A, known-bad).",
     "test_verify": "The signoff verdict stays 3-state — pass / fail / unknown never collapse to two.",
+    "test_verify_lane4": "Timing paths per corner match OpenSTA's own numbers; a run with no clock never reads clean; warnings group by code, waivers stay visible and survive a reload; the sign-off report says 'not a foundry sign-off' first.",
     "test_reports": "DRC/LVS parsers are 3-state: a missing or empty report can never read as clean.",
     "test_accuracy_round47": "Timing reads the FINAL post-PnR STA; Netgen LVS verdict-anchored; probe timeouts bounded.",
     "test_accuracy_round52": "Input hygiene (whitespace, atomic sidecars, list overrides) + viewer tech-file guards + 3-state DRC.",

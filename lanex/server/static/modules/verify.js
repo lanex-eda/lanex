@@ -409,10 +409,17 @@ function diffStrip() {
 function pillar(p) {
   const by = byId();
   const cs = p.checks.map((id) => by.get(id)).filter(Boolean);
-  const st = V.worstStatus(cs.filter((c) => c.gate !== "info"));
+  let st = V.worstStatus(cs.filter((c) => c.gate !== "info"));
   const d = _rep.details || {};
   let hero = "", rows = [], drcFlag = "";
-  if (p.id === "timing") {
+  if (p.id === "timing" && (by.get("setup") || {}).no_clock) {
+    // No clock: nothing was timed, so slew and cap passing says nothing either.
+    st = "not_run";
+    hero = "<span class='vf-hero-v vf-hero-word'>Not timed</span>";
+    rows = [["Why", "no clock reached the registers", { status: "warn" }, ""],
+      ["CLOCK_PORT", (by.get("setup").no_clock.clock_port || "not set"), null, vprov("CLOCK_PORT")],
+      ["Flip-flops", String(by.get("setup").no_clock.registers || "—"), null, ""]];
+  } else if (p.id === "timing") {
     const s = by.get("setup"), h = by.get("hold");
     const corners = (d.timing && d.timing.source === "signoff" && d.timing.corners) || [];
     const sw = s && s.status !== "not_run" && V.isNum(s.worst), hw = h && h.status !== "not_run" && V.isNum(h.worst);
@@ -624,7 +631,9 @@ function renderTiming() {
   const rule = (r) => r.wildcards == null ? "every corner (rule unknown)" : !r.wildcards.length ? "no corner (warnings only)" :
     r.wildcards.length === 1 && r.wildcards[0] === "*" ? "every corner" : "corners matching " + r.wildcards.join(", ");
   const clk = V.isNum(t.clock_period) ? t.clock_period : Number(t.clock_period);
-  const lede = rows.length
+  const lede = rows.length && t.no_clock
+    ? "OpenSTA ran in " + rows.length + " corners but timed no path: no clock reached the registers, so there is no slack to show and \"0 violations\" means nothing was checked."
+    : rows.length
     ? "OpenSTA timed the routed layout in " + rows.length + " corners" + (Number.isFinite(clk) ? " against a " + clk + " ns clock (" + +(1000 / clk).toFixed(2) + " MHz)" + vprov("CLOCK_PERIOD") : "") +
       ". LibreLane fails the run on setup violations in " + esc(rule(sr)) + " (" + esc(sr.var || "TIMING_VIOLATION_CORNERS") + vprov(sr.var) + ") and on hold violations in " + esc(rule(hr)) +
       (hr.var ? " (" + esc(hr.var) + vprov(hr.var) + ")" : "") + "; slew and capacitance only warn."
@@ -1010,6 +1019,23 @@ async function rerun(stepId) {
       root = back;
       back.querySelector("[data-rr-add]")?.addEventListener("click", () =>
         back.querySelector(".vf-rr-rows").insertAdjacentHTML("beforeend", row()));
+      // A setting named: say what it takes (LibreLane's type, unit, choices
+      // and default) under the row, so the value is typed right the first
+      // time; the server checks it against that type before planning.
+      const vars = () => new Map((state.variables || []).map((v) => [v.name, v]));
+      if (!(state.variables || []).length) api.variables().then((v) => { if (Array.isArray(v)) state.variables = v; }).catch(() => {});
+      back.querySelector(".vf-rr-rows")?.addEventListener("input", (e) => {
+        const r = e.target.closest(".vf-rr-row");
+        if (!r || e.target !== r.querySelector("input")) return;
+        const v = vars().get(e.target.value.trim());
+        let hint = r.nextElementSibling && r.nextElementSibling.classList.contains("vf-rr-hint") ? r.nextElementSibling : null;
+        if (!v) { if (hint) hint.remove(); r.querySelectorAll("input")[1].placeholder = "Value"; return; }
+        if (!hint) { r.insertAdjacentHTML("afterend", "<p class='vf-rr-hint muted'></p>"); hint = r.nextElementSibling; }
+        const ch = (v.choices || []).length ? "one of " + v.choices.join(", ") : v.type;
+        hint.textContent = ch + (v.units ? " · " + v.units : "") + (v.default !== null && v.default !== undefined && v.default !== "" ? " · LibreLane's default " + v.default : "") +
+          (v.description ? " · " + String(v.description).split(/(?<=\.)\s/)[0] : "");
+        r.querySelectorAll("input")[1].placeholder = ch + (v.units ? " (" + v.units + ")" : "");
+      });
     },
   });
   if (go !== "go" || !root) return;
