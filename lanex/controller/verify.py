@@ -1432,6 +1432,16 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
         if st:
             out["stage"] = st
         return out
+    # LibreLane's SynthesisExploration has no final/ and no layout steps, so the
+    # rules below read it as "Stopped after step 1". Its recipes say how it went:
+    # the same verdict the Runs table shows (history.summarize_run).
+    try:
+        from . import synthexplore
+        if synthexplore.is_exploration(run.dir):
+            out.update(synthexplore.verdict(run.dir))
+            return out
+    except Exception:
+        pass
     if v["state"] == "blocked":
         k = len(v["blocker_ids"])
         first = next(c for c in checks if c["status"] == _FAIL)
