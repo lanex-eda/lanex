@@ -101,6 +101,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         ensure_darwin_path()
     except Exception:
         pass
+    # The Windows network (proxy, company certificates) LanEx's Linux was set up
+    # with: every child (ciel, pip, curl) inherits it. A variable the person set
+    # themselves wins. No-op where the file does not exist.
+    try:
+        from .controller import netsettings
+        netsettings.load_proxy_env()
+    except Exception:
+        pass
+    args_in = list(sys.argv[1:] if argv is None else argv)
+    # Subcommands come before the flag parser, so every `lanex --flag` keeps working.
+    if args_in[:1] == ["doctor"]:
+        from .controller import doctor
+
+        return doctor.main(args_in[1:])
     parser = argparse.ArgumentParser(
         prog="lanex",
         description="Launch LanEx — a cockpit for the LibreLane RTL-to-GDSII flow.",
@@ -162,7 +176,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # every single `lanex` invocation would pay for one rarely used flag.
     parser.add_argument("--version", action="store_true",
                         help="print the LanEx version and exit")
-    args = parser.parse_args(argv)
+    parser.epilog = ("Also: lanex doctor [--json] [--offline] [--strict] [--share] checks this "
+                     "computer and says what to do about each problem.")
+    args = parser.parse_args(args_in)
 
     if args.version:
         from ._version import get_version_line
@@ -290,6 +306,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     threading.Timer(0.5, _lazy_open, args=(home_url, args.no_browser, args.tab)).start()
     _write_server_record(url, port, token)
+    # Background housekeeping: a changed Windows network snapshot is applied to
+    # LanEx's Linux, and a PDK variant removal a crash cut short is finished.
+    try:
+        from .controller import netsettings, syscleanup
+        netsettings.apply_if_changed_async()
+        syscleanup.sweep_leftovers()
+    except Exception:
+        pass
     try:
         serve_forever(httpd, open_after=False)
     except KeyboardInterrupt:

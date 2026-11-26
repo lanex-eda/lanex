@@ -5268,6 +5268,14 @@ _GET_ROUTES = {
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
     "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
 }
+# System routes for the Tools page (doctor, storage and clean-up, per-variant
+# PDK removal, WSL memory, network, skip this version): server/routes_system.py.
+from . import routes_system as _routes_system  # noqa: E402
+
+ROUTES.extend(_routes_system.ROUTES)
+_GET_ROUTES |= _routes_system.GET_ROUTES
+_POST_ROUTES |= _routes_system.POST_ROUTES
+_BOTH_ROUTES |= _routes_system.BOTH_ROUTES
 # A route in none of the sets keeps the old answer-anything behaviour, so a
 # route added elsewhere never breaks at run time; the test names it instead.
 ROUTE_METHODS: Dict[str, Tuple[str, ...]] = {

@@ -3064,7 +3064,29 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
         except Exception:
             pass
 
-        base = ["--pdk-root", root, "--pdk-family", family, version, *lib_args]
+        # A variant LanEx removed on its own (Tools > Remove <variant> only) is
+        # not something ciel can bring back in place: it checks only the
+        # family's first variant for the shared files, so it would enable a
+        # link to nothing. Fetch into a staging root on the same filesystem and
+        # move just that variant in (syscleanup.adopt_staged_variant).
+        fetch_root = root
+        staging: Optional[Path] = None
+        try:
+            from . import syscleanup as _sc
+            import ciel as _ciel_probe  # type: ignore
+
+            _vd = Path(_ciel_probe.Version(name=version, pdk=family).get_dir(_ciel_probe.get_ciel_home(root)))
+            if _vd.is_dir() and pdk in _sc.removed_variants(_vd):
+                staging = Path(root) / f".lanex-staging-{family}"
+                shutil.rmtree(staging, ignore_errors=True)
+                staging.mkdir(parents=True, exist_ok=True)
+                fetch_root = str(staging)
+                _emit("installer_info", {"key": key, "message":
+                      f"{pdk} was removed on its own earlier; fetching it beside the installed version"})
+        except Exception:
+            staging = None
+            fetch_root = root
+        base = ["--pdk-root", fetch_root, "--pdk-family", family, version, *lib_args]
         from . import pdkfeed
 
         feed = pdkfeed.load_pins(family, version, asset_pins)
@@ -3115,7 +3137,7 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
         try:
             import ciel as _ciel_mod  # type: ignore
 
-            vdir = _ciel_mod.Version(name=version, pdk=family).get_dir(_ciel_mod.get_ciel_home(root))
+            vdir = _ciel_mod.Version(name=version, pdk=family).get_dir(_ciel_mod.get_ciel_home(fetch_root))
             marker = Path(str(vdir).rstrip("/") + ".lanex-incomplete")
             if marker.exists() and os.path.isdir(vdir):
                 # The previous attempt never finished: unpack again from the
@@ -3146,6 +3168,14 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
         attempt = result.get("attempts", 1)
         if marker is not None:
             marker.unlink(missing_ok=True)
+        if staging is not None:
+            try:
+                from . import syscleanup as _sc
+                _sc.adopt_staged_variant(staging, Path(root), family, version, pdk)
+            except Exception as ex:  # noqa: BLE001
+                reason = f"{pdk} was downloaded but could not be put in place: {ex}"
+                _emit("installer_error", {"key": key, "message": reason})
+                return {"ok": False, "reason": reason}
         failed_libraries: List[str] = []
         if variant_libraries:
             for v_name, v_libs in variant_libraries.items():

@@ -339,6 +339,9 @@ def _ciel_tree(root: Path, family: str, ver: str, variant: str, *, incomplete: b
     (lib / "x.lib").write_text("library", encoding="utf-8")
     if incomplete:
         Path(str(vdir) + pdk_mod.INCOMPLETE_SUFFIX).write_text("in progress")
+    else:
+        # ciel writes SOURCES into a variant once every archive has unpacked.
+        (vdir / variant / "SOURCES").write_text(f"open_pdks {ver}\n", encoding="utf-8")
     (root / variant).symlink_to(vdir / variant)
     return vdir
 
