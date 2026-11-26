@@ -5,6 +5,9 @@
 // arrive least significant first and the stop bit is high. It ends with PASS,
 // or with FAIL and a non-zero exit. A watchdog stops a bench that hangs.
 module uart_tx_tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     localparam int CPB = 4;            // clocks per bit: short, for a quick simulation
 
     logic       clk = 1'b0;
@@ -29,13 +32,13 @@ module uart_tx_tb;
             @(negedge clk); send = 1'b0;
             if (!busy) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: busy is low right after send", $time);
+                $display("FAIL at %t: busy is low right after send", $realtime);
             end
             wait (tx == 1'b0);                              // the start bit begins
             repeat (CPB / 2) @(negedge clk);                // the middle of it
             if (tx !== 1'b0) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: the start bit isn't low", $time);
+                $display("FAIL at %t: the start bit isn't low", $realtime);
             end
             for (i = 0; i < 8; i = i + 1) begin
                 repeat (CPB) @(negedge clk);
@@ -44,11 +47,11 @@ module uart_tx_tb;
             repeat (CPB) @(negedge clk);
             if (tx !== 1'b1) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: the stop bit isn't high", $time);
+                $display("FAIL at %t: the stop bit isn't high", $realtime);
             end
             if (got !== b) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: sent %h, the line carried %h", $time, b, got);
+                $display("FAIL at %t: sent %h, the line carried %h", $realtime, b, got);
             end
             wait (!busy);
             sent = sent + 1;

@@ -42,7 +42,7 @@ a { color: var(--met1); text-underline-offset: 3px; }
 html { scrollbar-width: thin; scrollbar-color: var(--seal) transparent; }
 
 /* The one lane-label recipe: names etched into the scribe lane. */
-.lane-label, .inst-label, .rail-label, .menu-lane, .sheet-lane {
+.lane-label, .rail-label, .menu-lane, .sheet-lane {
   font-family: var(--cond); font-size: 12px; font-weight: 600;
   letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-2);
 }
@@ -99,10 +99,6 @@ html { scrollbar-width: thin; scrollbar-color: var(--seal) transparent; }
 .logo--light { display: none !important; }
 body.theme-light .logo--dark { display: none !important; }
 body.theme-light .logo--light { display: block !important; }
-.brand-name {
-  font-family: var(--sans); font-weight: 700; font-size: 19px; letter-spacing: 0.005em;
-  color: var(--ink-strong); white-space: nowrap;
-}
 
 /* Project switcher: the die label for the whole session. */
 .tb-project { position: relative; min-width: 0; height: 32px; display: flex; align-items: center; }
@@ -395,7 +391,6 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
   content: ""; position: absolute; left: -5px; top: 50%; width: 8px; height: 8px; margin-top: -4px;
   background: var(--met1); box-shadow: 0 0 10px var(--accent-glow);
 }
-.side-tab .help-pill { display: none; }
 
 /* Short windows: tighter rows; group names stay (they keep the groups
    distinct); the rail scrolls rather than clips. */
@@ -453,9 +448,6 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .section-jump .chip-clickable.is-current::after {
   content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--met1);
 }
-.section-jump-sub { min-height: 38px; border-top: 1px solid var(--seal); }
-.section-jump-sub[hidden] { display: none; }
-.section-jump-sub .chip-clickable { font-size: 13px; padding: 0 10px; }
 
 /* ------------------------------------------------------------ pills */
 /* The original rounded pill. State colour lives in the tinted fill and the
@@ -473,7 +465,6 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .pill-pass { background: var(--pass-soft); border-color: var(--pass); color: var(--text-strong); }
 .pill-warn { background: var(--warn-soft); border-color: var(--warn); color: var(--text-strong); }
 .pill-fail { background: var(--fail-soft); border-color: var(--fail); color: var(--text-strong); }
-.pill-info { background: var(--accent-soft); border-color: var(--accent); color: var(--text-strong); }
 .pill-pending { color: var(--text-muted); }
 .pill-running { background: var(--accent-soft); border-color: var(--accent); color: var(--text-strong); animation: pulse 1.5s ease-in-out infinite; will-change: opacity; }
 @keyframes pulse { 50% { opacity: 0.6; } }
@@ -513,6 +504,27 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 #pdk-pill.pill-warn .d { background: var(--met4); }
 #pdk-pill.pill-fail .d { background: var(--poly); }
 .st-spacer { flex: 1; min-width: 8px; }
+/* Connection state (connection.js): a via and a mono caps word at the far
+   left of the wafer edge, then a card under the top bar in the update card's
+   shape, amber while LanEx may come back, red when it hasn't. */
+.st-conn[hidden] { display: none; }
+.st-conn { flex-shrink: 0; margin-right: 6px; }
+.st-conn .st-conn-t { font-family: var(--mono); font-size: 11.5px; font-weight: 600; letter-spacing: 0.08em; }
+.st-conn.is-warn { color: color-mix(in srgb, var(--warn) 75%, var(--text-strong)); background: var(--warn-soft); }
+.st-conn.is-fail { color: color-mix(in srgb, var(--fail) 75%, var(--text-strong)); background: color-mix(in srgb, var(--fail) 14%, transparent); }
+.conn-card { z-index: var(--z-drawer); }
+.conn-card.is-warn { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); box-shadow: var(--sh-3), 0 0 22px var(--warn-soft); }
+.conn-card.is-warn::before { background: linear-gradient(90deg, transparent, var(--met4), transparent); }
+.conn-card.is-fail { border-color: color-mix(in srgb, var(--fail) 55%, var(--border)); box-shadow: var(--sh-3), 0 0 22px color-mix(in srgb, var(--fail) 22%, transparent); }
+.conn-card.is-fail::before { background: linear-gradient(90deg, transparent, var(--fail), transparent); }
+.conn-card .ub-title { font-size: 20px; }
+.conn-age { font-family: var(--mono); font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.conn-card .ub-acts { align-items: center; }
+.conn-every { font-size: 12.5px; color: var(--text-muted); }
+.conn-flash { color: var(--text-strong); border-left: 2px solid var(--met4); padding-left: 8px; }
+.conn-foot { justify-content: flex-start; align-items: center; }
+.conn-log { font-family: var(--mono); font-size: 12px; color: var(--text); word-break: break-all; flex: 1 1 200px; }
+body[data-conn="lost"] #update-banner { display: none; }
 .st-logs[aria-pressed="true"] { background: var(--die-2); color: var(--ink-strong); }
 .st-logs.has-activity { color: var(--ink-strong); }
 .st-count { font-family: var(--mono); font-size: 11.5px; padding: 0 5px; background: var(--met1); color: var(--on-met); border-radius: var(--r-sm); line-height: 16px; }
@@ -572,9 +584,6 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .gloss-term { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--ink-strong); padding-top: 1px; }
 .gloss-def { font-size: 14px; line-height: 1.5; color: var(--ink); }
 .gloss-empty { color: var(--ink-2); padding: 12px 0; }
-.learn-md { line-height: 1.55; }
-.learn-md code { font-family: var(--mono); }
-.learn-id { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); margin: 0 0 14px; }
 
 .keys { display: flex; flex-direction: column; }
 .keys-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--seal); }
@@ -646,8 +655,6 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .btn-ghost:hover { background: transparent; }
 .btn-warn { background: var(--fail); border-color: var(--fail); color: var(--on-accent); font-weight: 600; }
 .btn-warn:hover { background: var(--fail); border-color: var(--fail); color: var(--on-accent); filter: brightness(1.05); box-shadow: 0 6px 16px var(--fail-soft); }
-.btn-success { background: var(--pass); border-color: var(--pass); color: var(--on-pass); font-weight: 600; }
-.btn-success:hover { background: var(--pass); border-color: var(--pass); color: var(--on-pass); filter: brightness(1.05); }
 .btn-sm { height: 28px; padding: 0 10px; font-size: 13px; gap: 6px; }
 .btn-lg { height: 40px; padding: 0 20px; font-size: 15px; }
 
@@ -700,7 +707,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--met1); }
 .wiz-tpl-desc { font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
 .wiz-tpl-tag { margin-top: auto; font-family: var(--cond); font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
 .wiz-tpl-tag::before { content: ""; width: 6px; height: 6px; background: var(--met3); }
-.wiz-tpl-empty { grid-column: 1 / -1; min-height: 0; }
+/* A template tied to one PDK family (the SRAM's block ships with sky130). */
+.wiz-tpl-tag + .wiz-tpl-only { margin-top: 0; }
+.wiz-tpl-only::before { background: var(--met4); }
+.wiz-tpl:disabled { opacity: 0.55; cursor: not-allowed; }
+.wiz-tpl:disabled:hover { border-color: var(--border); box-shadow: none; }
 .wiz-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 18px; }
 .wiz-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .wiz-field.span-2 { grid-column: 1 / -1; }

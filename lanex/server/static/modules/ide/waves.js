@@ -20,6 +20,7 @@
 // Canvas drawing is hi-DPI aware and draws only what is in view, with binary
 // search into each signal's changes, so a long dump stays smooth.
 import { formatValue, formatTime, indexAt, valueAt, vcdToCSV } from "./vcd.js";
+import { escapeHtml } from "../html.js";
 
 const RH = 24;                 // row height (CSS px), names and plot alike
 const VALS_W = 104;            // value column
@@ -48,7 +49,7 @@ const ICON = {
 };
 
 function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return escapeHtml(String(s));
 }
 
 // Every declaration in the dump, aliases included (a port shows up in the

@@ -4,6 +4,9 @@
 // and a non-zero exit when a segment is wrong. There is no clock: each value
 // is held for 10 ns and checked after the logic has settled.
 module seg7_tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     reg  [3:0] hex;          // starts unknown, so the first value is a change the logic sees
     wire [6:0] seg;
 
@@ -29,7 +32,7 @@ module seg7_tb;
             #10;
             if (seg !== want[i]) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: hex = %h, seg = %b, expected %b", $time, hex, seg, want[i]);
+                $display("FAIL at %t: hex = %h, seg = %b, expected %b", $realtime, hex, seg, want[i]);
             end
         end
         if (errors == 0) $display("PASS: seg7, all 16 digits show the right segments");

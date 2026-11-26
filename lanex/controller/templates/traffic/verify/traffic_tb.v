@@ -5,6 +5,9 @@
 // request cuts green short, and that the light keeps cycling. It ends with
 // PASS, or with FAIL and a non-zero exit. A watchdog stops a bench that hangs.
 module traffic_tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     // Short times so the simulation is quick; the chip uses the defaults.
     localparam G = 8, Y = 3, R = 5, MING = 3;
 
@@ -55,12 +58,12 @@ module traffic_tb;
         begin
             if ({green, yellow, red} !== {m_light == 0, m_light == 1, m_light == 2}) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: lights g%b y%b r%b, expected the %0s light", $time, green, yellow, red,
+                $display("FAIL at %t: lights g%b y%b r%b, expected the %0s light", $realtime, green, yellow, red,
                          m_light == 0 ? "green" : m_light == 1 ? "yellow" : "red");
             end
             if (green + yellow + red !== 1) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: %0d lights on at once", $time, green + yellow + red);
+                $display("FAIL at %t: %0d lights on at once", $realtime, green + yellow + red);
             end
         end
     endtask

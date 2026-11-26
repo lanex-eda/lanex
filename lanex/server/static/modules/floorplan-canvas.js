@@ -18,8 +18,9 @@
 // cancels a drag. Wheel zooms around the pointer; drag the empty die to pan.
 
 import { footprint, xformRect, xformPoint, straps, crossings, snap, gridOf, fmtUm, problems, ROTATED, ORIENT_WORDS } from "./macro-place.js";
+import { escapeHtml } from "./html.js";
 
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = escapeHtml;
 let _uid = 0;
 
 export function createFloorplanCanvas(host, opts = {}) {

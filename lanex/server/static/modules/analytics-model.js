@@ -222,13 +222,6 @@ export function stepName(s) {
   return rep ? out + " (" + (Number(rep[1]) + 1) + ")" : out;
 }
 
-export function stepTool(s) {
-  const id = s.id || "";
-  if (id.includes(".")) return id.split(".")[0];
-  const m = /^\d+-([a-z]+)-/i.exec(s.dir || "");
-  return m ? m[1] : "";
-}
-
 // Rebuild the running metric state after each step from the per-step deltas
 // the server sends. Returns a new array of {…step, metrics} (shared objects
 // are never mutated).

@@ -69,11 +69,35 @@ export async function openWizard({ template = "" } = {}) {
 }
 
 function tplCard(t, cls, n = 0) {
-  return "<button class='wiz-tpl " + cls + "' data-name='" + fmt.escape(t.name) + "' title='" + fmt.escape(t.description) + "'>" +
+  // A template tied to a PDK (the SRAM's block ships with sky130 only) says so
+  // on its card; with no matching PDK installed it can't be picked.
+  const only = pdkOnlyWords(t);
+  const none = only && !(state.pdks || []).some((p) => p.ready !== false && tplPdkOk(t, p.name));
+  return "<button class='wiz-tpl " + cls + "' data-name='" + fmt.escape(t.name) + "' title='" + fmt.escape(t.description) + "'" +
+    (none ? " disabled aria-describedby='wiz-only-" + fmt.escape(t.name) + "'" : "") + ">" +
     "<span class='wiz-tpl-title'>" + (n ? "<span class='wiz-tpl-n'>" + String(n).padStart(2, "0") + "</span>" : "") + fmt.escape(t.title) + "</span>" +
     "<span class='wiz-tpl-desc'>" + fmt.escape(t.teaches || t.description) + "</span>" +
     (t.has_testbench ? "<span class='wiz-tpl-tag'>Self-checking testbench</span>" : "") +
+    (only ? "<span class='wiz-tpl-tag wiz-tpl-only' id='wiz-only-" + fmt.escape(t.name) + "'>" + fmt.escape(only) +
+      (none ? ": install it in Tools first" : "") + "</span>" : "") +
     "</button>";
+}
+
+function globRx(pat) {
+  return new RegExp("^" + String(pat).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+}
+
+// Whether a template builds on a PDK: every glob in its `pdks` must match
+// (scaffold.pdk_refusal on the server). Pure (tested).
+export function tplPdkOk(tpl, pdk) {
+  const pats = (tpl && tpl.pdks) || [];
+  return !pats.length || (!!pdk && pats.every((p) => globRx(p).test(pdk)));
+}
+
+// "sky130 only" for a template tied to a PDK family, "" otherwise.
+export function pdkOnlyWords(tpl) {
+  const pats = (tpl && tpl.pdks) || [];
+  return pats.length ? pats.map((p) => String(p).replace(/\*+$/, "")).join(" and ") + " only" : "";
 }
 
 // The examples in the order they teach (template.json "order"): each one adds
@@ -197,7 +221,7 @@ export function freeName(name, taken) {
 }
 
 // Why a new project's settings can't build, in plain words, or "".
-export function createProblem({ dest, clock, hasClock, pdk, pdks }) {
+export function createProblem({ dest, clock, hasClock, pdk, pdks, tpl }) {
   if (/\s/.test(dest || "")) {
     return "The folder path has a space in it (" + dest + "). LibreLane splits paths on spaces, so every run from there " +
       "would fail. Pick a folder without spaces with Change….";
@@ -206,6 +230,13 @@ export function createProblem({ dest, clock, hasClock, pdk, pdks }) {
   const p = (pdks || []).find((x) => x.name === pdk);
   if (!pdk || !p) return "No PDK is installed yet. Install one in Tools first: a run needs it.";
   if (p.ready === false) return pdk + " isn't installed: its folder has no standard-cell libraries. Install it in Tools, or pick another PDK.";
+  if (tpl && !tplPdkOk(tpl, pdk)) {
+    const fam = pdkOnlyWords(tpl).replace(/ only$/, "");
+    const fits = (pdks || []).filter((x) => x.ready !== false && tplPdkOk(tpl, x.name)).map((x) => x.name);
+    return "This example needs a " + fam + " PDK: its hard macro ships with " + fam + " only, and " + pdk +
+      " has no such block. " + (fits.length ? "Pick " + fits.join(" or ") : "Install " + fam + " in Tools") +
+      ", or go Back and pick another example.";
+  }
   return "";
 }
 
@@ -221,9 +252,14 @@ async function readTaken(dir) {
 }
 
 function renderStep2(body, tpl) {
+  // A template tied to a PDK family lists the others as "(no SRAM block)":
+  // still visible, so the reason is on screen, and the create check says why.
+  const tied = (tpl.pdks || []).length > 0;
   const pdkOpts = (state.pdks || []).map((p) =>
-    "<option value='" + fmt.escape(p.name) + "'>" + fmt.escape(p.name) + (p.ready === false ? " (not installed)" : "") + "</option>").join("");
-  const startPdk = defaultPdk(state.pdks, state.designDir ? state.selectedPdk : "");
+    "<option value='" + fmt.escape(p.name) + "'>" + fmt.escape(p.name) + (p.ready === false ? " (not installed)"
+      : tied && !tplPdkOk(tpl, p.name) ? " (not for this example)" : "") + "</option>").join("");
+  const fitting = (state.pdks || []).filter((p) => tplPdkOk(tpl, p.name));
+  const startPdk = defaultPdk(tied ? fitting : state.pdks, state.designDir ? state.selectedPdk : "");
   const clk = clockFor(tpl, startPdk);
   body.innerHTML = steps(2) +
     "<div class='wiz-form'>" +
@@ -281,12 +317,17 @@ function renderStep2(body, tpl) {
       ? state.selectedScl : defaultScl(names);
     const p = (state.pdks || []).find((x) => x.name === pdkSel.value);
     const help = $("wiz-pdk-help");
-    help.classList.toggle("wiz-warn", !p || p.ready === false);
+    const wrong = !!p && p.ready !== false && !tplPdkOk(tpl, p.name);
+    help.classList.toggle("wiz-warn", !p || p.ready === false || wrong);
     help.textContent = !p
       ? "No PDK is installed yet. Install one in Tools first; a run needs it."
       : p.ready === false
         ? p.name + " isn't installed: its folder has no standard-cell libraries. Install it in Tools, or pick another PDK."
-        : "The foundry process to build for. sky130A is the usual first choice.";
+        : wrong
+          ? createProblem({ pdk: p.name, pdks: state.pdks, tpl })
+          : tied
+            ? "This example's hard macro ships with the PDK, so it is " + pdkOnlyWords(tpl) + "."
+            : "The foundry process to build for. sky130A is the usual first choice.";
     if (!clkTyped && $("wiz-clk")) { $("wiz-clk")._clock.set(clockFor(tpl, pdkSel.value)); paintClk(); }
     paintFp();
   };
@@ -419,7 +460,7 @@ async function doCreate(body, tpl) {
   const withTb = !!($("wiz-tb") && $("wiz-tb").checked);
   // Settings that can't build are refused here, in plain words, before any
   // folder is made.
-  const problem = createProblem({ dest, clock: clk, hasClock: !!$("wiz-clk"), pdk, pdks: state.pdks });
+  const problem = createProblem({ dest, clock: clk, hasClock: !!$("wiz-clk"), pdk, pdks: state.pdks, tpl });
   if (problem) {
     err.textContent = problem;
     if (/Tools/.test(problem)) {

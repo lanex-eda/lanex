@@ -283,10 +283,6 @@ body.theme-light .cm-host {
   width: auto !important; height: auto !important; max-width: calc(100vw / var(--ll-zoom, 1)); max-height: calc(100vh / var(--ll-zoom, 1)) !important;
   margin: 0 !important; background: var(--bg); border: 0; border-radius: 0;
   padding: var(--s-4); overflow: auto; box-shadow: none; }
-.panel-fs-host { display: flex; flex-direction: column; }
-.panel-fs-host > .panel-fs-bar { display: flex; align-items: center; gap: var(--s-2);
-  font-size: var(--t-xs); color: var(--text-muted); }
-
 
 /* Embedded IDE (the "RTL IDE" tab inside the main cockpit). Fills the work
    area; its own grid scrolls internally instead of growing the page. */

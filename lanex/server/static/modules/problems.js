@@ -25,9 +25,22 @@ export function problemsOf(tag, { fresh = false } = {}) {
   if (hit && !fresh && Date.now() - hit.at < 120000) return hit.p;
   const p = api.problems(tag).catch(() => null);
   _cache.set(tag, { p, at: Date.now() });
-  p.then((r) => { if (r) for (const fn of _subs) fn(tag, r); });
+  p.then((r) => {
+    if (!r) return;
+    for (const fn of _subs) fn(tag, r);
+    // A big DRC report is read on the server's worker thread: the first answer
+    // has the counts, a later one the rules and places (every 1.5 s, up to a minute).
+    const tries = (_pending.get(tag) || 0) + 1;
+    if (r.pending && tries <= 40) {
+      _pending.set(tag, tries);
+      setTimeout(() => { if (_cache.get(tag) && _cache.get(tag).p === p) problemsOf(tag, { fresh: true }); }, 1500);
+    } else {
+      _pending.delete(tag);
+    }
+  });
   return p;
 }
+const _pending = new Map();        // tag -> refetches while a DRC report is read
 
 // Called with (tag, problems) whenever a run's problems arrive.
 export function onProblems(fn) { _subs.add(fn); return () => _subs.delete(fn); }

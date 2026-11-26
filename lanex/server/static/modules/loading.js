@@ -116,12 +116,6 @@ export function loadingStart(region, { skeleton = "", delay = SKELETON_DELAY_MS,
   return job;
 }
 
-// The same around a promise: the region shows the pattern until it settles.
-export function withLoading(region, promise, opts = {}) {
-  const job = loadingStart(region, opts);
-  return Promise.resolve(promise).finally(() => job.done());
-}
-
 // One polite live region for the whole app.
 export function announce(text) {
   if (typeof document === "undefined" || !text) return;

@@ -5,6 +5,9 @@
 // duty value exactly: 25 %, 78 %, never and almost always, on both channels
 // at once. It ends with PASS, or with FAIL and a non-zero exit.
 module pwm_tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     reg        clk = 1'b0;
     reg        rst = 1'b1;
     reg        load = 1'b0;
@@ -42,11 +45,11 @@ module pwm_tb;
             checks = checks + 2;
             if (high0 != want0) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: pwm0 was high %0d of 256 cycles, expected %0d", $time, high0, want0);
+                $display("FAIL at %t: pwm0 was high %0d of 256 cycles, expected %0d", $realtime, high0, want0);
             end
             if (high1 != want1) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: pwm1 was high %0d of 256 cycles, expected %0d", $time, high1, want1);
+                $display("FAIL at %t: pwm1 was high %0d of 256 cycles, expected %0d", $realtime, high1, want1);
             end
         end
     endtask

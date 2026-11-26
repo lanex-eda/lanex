@@ -119,11 +119,39 @@ def list_templates() -> List[Dict[str, Any]]:
                 "kind": doc.get("kind") or "example",
                 "fixed_config": bool(doc.get("copy_from")),
                 "order": doc.get("order", 99),
+                # The PDKs it builds on ([] = any): a template with a PDK's own
+                # hard macro (the SRAM) needs that PDK.
+                "pdks": template_pdks(doc),
             }
         )
     # The blank project leads; examples follow in their curated order.
     out.sort(key=lambda d: (d["kind"] != "blank", d["order"], d["name"]))
     return out
+
+
+def template_pdks(manifest: Dict[str, Any]) -> List[str]:
+    """The PDK globs a template builds on, from the PDK globs of the hard
+    macros it adds (``"macros": [{"pdk": "sky130*", ...}]``); empty when it
+    builds on any PDK. The SRAM example's block ships with sky130 only."""
+    out: List[str] = []
+    for m in manifest.get("macros") or []:
+        pat = str((m or {}).get("pdk") or "*") if isinstance(m, dict) else "*"
+        if pat != "*" and pat not in out:
+            out.append(pat)
+    return out
+
+
+def pdk_refusal(manifest: Dict[str, Any], pdk: Optional[str]) -> Optional[str]:
+    """Why *manifest*'s template can't be made for *pdk*, in plain words, or
+    None. Every macro's PDK must match (the wizard says the same)."""
+    import fnmatch
+    pats = template_pdks(manifest)
+    if not pats or (pdk and all(fnmatch.fnmatchcase(pdk, p) for p in pats)):
+        return None
+    fams = " and ".join(p.rstrip("*") for p in pats)
+    return (f"The {manifest.get('title') or manifest.get('name')} example needs the {fams} PDK: its hard macro "
+            f"ships with {fams} only, and {pdk or 'no PDK'} has no such block. Pick a {fams} PDK "
+            f"(such as {fams}A), or another example.")
 
 
 def _clock_port(manifest: Dict[str, Any]) -> Optional[str]:
@@ -293,6 +321,9 @@ def create_project(
     manifest = _read_manifest(tdir)
     if manifest is None:
         return {"ok": False, "error": f"unknown template '{template}'"}
+    refusal = pdk_refusal(manifest, pdk)
+    if refusal:
+        return {"ok": False, "error": refusal}
 
     dest = Path(dest_dir).expanduser().resolve()
     if dest.exists():
