@@ -21,6 +21,7 @@ import { copyText, setMacroTile } from "./cells.js";
 import { createFloorplanCanvas } from "./floorplan-canvas.js";
 import * as P from "./macro-place.js";
 import { uploadFile, fmtBytes } from "./uploader.js";
+import { forgetPreflight } from "./preflight.js";
 
 const esc = M.esc;
 let C = null;        // context from cells.js
@@ -52,9 +53,15 @@ export async function renderMacros(ctx) {
   ]);
   if (my !== _my) return;
   D = { macros: list.macros || [], settings: list.settings || {}, inspect: inspect || {}, catalog: (catalog && catalog.macros) || [], fp: fp || {} };
+  // Every macro change ends in this repaint: a Run check made before it
+  // read the old macros, so the next Run checks again.
+  const sig = state.designDir + "\u0000" + JSON.stringify([D.macros, D.settings]);
+  if (_sig !== null && _sig !== sig) forgetPreflight();
+  _sig = sig;
   setModel(D.fp);
   paint(host);
 }
+let _sig = null;
 
 function setModel(fp) {
   AR.model = fp && fp.ok ? fp : null;

@@ -2877,7 +2877,10 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     const ps = MP.problems(model(), [at(200.1, 100.64)]);
     assert.deepEqual(ps.map((p) => p.code), ["channel"]);
     assert.match(ps[0].message, /4\.26 µm strip/);
-    assert.match(ps[0].fix, /at least 6\.9 µm/);
+    assert.match(ps[0].message, /PDN-0179/);
+    assert.match(ps[0].fix, /at least 20 µm/);
+    // the 7 µm strip Arrange first left beside a real SRAM failed detailed placement: warned too
+    assert.match(MP.problems(model(), [at(22.54, 21.76)]).find((p) => p.code === "channel").message, /DPL-0036/);
   });
   check("macros: Arrange puts every block inside the core, on the site grid, crossed by power", () => {
     const m = model();

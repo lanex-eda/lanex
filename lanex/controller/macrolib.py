@@ -1342,10 +1342,13 @@ def placement_problems(model: Dict[str, Any]) -> List[Dict[str, Any]]:
                 add("overlap", True, ia, f"{ia['name']} overlaps {ib['name']}. Macros can't overlap.",
                     "Move one of them.")
     # narrow strips of rows: rows that survive the keep-out cut but are too
-    # narrow for a vertical strap pair (PDN-0179 repair channels)
+    # narrow for a vertical strap pair (PDN-0179 repair channels) or for the
+    # buffers the placer puts by the block's pins (a 7 µm strip failed
+    # detailed placement, DPL-0036, on a real sky130 run)
     if core and sw:
         vp = pdn.get("v") or {}
         ok_w = 2 * (vp.get("w") or 1.6) + (vp.get("s") or 1.7) + 2.0
+        cell_w = max(ok_w, 20.0)
         gone_w = 2 * (model.get("endcap_w") or 3 * sw)
         for i, box in placed:
             hb = [box[0] - halo["h"], box[1] - halo["v"], box[2] + halo["h"], box[3] + halo["v"]]
@@ -1357,11 +1360,14 @@ def placement_problems(model: Dict[str, Any]) -> List[Dict[str, Any]]:
                 if ohb[1] < hb[3] and hb[1] < ohb[3] and ohb[0] >= hb[2]:
                     gaps.append((f"{j['name']} on the right", ohb[0] - hb[2]))
             for side, gap in gaps:
-                if gone_w < gap < ok_w:
+                if gone_w < gap < cell_w:
+                    why = ("Power straps can't reach rows that narrow, so the power grid may stop with PDN-0179."
+                           if gap < ok_w else
+                           "The placer puts buffers there, next to the block's pins, and a strip that narrow may "
+                           "not fit them (DPL-0036 detailed placement failed).")
                     add("channel", False, i, f"{i['name']} leaves a {_fmt(gap)} µm strip of cell rows between "
-                        f"its keep-out and {'the ' + side + ' core edge' if side in ('left', 'right') else side}. "
-                        "Power straps can't reach rows that narrow, so the power grid may stop with PDN-0179.",
-                        f"Close the gap, or leave at least {_fmt(ok_w)} µm.")
+                        f"its keep-out and {'the ' + side + ' core edge' if side in ('left', 'right') else side}. " + why,
+                        f"Close the gap, or leave at least {_fmt(cell_w)} µm.")
     return out
 
 

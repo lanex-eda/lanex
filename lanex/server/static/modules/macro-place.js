@@ -178,9 +178,7 @@ export function problems(model, placements) {
     }
   }
   if (core && sw) {
-    const vp = pdn.v || {};
-    const okW = 2 * (vp.w || 1.6) + (vp.s || 1.7) + 2.0;
-    const goneW = 2 * (model.endcap_w || 3 * sw);
+    const { okW, cellW, goneW } = channelWidths(model);
     for (const [p, box] of placed) {
       const hb = [box[0] - halo.h, box[1] - halo.v, box[2] + halo.h, box[3] + halo.v];
       const gaps = [["left", hb[0] - core[0]], ["right", core[2] - hb[2]]];
@@ -190,16 +188,28 @@ export function problems(model, placements) {
         if (ohb[1] < hb[3] && hb[1] < ohb[3] && ohb[0] >= hb[2]) gaps.push([q.name + " on the right", ohb[0] - hb[2]]);
       }
       for (const [side, gap] of gaps) {
-        if (gap > goneW && gap < okW) {
+        if (gap > goneW && gap < cellW) {
           add("channel", false, p, p.name + " leaves a " + f2(gap) + " µm strip of cell rows between its keep-out and " +
-            (side === "left" || side === "right" ? "the " + side + " core edge" : side) +
-            ". Power straps can't reach rows that narrow, so the power grid may stop with PDN-0179.",
-            "Close the gap, or leave at least " + f2(okW) + " µm.");
+            (side === "left" || side === "right" ? "the " + side + " core edge" : side) + ". " +
+            (gap < okW ? "Power straps can't reach rows that narrow, so the power grid may stop with PDN-0179."
+              : "The placer puts buffers there, next to the block's pins, and a strip that narrow may not fit them (DPL-0036 detailed placement failed)."),
+            "Close the gap, or leave at least " + f2(cellW) + " µm.");
         }
       }
     }
   }
   return out;
+}
+
+// How wide a strip of rows beside a macro must be: under goneW the rows
+// vanish (narrower than two end caps); under okW no power strap pair fits
+// (PDN-0179); under cellW the placer's buffers by the block's pins may not
+// fit (a 7 µm strip failed detailed placement on a real sky130 run).
+export function channelWidths(model) {
+  const vp = ((model.pdn || {}).v) || {};
+  const sw = (model.site || {}).w || 0.46;
+  const okW = 2 * (vp.w || 1.6) + (vp.s || 1.7) + 2.0;
+  return { okW, cellW: Math.max(okW, 20), goneW: 2 * (model.endcap_w || 3 * sw) };
 }
 
 // The nearest spot to a placement where none of the hard rules fire, on the
@@ -236,48 +246,64 @@ export function nearestLegal(model, placements, name) {
 }
 
 // "Arrange for me": every placement without a position (and every one not
-// in *locked* when all is true) gets one, biggest block first, bottom-left
-// first fit on the site grid, keep-outs inside the core with room for a power
-// strap pair beside them, and power straps crossing the block. Returns
-// {placements, placed: [names], failed: [names]}.
+// in *locked* when all is true) gets one, biggest block first, on the site
+// grid, with its keep-out inside the core, crossed by power straps, and as
+// far as it can be from the core edges and the other blocks (the narrowest
+// channel of rows as wide as possible): a strip of rows too narrow for the
+// placer's buffers fails detailed placement, and one too narrow for a power
+// strap fails the power grid. Returns {placements, placed, failed}.
 export function arrange(model, placements, { all = false, locked = new Set() } = {}) {
   const core = model.core && model.core.box;
   const out = placements.map((p) => Object.assign({}, p));
   if (!core) return { placements: out, placed: [], failed: out.filter((p) => !p.location).map((p) => p.name) };
   const halo = model.halo || { h: 10, v: 10 };
-  const vp = (model.pdn || {}).v || {};
-  const gap = 2 * (vp.w || 1.6) + (vp.s || 1.7) + 2.0;
+  const { cellW, goneW } = channelWidths(model);
   const [sw, sh] = gridOf(model, "site");
   const todo = out.filter((p) => (!p.location || (all && !locked.has(p.name))) && ((model.macros || {})[p.macro] || {}).ok);
   for (const p of todo) p.location = null;
-  const keep = out.filter((p) => p.location).map((p) => boxOf(model, p));
+  // keep-out rectangles of the blocks already placed
+  const keep = out.filter((p) => p.location && boxOf(model, p)).map((p) => {
+    const b = boxOf(model, p);
+    return [b[0] - halo.h, b[1] - halo.v, b[2] + halo.h, b[3] + halo.v];
+  });
   const size = (p) => { const g = model.macros[p.macro]; return g.w * g.h; };
   todo.sort((a, b) => size(b) - size(a));
   const placedNames = [], failed = [];
   const W = core[2] - core[0], H = core[3] - core[1];
-  const stepX = Math.max(sw, snap(W / 120, sw)), stepY = Math.max(sh, snap(H / 120, sh));
+  const stepX = Math.max(sw, snap(W / 140, sw)), stepY = Math.max(sh, snap(H / 140, sh));
+  const narrow = (g) => g > goneW && g < cellW;
   for (const p of todo) {
     const g = model.macros[p.macro];
     const o = (g.orients || ["N"]).includes(p.orientation) ? p.orientation : (g.orients || ["N"])[0];
     p.orientation = o;
     const [w, h] = footprint(g.w, g.h, o);
-    let spot = null;
-    const x0 = snapUp(core[0] + halo.h + gap, sw), y0 = snapUp(core[1] + halo.v, sh);
-    for (let y = y0; !spot && y + h + halo.v <= core[3] + 1e-6; y = snap(y + stepY, sh)) {
-      for (let x = x0; x + w + halo.h + gap <= core[2] + 1e-6; x = snap(x + stepX, sw)) {
-        const r = [x - halo.h - gap / 2, y - halo.v, x + w + halo.h + gap / 2, y + h + halo.v];
-        const hit = keep.some((k) => r[0] < k[2] + halo.h + gap / 2 && k[0] - halo.h - gap / 2 < r[2] && r[1] < k[3] + halo.v && k[1] - halo.v < r[3]);
-        if (hit) continue;
+    let best = null;
+    for (let y = snapUp(core[1] + halo.v, sh); y + h + halo.v <= core[3] + 1e-6; y = snap(y + stepY, sh)) {
+      for (let x = snapUp(core[0] + halo.h, sw); x + w + halo.h <= core[2] + 1e-6; x = snap(x + stepX, sw)) {
+        const k = [x - halo.h, y - halo.v, x + w + halo.h, y + h + halo.v];
+        // the channels this keep-out leaves: to the four core edges, and to each placed block
+        const gaps = [k[0] - core[0], core[2] - k[2], k[1] - core[1], core[3] - k[3]];
+        let ok = !narrow(gaps[0]) && !narrow(gaps[1]);
+        for (const q of keep) {
+          const dx = Math.max(q[0] - k[2], k[0] - q[2]), dy = Math.max(q[1] - k[3], k[1] - q[3]);
+          if (dx < 0 && dy < 0) { ok = false; break; }            // keep-outs overlap
+          if (dy < 0 && narrow(dx)) { ok = false; break; }         // a narrow strip of rows between them
+          gaps.push(Math.max(dx, dy));
+        }
+        if (!ok) continue;
         if (g.grid === "default") {
           const c = crossings(model, { macro: p.macro, name: p.name, location: [x, y], orientation: o });
           if (!c.power || !c.ground) continue;
         }
-        spot = [x, y];
-        break;
+        const score = Math.min(...gaps);
+        if (!best || score > best.score + 1e-9) best = { score, x, y };
       }
     }
-    if (spot) { p.location = spot; keep.push([spot[0], spot[1], spot[0] + w, spot[1] + h]); placedNames.push(p.name); }
-    else failed.push(p.name);
+    if (best) {
+      p.location = [best.x, best.y];
+      keep.push([best.x - halo.h, best.y - halo.v, best.x + w + halo.h, best.y + h + halo.v]);
+      placedNames.push(p.name);
+    } else failed.push(p.name);
   }
   return { placements: out, placed: placedNames, failed };
 }
