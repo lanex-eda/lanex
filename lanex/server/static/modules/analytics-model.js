@@ -12,7 +12,7 @@ import * as FS from "./flowstages.js";
 // Key anatomy, numbers and units live in metricfmt.js, the one formatter
 // Runs, Compare and the sweep views share with this page; they are
 // re-exported here so everything that reads them from this module keeps working.
-import { parseKey, isNum, nonFinite, num, si, unitOf, show, signed } from "./metricfmt.js";
+import { parseKey, isNum, nonFinite, num, si, unitOf, show, signed, LANEX_DIRECTIONS } from "./metricfmt.js";
 export { parseKey, isNum, nonFinite, num, si, unitOf, show, signed };
 
 // ---------- labels ---------------------------------------------------------------
@@ -317,9 +317,11 @@ export function delta(a, b, dir) {
   return { diff, pct, verdict };
 }
 
-// Direction from the registry, by base metric name.
+// Direction from the registry, by base metric name; the metrics LibreLane
+// doesn't register read like their registered relatives (metricfmt.js
+// LANEX_DIRECTIONS), so Runs, Compare and Analytics colour the same numbers.
 export function directionOf(meta, key) {
   const m = meta && meta.get && (meta.get(key) || meta.get(parseKey(key).base));
-  if (!m) return 0;
-  return m.higher_is_better ? 1 : -1;
+  if (m && typeof m.higher_is_better === "boolean") return m.higher_is_better ? 1 : -1;
+  return LANEX_DIRECTIONS[key] || LANEX_DIRECTIONS[parseKey(key).base] || 0;
 }

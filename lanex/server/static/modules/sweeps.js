@@ -23,6 +23,8 @@ import * as FS from "./flowstages.js";
 import * as F from "./metricfmt.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
 import { localeNum } from "./intlcache.js";
+import * as SM from "./studymodel.js";
+import * as SQ from "./studyqueue.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const MAX_RUNS = 64;               // controller/dse.py MAX_COMBOS
@@ -30,22 +32,25 @@ export const COMPARE_MAX = 12;     // compare.js MAX
 
 // Goals in plain words -> the settings that move them. Their values are
 // filled from this design's own settings when the sheet opens (fillGoal).
+// Three goals that work, and your own (studies, audit 6.2). "Placement
+// density" is not a goal: it sizes nothing, and LibreLane derives it from the
+// utilisation when the config leaves it unset.
 const GOALS = [
-  { id: "clock", title: "Fastest clock that meets timing", sub: "Shorter clock periods from the one you use now. Every one runs.",
+  { id: "clock", title: "Fastest clock", sub: "How fast can it run? Shorter clock periods from the one you use now; every one runs.",
     axes: [{ var: "CLOCK_PERIOD", values: "" }] },
-  { id: "area", title: "Smallest die that routes", sub: "Pack the core fuller until routing or placement fails.",
+  { id: "area", title: "Smallest chip", sub: "How small can the die get? Packs the core fuller until placement or routing fails.",
     axes: [{ var: "FP_CORE_UTIL", values: "40:60:10" }] },
-  { id: "density", title: "Placement density", sub: "How tightly the placer packs cells (%).",
-    axes: [{ var: "PL_TARGET_DENSITY_PCT", values: "50, 60, 70" }] },
-  { id: "synth", title: "Synthesis strategies", sub: "Yosys/ABC recipes, area- or delay-first.",
-    axes: [{ var: "SYNTH_STRATEGY", values: "AREA 0, DELAY 0, DELAY 2" }] },
-  { id: "own", title: "Your own", sub: "Any setting LibreLane has.", axes: [{ var: "", values: "" }] },
+  { id: "synth", title: "Best synthesis recipe", sub: "Which of LibreLane's recipes (SYNTH_STRATEGY) gives the smallest or fastest chip, each run in full.",
+    axes: [{ var: "SYNTH_STRATEGY", values: "AREA 0, DELAY 0, DELAY 4" }] },
+  { id: "own", title: "Your own settings", sub: "Any setting LibreLane has, up to three, every combination or paired.", axes: [{ var: "", values: "" }] },
 ];
 // What the sheet asks the server for when it opens, so the goals can start
-// from this design's values.
-const CONTEXT_KEYS = ["CLOCK_PERIOD", "FP_CORE_UTIL", "FP_SIZING", "DIE_AREA", "CORE_AREA", "PL_TARGET_DENSITY_PCT", "SYNTH_STRATEGY"];
+// from this design's values (and the guards can see a fixed die, a fixed
+// density, an SDC file that sets its own clock).
+const CONTEXT_KEYS = ["CLOCK_PERIOD", "FP_CORE_UTIL", "FP_SIZING", "DIE_AREA", "CORE_AREA", "PL_TARGET_DENSITY_PCT", "SYNTH_STRATEGY",
+  "PNR_SDC_FILE", "SIGNOFF_SDC_FILE"];
 
-const S = { el: null, goal: "area", axes: [], mode: "grid", stop: false, vars: null, busy: false,
+const S = { el: null, goal: "area", axes: [], mode: "grid", stop: false, vars: null, busy: false, drop: new Set(),
   plan: null, planSeq: 0, planTimer: 0, ctx: {}, touched: false, note: "" };
 
 // ------------------------------------------------------------------ values
@@ -57,7 +62,21 @@ export function parseValuesStrict(text, kind = "", choices = []) {
   const t = String(text || "").trim();
   if (!t) return { values: [], error: "" };
   let values;
-  if (!/::/.test(t) && /^-?[\d.]+\s*:/.test(t)) {
+  // N points between two ends, "35..65/4", evenly spaced; "1..100/5 log" in
+  // equal ratios (for settings that act over decades).
+  const np = /^(-?\d+(?:\.\d+)?)\s*\.\.\s*(-?\d+(?:\.\d+)?)\s*\/\s*(\d+)(\s+log)?$/i.exec(t);
+  if (np) {
+    const [a, b, n, log] = [Number(np[1]), Number(np[2]), Number(np[3]), !!np[4]];
+    if (n < 2 || n > MAX_RUNS) return { values: [], error: "Give between 2 and " + MAX_RUNS + " points, like 35..65/4." };
+    if (log && (a <= 0 || b <= 0)) return { values: [], error: "A log spread needs both ends above 0." };
+    const dec = Math.max(...[np[1], np[2]].map((x) => (x.split(".")[1] || "").length));
+    values = [];
+    for (let i = 0; i < n; i++) {
+      const v = log ? a * Math.pow(b / a, i / (n - 1)) : a + (b - a) * i / (n - 1);
+      const r = Number(v.toFixed(Math.max(dec, Math.abs(v) >= 100 ? 0 : Math.abs(v) >= 10 ? 1 : 2)));
+      if (!values.includes(String(r))) values.push(String(r));
+    }
+  } else if (!/::/.test(t) && /^-?[\d.]+\s*:/.test(t)) {
     const m = /^(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(t);
     if (!m) return { values: [], error: "'" + t + "' isn't a range. Write start:stop:step with numbers, like 35:65:10." };
     const [a, b, s] = [Number(m[1]), Number(m[2]), Number(m[3])];
@@ -86,6 +105,22 @@ function valueError(v, kind, choices) {
   if (kind === "numbers" && !v.split(/[;\s]+/).filter(Boolean).every(isnum)) return "'" + v + "' should be numbers separated by spaces, like 0 0 200 200.";
   return "";
 }
+
+// The planned points, as the server expands them (dse.expand_sweep): every
+// combination in order, or paired value by value. [] when the axes are not
+// ready.
+export function planPoints(axes, mode) {
+  const vals = axes.map((a) => parseValues(a.values));
+  if (!axes.length || vals.some((v) => !v.length) || axes.some((a) => !a.var)) return [];
+  if (mode === "list" && axes.length > 1) {
+    if (!vals.every((v) => v.length === vals[0].length)) return [];
+    return vals[0].map((_, i) => Object.fromEntries(axes.map((a, j) => [a.var, vals[j][i]])));
+  }
+  let out = [{}];
+  axes.forEach((a, j) => { out = out.flatMap((p) => vals[j].map((v) => ({ ...p, [a.var]: v }))); });
+  return out;
+}
+const pointKeyOf = (pt) => JSON.stringify(Object.keys(pt).sort().map((k) => [k, String(pt[k])]));
 
 // How many runs the axes make: grid = product, paired = the common length.
 export function countRuns(axes, mode) {
@@ -145,14 +180,18 @@ const asText = (v) => (Array.isArray(v) ? v.join(" ") : v == null ? "" : String(
 // ------------------------------------------------------------------ sheet
 // `goal` (a GOALS id such as "clock") opens the sheet on that preset;
 // `values` fills its first setting's values (e.g. "12.5, 10, 8").
-export async function openSweepSheet(goal, { values } = {}) {
+export async function openSweepSheet(goal, { values, full = false } = {}) {
   if (!state.designDir) { toast.show("Open a project first: a sweep runs the open design.", "info"); return; }
   if (!S.el) build();
   S.ctx = {};
   S.plan = null;
   S.touched = !!values;
+  S.drop = new Set();
   pickGoal(GOALS.some((g) => g.id === goal) ? goal : S.goal);
   if (values && S.axes[0]) { S.axes[0].values = values; paintAxes(); }
+  // From an exploration's table: run the picked recipes in full now.
+  const ex = S.el.querySelector("#sw-explore");
+  if (ex) ex.checked = !full;
   S.el.hidden = false;
   // A dialog on the overlay stack: Tab stays in the sheet, Esc closes it (and
   // only it), closing puts focus back.
@@ -167,7 +206,12 @@ export async function openSweepSheet(goal, { values } = {}) {
   // This design's own values, so the goals start from them.
   const ctxP = api.dsePlan({ axes: [], keys: CONTEXT_KEYS, base_overrides: baseOverrides() })
     .then((p) => { S.ctx = (p && p.context) || {}; }).catch(() => { S.ctx = {}; });
-  await Promise.all([varsP, ctxP]);
+  // How many points the queue runs at once (lane 1: memory and cores).
+  S.sdcBlock = "";
+  S.par = null;
+  const parP = api.queue().then((q) => { const mp = (q && q.max_parallel) || {}; S.par = { n: Number(mp.now) || 1, why: mp.why || "" }; }).catch(() => { S.par = null; });
+  await Promise.all([varsP, ctxP, parP]);
+  sdcGuard(S.ctx.PNR_SDC_FILE, S.ctx.SIGNOFF_SDC_FILE);
   if (S.el.hidden) return;
   if (!S.touched) pickGoal(S.goal);
   else requestPlan();
@@ -202,19 +246,22 @@ function build() {
   el.innerHTML =
     "<aside class='sw-sheet' role='dialog' aria-modal='true' aria-labelledby='sw-title'>" +
     "<header class='sw-head'><div><div class='an-eyebrow'>New sweep</div><h2 class='an-title' id='sw-title'>Run this design at several settings</h2>" +
-    "<p class='an-lede'>One full run per point, one after another. Fix the RTL and the constraints first: a sweep finds a better setting, it doesn't fix a design. Keep it small.</p></div>" +
+    "<p class='an-lede'>One full run per point; the queue runs as many at once as memory and cores allow. Fix the RTL and the constraints first: a sweep finds a better setting, it doesn't fix a design.</p></div>" +
     "<button class='iconbtn sw-x' data-sw='close' aria-label='Close'>" + icon("x", { size: 16 }) + "</button></header>" +
     "<div class='sw-body'>" +
     "<div class='sw-lbl'>What are you after?</div><div class='sw-goals' role='radiogroup'>" +
     GOALS.map((g) => "<button class='sw-goal' role='radio' data-goal='" + g.id + "'><b>" + esc(g.title) + "</b><span>" + esc(g.sub) + "</span></button>").join("") + "</div>" +
-    "<div class='sw-lbl'>Settings and values <span class='muted'>A list like 35, 50, 65, or start:stop:step like 35:65:15.</span></div>" +
+    "<div class='sw-lbl'>Settings and values <span class='muted'>A list like 35, 50, 65; start:stop:step like 35:65:15; or N points like 35..65/4 (add log for equal ratios, like 1..100/5 log).</span></div>" +
     "<div id='sw-axes'></div><datalist id='sw-vars'></datalist>" +
     "<button class='btn btn-ghost btn-sm' data-sw='add'>" + icon("plus", { size: 12 }) + " Another setting</button>" +
     "<p class='sw-note' id='sw-note' hidden></p>" +
     "<div class='sw-mode' id='sw-mode' hidden><span class='sw-lbl'>Combine</span>" +
     "<label><input type='radio' name='sw-mode' value='grid' checked/> Every combination</label>" +
     "<label><input type='radio' name='sw-mode' value='list'/> Paired, value by value</label></div>" +
+    "<div class='sw-preview' id='sw-preview' aria-live='polite'></div>" +
     "<label class='sw-stop' id='sw-stop-row'><input type='checkbox' id='sw-stop'/> Stop at the first run that is clean (timing met and every check passed)</label>" +
+    "<label class='sw-stop' id='sw-explore-row' hidden><input type='checkbox' id='sw-explore' checked/> <span>Explore all 9 recipes first, in seconds: LibreLane's SynthesisExploration synthesises the design with each one and times it before layout. " +
+      "Then run the best one or two in full from its table in Runs. It stops before layout, so the config's layout settings are not read. <span class='muted'>Untick to run the recipes above in full now.</span></span></label>" +
     "<div class='sw-riders' id='sw-riders' aria-live='polite'></div>" +
     "</div>" +
     "<footer class='sw-foot'><div class='sw-est' id='sw-est' aria-live='polite'></div><span class='sw-spacer'></span>" +
@@ -233,6 +280,17 @@ function build() {
   });
   el.querySelectorAll("input[name='sw-mode']").forEach((r) => r.addEventListener("change", () => { S.mode = r.value; paintEst(); requestPlan(); }));
   el.querySelector("#sw-stop").addEventListener("change", (e) => { S.stop = e.target.checked; });
+  el.querySelector("#sw-explore").addEventListener("change", () => paintEst());
+  // The preview table: untick a point and it isn't run.
+  el.querySelector("#sw-preview").addEventListener("change", (e) => {
+    const cb = e.target.closest("input[data-pt]");
+    if (!cb) return;
+    if (cb.checked) S.drop.delete(cb.dataset.pt); else S.drop.add(cb.dataset.pt);
+    paintEst();
+  });
+  el.querySelector("#sw-preview").addEventListener("click", (e) => {
+    if (e.target.closest("[data-pt-all]")) { S.drop.clear(); paintEst(); }
+  });
   el.querySelector("#sw-start").addEventListener("click", start);
 }
 
@@ -247,6 +305,7 @@ function pickGoal(id) {
   S.stop = false;
   S.el.querySelector("#sw-stop").checked = false;
   S.el.querySelector("#sw-stop-row").hidden = id === "clock";
+  S.el.querySelector("#sw-explore-row").hidden = id !== "synth";
   S.el.querySelectorAll(".sw-goal").forEach((b) => { const on = b.dataset.goal === id; b.classList.toggle("is-on", on); b.setAttribute("aria-checked", on); });
   paintAxes();
 }
@@ -265,6 +324,7 @@ function fillGoal(id) {
     S.axes[0].values = clockValues(cur, hint).join(", ");
     S.note = "The clock now: " + cur + " ns (" + mhz(cur) + "), from " + src(e) + "." +
       (hint ? " " + hint.text : "") + " Every period runs; the summary names the fastest that met timing.";
+    sdcGuard(c("PNR_SDC_FILE"), c("SIGNOFF_SDC_FILE"));
     return;
   }
   if (id === "area") {
@@ -284,8 +344,37 @@ function fillGoal(id) {
       const vals = [cur, cur + 10, cur + 20].filter((x) => x <= 95).map((x) => +x.toFixed(1));
       S.axes[0].values = vals.join(", ");
       S.note = "The core is " + cur + " % full now (" + src(u) + "). Each point packs it fuller; the die shrinks with it.";
+      // A density fixed in the config: the utilisation can pass it, and the
+      // placer then can't fit the cells (LibreLane derives it when unset).
+      const d = c("PL_TARGET_DENSITY_PCT");
+      const dv = d && d.source === "config" ? Number(asText(d.value)) : NaN;
+      if (dv > 0 && vals.some((x) => x + 5 > dv)) {
+        S.note += " PL_TARGET_DENSITY_PCT is fixed at " + dv + " % in " + src(d) + ": past about " + Math.max(1, dv - 5) +
+          " % utilisation the placer can't fit the cells into that density. Take it out of the config so LibreLane works it out from the utilisation, or sweep both under Your own settings.";
+      }
     }
   }
+}
+
+// An SDC file that sets the clock period itself (a number, not
+// $::env(CLOCK_PERIOD)) makes a clock sweep change synthesis only, never the
+// timing it is judged by: say so, and hold Start.
+async function sdcGuard(...entries) {
+  S.sdcBlock = "";
+  for (const e of entries) {
+    const v = e && asText(e.value);
+    if (!v || !/\.sdc$/i.test(v)) continue;
+    const path = v.replace(/^dir::/, (state.designDir || "").replace(/[\\/]+$/, "") + "/");
+    let text = "";
+    try { const r = await api.readText(path); text = (r && (r.text ?? (r.data || {}).text)) || ""; } catch (_e) { continue; }
+    const m = /create_clock[^\n]*-period\s+([0-9.]+)/.exec(text);
+    if (m && !/CLOCK_PERIOD/.test(text)) {
+      S.sdcBlock = "Your SDC file (" + v.replace(/^dir::/, "") + ") sets the clock period itself (" + m[1] + " ns), so changing CLOCK_PERIOD would only change synthesis, not timing. " +
+        "Make the SDC use $::env(CLOCK_PERIOD) as LibreLane's own base.sdc does, or change the period in the SDC.";
+      break;
+    }
+  }
+  if (S.el && !S.el.hidden) paintEst();
 }
 
 // What a past run says about the clock: its slack at a period LanEx knows
@@ -378,7 +467,10 @@ function serverProblem() {
   return (p.problems || [])[0] || "";
 }
 
-function problems() { return clientProblem() || serverProblem(); }
+function problems() {
+  const clockSwept = S.axes.some((a) => a.var === "CLOCK_PERIOD");
+  return clientProblem() || serverProblem() || (clockSwept && S.sdcBlock) || "";
+}
 
 function planKey() { return JSON.stringify([S.axes, S.mode]); }
 
@@ -410,21 +502,90 @@ function paintEst() {
     const info = S.el.querySelector("[data-info='" + i + "']");
     if (info) info.innerHTML = infoHtml(a.var);
   });
-  const n = countRuns(S.axes, S.mode);
-  const err = problems();
+  const n0 = countRuns(S.axes, S.mode);
+  const planned = n0 > 0 && n0 <= MAX_RUNS ? planPoints(S.axes, S.axes.length > 1 ? S.mode : "grid") : [];
+  for (const k of [...S.drop]) if (!planned.some((pt) => pointKeyOf(pt) === k)) S.drop.delete(k);
+  const n = planned.length ? planned.length - S.drop.size : n0;
+  paintPreview(planned);
+  const err = problems() || (planned.length && !n ? "Every planned point is unticked: tick at least one." : "");
   const secs = typicalRunSecs();
   const est = S.el.querySelector("#sw-est");
   const warns = (S.plan && S.plan._for === planKey() && S.plan.warnings) || [];
+  // "6 runs, about 5 min, 2 at a time": the time from this design's past runs
+  // and the queue's runs-at-once (never a made-up number with no history).
+  const par = S.par && S.par.n > 0 ? Math.min(S.par.n, Math.max(1, n)) : 1;
+  const total = secs ? Math.ceil(n / par) * secs * (par > 1 ? 1.15 : 1) : null;
+  const clockDown = S.axes.some((a) => a.var === "CLOCK_PERIOD");
   if (err) est.innerHTML = "<span class='sw-err'>" + esc(err) + "</span>";
-  else est.innerHTML = "<b>" + n + " run" + (n === 1 ? "" : "s") + (secs ? ", about " + esc(fmtDur(n * secs)) : "") + "</b>" +
-    (secs ? " <span class='muted'>from this design's past runs</span>" : "") +
+  else est.innerHTML = "<b>" + n + " run" + (n === 1 ? "" : "s") + (total ? ", about " + esc(fmtDur(total)) : "") + (S.par ? ", " + par + " at a time" : "") + "</b>" +
+    (total ? " <span class='muted'>from this design's past runs" + (clockDown ? " (faster clocks can take longer)" : "") + "</span>"
+      : " <span class='muted'>The time is known after the first point: this design has no finished run yet.</span>") +
+    (S.par && S.par.why ? "<div class='muted'>" + esc(S.par.why) + "</div>" : "") +
     (n > 8 ? "<div class='sw-warn'>That's a lot of runs. Two or three values usually show the trend.</div>" : "") +
     warns.map((w) => "<div class='sw-warn'>" + esc(w) + "</div>").join("");
   paintRiders();
   const b = S.el.querySelector("#sw-start");
-  const running = state.status && state.status.running;
-  b.disabled = !!err || S.busy || running;
-  b.title = running ? "A run is going: start the sweep when it ends." : "";
+  const explore = exploring();
+  if (explore) {
+    est.innerHTML = "<b>1 exploration of 9 recipes</b> <span class='muted'>seconds to a few minutes: synthesis and timing before layout only</span>";
+    b.innerHTML = icon("play", { size: 13 }) + " Explore 9 recipes";
+    b.disabled = S.busy;
+    b.title = "";
+    return;
+  }
+  b.innerHTML = icon("play", { size: 13 }) + " Start sweep";
+  // The queue takes a sweep while runs are going (lane 1): it waits its turn.
+  b.disabled = !!err || S.busy;
+  b.title = "";
+}
+const exploring = () => S.goal === "synth" && !!S.el && !!S.el.querySelector("#sw-explore")?.checked;
+
+// Best synthesis recipe, step one: LibreLane's SynthesisExploration as one
+// queue job (its recipes are read from the run folder: synthexplore.py).
+async function startExploration() {
+  S.busy = true;
+  paintEst();
+  try {
+    const { collectRunPayload } = await import("./setup.js");
+    const base = collectRunPayload();
+    const d = new Date(), p = (x) => String(x).padStart(2, "0");
+    const tag = "synthx-" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+    // The exploration stops before layout, so the config's layout settings
+    // (utilisation, pins, power grid) are not read: the config check's "this
+    // flow never reads X" notes are expected here, never a reason to refuse.
+    const spec = { ...base, flow: "SynthesisExploration", tag, frm: null, to: null, only: null, skip: [], checks_ack: true };
+    const res = await api.queueAdd({ design_dir: state.designDir, spec, kind: "run", label: "Synthesis recipes (9)" });
+    if (res && res.ok === false) throw new Error(res.reason || "the config check refused it");
+    toast.show("Exploring LibreLane's 9 synthesis recipes as " + tag + ". Its table opens from the run in Runs when it ends.", "success", 8000);
+    closeSweepSheet();
+    document.dispatchEvent(new CustomEvent("g:sweep", { detail: { started: { run_tags: [tag] } } }));
+  } catch (ex) {
+    toast.show("The exploration didn't start: " + (ex.message || ex), "error", 0);
+  } finally {
+    S.busy = false;
+    if (S.el) paintEst();
+  }
+}
+
+// The planned points, one row each, in the order they will be handed to the
+// queue: untick any that isn't worth a run.
+function paintPreview(planned) {
+  const host = S.el.querySelector("#sw-preview");
+  if (!host) return;
+  if (exploring() || planned.length < 2) { host.innerHTML = ""; return; }
+  const axes = Object.keys(planned[0]);
+  const ticked = planned.length - S.drop.size;
+  host.innerHTML = "<div class='sw-lbl'>Planned points <span class='muted'>" + ticked + " of " + planned.length + " will run. Untick any that isn't worth a run.</span></div>" +
+    "<div class='sw-prev-wrap'><table class='sw-res sw-prev'><thead><tr><th scope='col'><span class='sr-only'>Run it</span></th>" +
+    axes.map((a) => "<th scope='col'>" + esc(a) + "</th>").join("") + "<th scope='col'></th></tr></thead><tbody>" +
+    planned.map((pt) => {
+      const k = pointKeyOf(pt), on = !S.drop.has(k);
+      return "<tr class='" + (on ? "" : "is-off") + "'><td><input type='checkbox' data-pt='" + esc(k) + "'" + (on ? " checked" : "") +
+        " aria-label='" + esc("Run " + axes.map((a) => a + " " + pt[a]).join(", ")) + "'/></td>" +
+        axes.map((a) => "<td class='sw-res-v'>" + esc(pt[a]) + (a === "CLOCK_PERIOD" && Number(pt[a]) > 0 ? " <small>" + esc(mhz(Number(pt[a]))) + "</small>" : "") + "</td>").join("") +
+        "<td class='muted'>" + (on ? "" : "unticked: won't run") + "</td></tr>";
+    }).join("") + "</tbody></table></div>" +
+    (S.drop.size ? "<button class='linklike' data-pt-all>Tick them all again</button>" : "");
 }
 
 // Setup's one-off settings go with every point: the sheet says so, by name.
@@ -440,6 +601,7 @@ function paintRiders() {
 }
 
 async function start() {
+  if (exploring()) { if (!S.busy) await startExploration(); return; }
   if (problems() || S.busy) return;
   // The server still has the previous project active: a sweep now would run there.
   if (state.designMissing) {
@@ -458,6 +620,8 @@ async function start() {
       axes, mode: S.axes.length > 1 ? S.mode : "grid", run_mode: state.runMode, flow_name: base.flow || null,
       base_overrides: base.overrides, sources: base.sources, extras: base.extras,
       stop_when_good: S.goal !== "clock" && S.stop, goal: S.goal,
+      // Points unticked in the preview (their values); the server leaves them out.
+      drop: planPoints(S.axes, S.axes.length > 1 ? S.mode : "grid").filter((pt) => S.drop.has(pointKeyOf(pt))),
     });
     const d = r && (r.data || r);
     toast.show("Sweep started: " + d.count + " run" + (d.count === 1 ? "" : "s") + ", " + (d.run_tags || []).join(", ") + ".", "success", 8000);
@@ -511,21 +675,27 @@ function cellText(id, v, scale, unit = true) {
 
 // The points of a sweep in the order they were planned: one entry per run,
 // plus each planned point that has no run (stopped, or LanEx closed first).
-export function sweepPoints(sw, runs, verdictOf) {
+export function sweepPoints(sw, runs, verdictOf, jobs = null) {
   const tags = sw.tags || [];
   const reruns = sw.reruns || {};
   const byTag = new Map(runs.map((r) => [r.tag, r]));
   const idx = (t) => { const i = tags.indexOf(t); return i < 0 ? 1e9 : i; };
+  const J = jobs || new Map();
+  // The point's state in the study's words (studymodel.js): Queued, Running,
+  // Clean, Warnings, Timing missed, Failed, Stopped, Skipped, Incomplete.
+  const keyOf = (r, job) => SM.pointKey({ run: r ? { ...r, verdict: verdictOf(r) } : null, job, active: !!sw.active });
   const pts = runs.slice().sort((a, b) => idx(a.tag) - idx(b.tag) || String(a.started_at).localeCompare(String(b.started_at)))
     .map((r) => {
       const st = verdictOf(r).state;
-      return { r, tag: r.tag, v: valuesOf(r, sw), state: st, ok: st === "passed", failed: st === "failed",
-        finished: /passed|warning/.test(st), superseded: reruns[r.tag] && byTag.has(reruns[r.tag]) ? reruns[r.tag] : "" };
+      const key = keyOf(r, J.get(r.tag) || null);
+      return { r, tag: r.tag, v: valuesOf(r, sw), state: st, key, ok: st === "passed", failed: key === "failed",
+        finished: SM.hasNumbers(key), superseded: reruns[r.tag] && byTag.has(reruns[r.tag]) ? reruns[r.tag] : "" };
     });
   tags.forEach((t, i) => {
     if (byTag.has(t)) return;
     if (reruns[t] && byTag.has(reruns[t])) return;
-    pts.push({ r: null, tag: t, v: (sw.points || [])[i] || null, state: "notrun", ok: false, failed: false, finished: false, missing: true });
+    const key = keyOf(null, J.get(t) || null);
+    pts.push({ r: null, tag: t, v: (sw.points || [])[i] || null, state: "notrun", key, ok: false, failed: false, finished: false, missing: true });
   });
   return pts;
 }
@@ -552,6 +722,9 @@ export function endReason(sw, pts) {
   if (e.reason === "stopped") return "You stopped it: " + of + ".";
   if (e.reason === "first-clean") return "It stopped at the first clean run, as asked: " + of + ".";
   if (e.reason === "done") return of + ": the others' runs were deleted.";
+  // The sweep's own stop rules (dse.py): a failure before any swept setting
+  // is read (proof), or two of the first points failing the same way.
+  if (e.reason === "failed-fast" && /^(the first point|two of the first)/.test(e.detail || "")) return "It stopped early: " + e.detail + ". " + of + ". Fix the cause, then run the ones left.";
   if (e.reason === "failed-fast") return "It stopped after two points failed the same way before any step ran (" + (e.detail || "the run would not start") + "): the rest would have too. " + of + ".";
   if (e.reason === "interrupted" && !e.assumed) return "LanEx was closed or restarted while it ran: " + of + ".";
   if (pts.some((p) => p.state === "stopped")) return "It was stopped: " + of + ".";
@@ -565,7 +738,14 @@ export function endReason(sw, pts) {
 // configuration"), what failed and why, why it ended short, the results by
 // value, the trend charts and its actions.
 export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, selectRuns } = {}) {
-  const pts = sweepPoints(sw, runs, verdictOf);
+  const pts = sweepPoints(sw, runs, verdictOf, SQ.jobsOf(sw.id));
+  // A point's words, once: the strip, the table, the charts and the CSV.
+  for (const p of pts) {
+    const w = SM.pointWords(p.key, { run: p.r ? { ...p.r, verdict: verdictOf(p.r) } : null, job: SQ.jobsOf(sw.id).get(p.tag) || null,
+      stageLabel: FS.stageLabel, code: p.r && p.key === "failed" && failCode ? failCode(p.r) : "",
+      reason: p.missing && !sw.active ? endReason(sw, pts) : "" });
+    Object.assign(p, { word: w.word, detail: w.detail, label: p.v ? Object.values(p.v).join(" × ") : p.tag });
+  }
   const live = pts.filter((p) => p.r && !p.superseded);
   const passed = live.filter((p) => p.ok);
   const axes = sw.axes || [];
@@ -610,21 +790,40 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
   const left = pts.filter((p) => p.missing).map((p) => p.tag);
   const busy = !!(state.status && state.status.running) || !!sw.active;
   const busyT = busy ? " disabled title='A run or sweep is going'" : "";
-  const toCompare = live.map((p) => p.r);
-  const plots = plotsHtml(pts.filter((p) => p.r && !p.superseded), sw, scale);
-  el.innerHTML = "<div class='sw-sum" + (plots ? "" : " no-plot") + "'><div class='sw-sum-l'>" +
+  // Compare takes up to twelve: past that, the reference (the best by the
+  // sweep's goal) and the next eleven by the same goal, and the button says so.
+  const toCompare = compareSet(live, one, areaId);
+  const finishedN = live.length;
+  const plots = chartsHtml(sw, pts);
+  // The points at a glance: one mark per point in value order, how many ran.
+  const ordered = byValue(pts.filter((p) => !p.superseded), sw.axes || []);
+  const counts = {};
+  for (const p of ordered) counts[p.key] = (counts[p.key] || 0) + 1;
+  const progress = ordered.filter((p) => !["queued", "running", "skipped"].includes(p.key)).length + " of " + ordered.length +
+    Object.entries(counts).filter(([k]) => k !== "clean").map(([k, n]) => " · " + n + " " + SM.POINT[k].word.toLowerCase()).join("");
+  const same = sw.active ? SM.sameFailure(live.filter((p) => !p.missing).map((p) => ({ ...p, fp: p.key === "failed" ? SM.fingerprint((failCode && failCode(p.r)) || "", (verdictOf(p.r) || {}).stage || "") : "" }))) : null;
+  const queued = SQ.queueAvailable() && ordered.some((p) => p.key === "queued" || p.key === "running");
+  el.innerHTML = startedFromHtml(sw, runs, verdictOf, failCode) +
+    "<div class='sw-pts'>" + SM.stripHtml(ordered, esc) + "<span class='sw-pts-t'>" + esc(progress) + "</span>" +
+    (queued ? "<span class='rn-spacer'></span><button class='btn btn-ghost btn-sm' data-qstop='after' title='The points waiting are skipped; the ones running finish'>" + icon("stop", { size: 13 }) + " Stop after the running points</button>" +
+      "<button class='btn btn-ghost btn-sm' data-qstop='now'>" + icon("stop", { size: 13 }) + " Stop now</button>" : "") + "</div>" +
+    (same ? "<p class='sw-why'>" + icon("alert", { size: 14 }) + " Two of the first points failed the same way (" + esc(same.fingerprint.split("|").filter(Boolean).join(", ")) +
+      "): the rest will likely fail too. Stop after the running points and fix the cause first.</p>" : "") +
+    "<div class='sw-sum" + (plots ? "" : " no-plot") + "'><div class='sw-sum-l'>" +
     (why ? "<p class='sw-why'>" + icon("alert", { size: 14 }) + " " + esc(why) + "</p>" : "") +
     "<div class='sw-bests'>" + head + areaTile + failTile + "</div>" +
     (passed.length || one === "CLOCK_PERIOD" ? "" : "<p class='muted sw-none'>No point finished clean. Open a failed one for why, or fix the design before sweeping again.</p>") +
     "<div class='sw-sum-act'>" +
-      "<button class='btn btn-ghost btn-sm' data-cmp" + (toCompare.length < 2 ? " disabled title='A sweep with one run has nothing to compare'" : "") + ">" + icon("diff", { size: 13 }) + " Compare " +
-        (toCompare.length > 2 ? (toCompare.length > COMPARE_MAX ? COMPARE_MAX + " of " + toCompare.length : "all " + toCompare.length) : "these runs") + "</button>" +
+      "<button class='btn btn-ghost btn-sm' data-cmp" + (toCompare.length < 2 ? " disabled title='A sweep with one run has nothing to compare'" : "") +
+        (finishedN > COMPARE_MAX ? " title='Compare takes up to " + COMPARE_MAX + " runs: the best by this sweep&#39;s goal, the best first'" : "") + ">" + icon("diff", { size: 13 }) + " " +
+        (finishedN > COMPARE_MAX ? "Compare the " + COMPARE_MAX + " best of " + finishedN : finishedN > 2 ? "Compare all " + finishedN : "Compare these runs") + "</button>" +
       (selectRuns ? "<button class='btn btn-ghost btn-sm' data-sel-sweep>" + icon("check", { size: 13 }) + " Select its runs</button>" : "") +
       (left.length ? "<button class='btn btn-ghost btn-sm' data-redo='left'" + busyT + ">" + icon("play", { size: 13 }) + " Run the " + left.length + " left</button>" : "") +
       (redo.length ? "<button class='btn btn-ghost btn-sm' data-redo='failed'" + busyT + ">" + icon("play", { size: 13 }) + " " +
         (live.filter((p) => redo.includes(p.tag)).every((p) => p.failed) ? "Rerun " + redo.length + " failed" : "Run " + redo.length + " again") + "</button>" : "") +
       (one ? "<button class='btn btn-ghost btn-sm' data-add" + busyT + ">" + icon("plus", { size: 13 }) + " Add values</button>" : "") +
-      "<button class='btn btn-ghost btn-sm' data-csv>" + icon("download", { size: 13 }) + " Export CSV</button>" +
+      "<button class='btn btn-ghost btn-sm' data-csv title='One row per point, for Excel or LibreOffice'>" + icon("download", { size: 13 }) + " CSV</button>" +
+      "<button class='btn btn-ghost btn-sm' data-json title='The study as recorded, every point with its state, values and numbers'>" + icon("download", { size: 13 }) + " JSON</button>" +
     "</div></div>" + plots + "</div>" +
     resultsHtml(pts, sw, { scale, areaId, failCode });
   const ptOf = (tag) => pts.find((p) => p.tag === tag);
@@ -636,6 +835,7 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
   });
   el.querySelector("[data-sel-sweep]")?.addEventListener("click", (e) => { e.stopPropagation(); selectRuns(runs); });
   el.querySelector("[data-csv]").addEventListener("click", (e) => { e.stopPropagation(); exportSweepCsv(sw, pts, failCode); });
+  el.querySelector("[data-json]").addEventListener("click", (e) => { e.stopPropagation(); exportSweepJson(sw, pts); });
   el.querySelectorAll("[data-redo]").forEach((b) => b.addEventListener("click", (e) => {
     e.stopPropagation();
     continueSweep(sw, { rerun: b.dataset.redo === "left" ? left : redo });
@@ -651,6 +851,159 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
     _chartPick.set(sw.id, b.dataset.chart);
     paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, selectRuns });
   }));
+  el.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    _viewPick.set(sw.id, b.dataset.view);
+    paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, selectRuns });
+  }));
+  el.querySelectorAll("[data-qstop]").forEach((b) => b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const now = b.dataset.qstop === "now";
+    if (now && !(await confirmDialog({ title: "Stop the sweep now?", danger: true, confirmText: "Stop now",
+      body: "The points running now stop where they are, and the waiting ones are skipped. Finished points are kept. Resume runs the skipped ones later." }))) return;
+    try {
+      if (now) await SQ.stopNow(sw.id); else await SQ.stopAfterRunning(sw.id);
+      toast.show(now ? "Stopped. Finished points are kept." : "The waiting points are skipped; the running ones finish.", "success", 4000);
+    } catch (ex) { toast.show("Couldn't stop the sweep: " + (ex.message || ex), "error"); }
+  }));
+  el.querySelector("[data-from]")?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const ctx = await import("./context.js");
+    await ctx.setRun(e.currentTarget.dataset.from, state.designDir);
+    import("./nav.js").then((m) => m.go("verify"));
+  });
+  drawCharts(el, sw, pts, scale);
+}
+
+// The run the study started from, pinned above it, with what a sweep can and
+// can't do about its cause: a sweep is a tool, not a substitute for the cause
+// (audit 6.2). The run before the sweep was created, that isn't one of its
+// points (this design's runs only).
+function startedFromHtml(sw, runs, verdictOf, failCode) {
+  const t0 = sw.created_at ? Date.parse(sw.created_at) : NaN;
+  if (!Number.isFinite(t0)) return "";
+  const mine = new Set((sw.tags || []).concat(runs.map((r) => r.tag)));
+  const before = (state.runs || []).filter((r) => !mine.has(r.tag) && r.started_at && Date.parse(r.started_at) < t0 && !(r.origin && r.origin.kind === "sweep"))
+    .sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))[0];
+  if (!before) return "";
+  const v = verdictOf(before);
+  const m = before.key_metrics || {};
+  const ws = m.timing__setup__ws, hs = m.timing__hold__ws;
+  const fin = (x) => typeof x === "number" && Number.isFinite(x) && Math.abs(x) < 1e20;
+  const code = v.state === "failed" && failCode ? failCode(before) : "";
+  let cause = "", hint = "";
+  if (fin(ws) && ws < 0) { cause = "Setup slack " + F.showText("timing__setup__ws", ws) + "."; hint = "A study finds the fastest clock that works; it doesn't shorten the path that misses."; }
+  else if (fin(hs) && hs < 0) { cause = "Hold slack " + F.showText("timing__hold__ws", hs) + "."; hint = "A hold miss is fixed by buffering, not by a slower clock."; }
+  else if (/GRT/.test(code)) { cause = "Routing was too congested (" + code + ")."; hint = "A study can try a lower utilisation; if every value fails, the design needs fewer cells or more metal layers."; }
+  else if (/DPL|GPL/.test(code)) { cause = "Placement failed (" + code + ")."; hint = "A bigger die or a lower utilisation often fixes this; if not, look at the macro placement."; }
+  else if (v.state === "failed") { cause = code && !String(v.label || "").includes(code) ? "(" + code + ")" : ""; hint = "Fix the cause first: a study can't fix a design that doesn't build."; }
+  const tone = { passed: "pass", warning: "warn", failed: "fail" }[v.state] || "warn";
+  return "<div class='sw-from is-" + tone + "'><span class='sw-from-k'>Started from</span><code>" + esc(before.tag) + "</code>" +
+    "<span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(v.label || v.state) + "</span>" +
+    (cause ? "<span class='sw-from-c'>" + esc(cause) + "</span>" : fin(ws) ? "<span class='sw-from-c'>" + esc(F.showText("timing__setup__ws", ws)) + " setup slack</span>" : "") +
+    (hint ? "<span class='sw-from-h'>" + esc(hint) + "</span>" : "") +
+    (cause || hint ? "<button class='btn btn-ghost btn-sm' data-from='" + esc(before.tag) + "'>" + icon("check", { size: 13 }) + " Open it in Verify</button>" : "") + "</div>";
+}
+
+// Which runs "Compare" sends: all of them up to twelve; past that the best by
+// the sweep's goal (the fastest clock that met timing first for a clock
+// sweep, the smallest area for a sizing one, else the most slack).
+function compareSet(live, one, areaId) {
+  const runs = live.filter((p) => p.r);
+  if (runs.length <= COMPARE_MAX) return runs.map((p) => p.r);
+  const ws = (p) => num(p.r, "timing__setup__ws");
+  const score = one === "CLOCK_PERIOD"
+    ? (p) => (SM.metTiming(p.key, p.r) ? 1e6 - Number(p.v && p.v.CLOCK_PERIOD) : p.finished ? (ws(p) ?? -1e9) : -1e12)
+    : DIE_SIZERS.includes(one)
+      ? (p) => (p.finished ? -(metricOf(p, areaId) ?? 1e12) : -1e15)
+      : (p) => (p.finished ? (ws(p) ?? -1e9) : -1e12);
+  return runs.slice().sort((a, b) => score(b) - score(a)).slice(0, COMPARE_MAX).map((p) => p.r);
+}
+
+// ------------------------------------------------------------------ charts (ECharts, studycharts.js)
+const _viewPick = new Map();      // sweep id -> "value" | "trade" | "heat"
+const _sumCharts = new WeakMap(); // summary element -> its chart instances
+function chartViews(sw) {
+  const axes = sw.axes || [];
+  const nums = axes.filter((a) => (a.values || []).length > 1 && (a.values || []).every((v) => Number.isFinite(Number(v))));
+  const out = [];
+  if (axes.length === 1 && nums.length === 1) out.push(["value", "By value"]);
+  if (axes.length === 2) out.push(["heat", "Heatmap"]);
+  out.push(["trade", "Trade-off"]);
+  return out;
+}
+function chartsHtml(sw, pts) {
+  if (pts.filter((p) => p.r).length < 2 && !pts.some((p) => p.key === "queued")) return "";
+  const views = chartViews(sw);
+  const view = views.some(([v]) => v === _viewPick.get(sw.id)) ? _viewPick.get(sw.id) : views[0][0];
+  const one = (sw.axes || []).length === 1 ? sw.axes[0].var : "";
+  const pick = _chartPick.get(sw.id) || (view === "value" ? "wns" : view === "heat" ? "wns" : "die");
+  const metricSeg = "<div class='rn-seg sw-mseg' role='group' aria-label='The chart shows'>" +
+    ["wns", "tns", "hold", "die", "cells", "util", "power", "runtime"].map((id) =>
+      "<button class='rn-segb" + (id === pick ? " is-on" : "") + "' data-chart='" + id + "' aria-pressed='" + (id === pick) + "' title='" + esc(M_BY[id].label + (view === "trade" ? " against setup slack" : one ? " against " + one : "")) + "'>" + esc(M_BY[id].short) + "</button>").join("") + "</div>";
+  const viewSeg = views.length > 1 ? "<div class='rn-seg sw-mseg' role='group' aria-label='Chart'>" + views.map(([v, l]) =>
+    "<button class='rn-segb" + (v === view ? " is-on" : "") + "' data-view='" + v + "' aria-pressed='" + (v === view) + "'>" + esc(l) + "</button>").join("") + "</div>" : "";
+  return "<div class='sw-plots-wrap'><div class='sw-chart-bar'>" + viewSeg + metricSeg + "</div>" +
+    "<figure class='sw-plot sw-echart'><figcaption></figcaption><div class='sw-chart' role='img'></div><p class='sw-chart-note muted'></p></figure></div>";
+}
+async function drawCharts(el, sw, pts, scale) {
+  for (const c of _sumCharts.get(el) || []) { try { c.dispose(); } catch (_e) { /* gone */ } }
+  _sumCharts.set(el, []);
+  const host = el.querySelector(".sw-chart");
+  if (!host) return;
+  if (typeof window.echarts === "undefined") await import("./loading.js").then((m) => m.loadECharts()).catch(() => null);
+  if (!host.isConnected || typeof window.echarts === "undefined") return;
+  const SC = await import("./studycharts.js");
+  const views = chartViews(sw);
+  const view = views.some(([v]) => v === _viewPick.get(sw.id)) ? _viewPick.get(sw.id) : views[0][0];
+  const axes = sw.axes || [];
+  const pick = _chartPick.get(sw.id) || (view === "trade" ? "die" : "wns");
+  const m = M_BY[pick];
+  const k = pick === "power" && scale ? 1 / scale.div : pick === "util" ? 100 : 1;
+  const unit = pick === "runtime" ? "s" : pick === "power" ? (scale ? scale.unit : "W") : pick === "util" ? "%" : F.show(m.key, 1).unit;
+  const yOf = (p) => { const v = p.r ? metricOf(p, pick) : null; return v == null ? null : v * k; };
+  const live = pts.filter((p) => !p.superseded);
+  const cap = el.querySelector(".sw-echart figcaption"), note = el.querySelector(".sw-chart-note");
+  let opt = null;
+  if (view === "value") {
+    const xv = axes[0].var;
+    opt = SC.byValueOption({ xvar: xv, xunit: xv === "CLOCK_PERIOD" ? "ns" : "", clock: xv === "CLOCK_PERIOD",
+      metric: { key: m.key, label: m.label, unit, dir: m.dir },
+      points: live.map((p) => ({ x: p.v ? Number(p.v[xv]) : NaN, y: yOf(p), key: p.key, tag: p.tag, word: p.word, detail: p.detail })) });
+    cap.innerHTML = "<b>" + esc(m.label) + "</b>" + (unit ? " (" + esc(unit) + ")" : "") + " by " + esc(xv);
+  } else if (view === "heat") {
+    const [ax, ay] = axes;
+    const sortV = (vs) => vs.slice().sort((a, b) => (Number.isFinite(+a) && Number.isFinite(+b) ? +a - +b : String(a).localeCompare(String(b))));
+    opt = SC.heatmapOption({ xvar: ax.var, yvar: ay.var, xs: sortV(ax.values || []), ys: sortV(ay.values || []),
+      metric: { key: m.key, label: m.label, unit, dir: m.dir },
+      points: live.map((p) => ({ xv: p.v ? p.v[ax.var] : null, yv: p.v ? p.v[ay.var] : null, y: yOf(p), key: p.key, tag: p.tag, word: p.word, detail: p.detail })) });
+    cap.innerHTML = "<b>" + esc(m.label) + "</b>" + (unit ? " (" + esc(unit) + ")" : "") + " for each " + esc(ax.var) + " × " + esc(ay.var);
+  } else {
+    const xm = M_BY[pick === "wns" ? "die" : pick];
+    const xk = xm.id === "power" && scale ? 1 / scale.div : xm.id === "util" ? 100 : 1;
+    const xu = xm.id === "runtime" ? "s" : xm.id === "power" ? (scale ? scale.unit : "W") : xm.id === "util" ? "%" : F.show(xm.key, 1).unit;
+    const wsU = F.show("timing__setup__ws", 1).unit;
+    opt = SC.paretoOption({ x: { label: xm.label, unit: xu, dir: xm.dir || -1 }, y: { label: "Setup WNS", unit: wsU, dir: 1 },
+      points: live.map((p) => ({ x: p.r ? (metricOf(p, xm.id) == null ? null : metricOf(p, xm.id) * xk) : null, y: p.r ? metricOf(p, "wns") : null,
+        key: p.key, tag: p.tag, label: p.v ? Object.values(p.v).join("/") : p.tag })) });
+    cap.innerHTML = "<b>Trade-off</b>: setup WNS against " + esc(xm.label.toLowerCase()) + ". The line joins the points nothing beats on both.";
+  }
+  const fails = live.filter((p) => p.key === "failed" || p.key === "stopped" || p.key === "interrupted");
+  note.textContent = view === "trade" && fails.length ? fails.length + " point" + (fails.length === 1 ? "" : "s") + " failed and have no numbers, so they aren't on this chart: " + fails.map((p) => p.label).join(", ") + "."
+    : view === "value" && fails.length ? "A cross on the axis is a point that failed (no numbers)." : "";
+  if (!opt) { host.closest("figure").hidden = true; return; }
+  host.style.height = (view === "heat" ? Math.max(220, 46 * ((axes[1] || {}).values || []).length + 70) : 250) + "px";
+  host.setAttribute("aria-label", cap.textContent);
+  const chart = window.echarts.init(host, null, { renderer: "canvas" });
+  chart.setOption(opt);
+  // A point on the chart opens its run (the same as its row in the table).
+  chart.on("click", (e) => { const p = e.data && e.data.p; const row = p && el.querySelector("tr[data-open='" + CSS.escape(p.tag) + "']"); if (row) row.click(); });
+  _sumCharts.get(el).push(chart);
+  if (typeof ResizeObserver !== "undefined") {
+    let t = 0;
+    const ro = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { if (!chart.isDisposed()) chart.resize(); else ro.disconnect(); }, 80); });
+    ro.observe(host);
+  }
 }
 
 const valsText = (v) => (v ? " · " + esc(Object.entries(v).map(([k, x]) => k + " " + x).join(", ")) : "");
@@ -694,13 +1047,14 @@ function resultsHtml(pts, sw, { scale, areaId, failCode }) {
   if (!pts.length || !axes.length) return "";
   const cols = ["wns", "hold", areaId === "die" ? "die" : "cells", areaId === "die" ? "cells" : "die", "util", "power", "runtime"];
   const rows = byValue(pts, axes).map((p) => {
-    const reason = p.missing ? "" : p.failed ? (failCode && failCode(p.r)) || "" : "";
-    const word = STATE_WORD[p.state] || p.state;
+    const P = SM.POINT[p.key] || {};
+    const word = p.word || P.word || STATE_WORD[p.state] || p.state;
+    const tone = P.tone === "muted" ? "none" : P.tone || STATE_TONE[p.state] || "warn";
     const sup = p.superseded ? "<span class='muted'> · rerun as " + esc(p.superseded) + "</span>" : "";
     return "<tr" + (p.r ? " data-open='" + esc(p.tag) + "' class='sw-res-row" + (p.superseded ? " is-old" : "") + "' title='" + esc("Open " + p.tag) + "'" : " class='is-missing'") + ">" +
       axes.map((a) => "<td class='sw-res-v'>" + esc(p.v ? p.v[a.var] : "") + (a.var === "CLOCK_PERIOD" && p.v && Number(p.v[a.var]) > 0 ? " <small>" + esc(mhz(Number(p.v[a.var]))) + "</small>" : "") + "</td>").join("") +
-      "<td><span class='rn-v is-" + (STATE_TONE[p.state] || "warn") + "'><i aria-hidden='true'></i>" + esc(word) + "</span>" +
-        (reason ? " <span class='muted'>" + esc(reason) + "</span>" : "") + sup + "</td>" +
+      "<td><span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(word) + "</span>" +
+        (p.detail ? " <span class='muted'>" + esc(p.detail) + "</span>" : "") + sup + "</td>" +
       cols.map((id) => {
         const v = p.r ? metricOf(p, id) : null;
         const neg = (id === "wns" || id === "hold") && v != null && v < 0 ? " is-neg" : "";
@@ -717,15 +1071,29 @@ function resultsHtml(pts, sw, { scale, areaId, failCode }) {
 
 // The sweep's results as a CSV: the swept values, how each point ended and
 // every key number, exact (as LibreLane wrote it), in sweep order.
+// The study as JSON: its plan (axes, mode, goal, how it ended) and every
+// point with its values, state words, run and LibreLane's raw numbers.
+function exportSweepJson(sw, pts) {
+  const doc = {
+    format: "lanex-study/1", exported_at: new Date().toISOString(), design: state.designDir || "",
+    study: { id: sw.id, created_at: sw.created_at, axes: sw.axes, mode: sw.mode, goal: sw.goal || null, count: sw.count, ended: sw.ended || null, reruns: sw.reruns || {} },
+    points: byValue(pts, sw.axes || []).map((p) => ({
+      values: p.v || null, run: p.r ? p.tag : null, state: p.key, words: p.word || "", detail: p.detail || "", superseded_by: p.superseded || null,
+      run_dir: p.r ? p.r.run_dir : null, metrics: p.r ? p.r.key_metrics || {} : {}, wall_time_s: p.r ? p.r.wall_time_s : null,
+    })),
+  };
+  import("./csvutil.js").then((m) => m.downloadText("study-" + (sw.id || "results") + ".json", JSON.stringify(doc, null, 1)));
+}
+
 function exportSweepCsv(sw, pts, failCode) {
   const axes = sw.axes || [];
   const head = [...axes.map((a) => a.var), "run", "result", "reason", ...METRICS.map((m) => m.key ? m.key + " (" + (F.unitOf(m.key) === "ratio" ? "fraction" : F.unitOf(m.key)) + ")" : "runtime (s)")];
   const rows = [head, ...byValue(pts, axes).map((p) => [
-    ...axes.map((a) => (p.v ? p.v[a.var] : "")), p.tag, STATE_WORD[p.state] || p.state,
-    p.r && p.failed ? (failCode && failCode(p.r)) || "" : p.superseded ? "rerun as " + p.superseded : "",
+    ...axes.map((a) => (p.v ? p.v[a.var] : "")), p.tag, p.word || STATE_WORD[p.state] || p.state,
+    p.superseded ? "rerun as " + p.superseded : p.detail || (p.r && p.failed ? (failCode && failCode(p.r)) || "" : ""),
     ...METRICS.map((m) => (p.r ? metricOf(p, m.id) ?? "" : "")),
   ])];
-  downloadCsv("sweep-" + (sw.id || "results") + ".csv", toCsv(rows));
+  downloadCsv("sweep-" + (sw.id || "results") + ".csv", toCsv(rows, { excel: true }));
 }
 
 function valuesOf(r, sw) {
@@ -735,97 +1103,6 @@ function valuesOf(r, sw) {
   if (sw.points && sw.points[i]) return sw.points[i];
   if (i >= 0 && (sw.axes || []).length === 1) return { [sw.axes[0].var]: sw.axes[0].values[i] };
   return null;
-}
-
-const tick = (v) => (Math.abs(v) >= 100 ? localeNum(Math.round(v)) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
-const pad = (lo, hi) => { const d = (hi - lo) || Math.abs(hi) * 0.1 || 1; return [lo - d * 0.14, hi + d * 0.14]; };
-
-// The pictures of a sweep. One number swept: setup slack, and a metric you
-// pick, against it (a failed point is a cross on the axis). Otherwise the
-// trade-off: area against slack for every point.
-function plotsHtml(pts, sw, scale) {
-  const axes = sw.axes || [];
-  const one = axes.length === 1 ? axes[0].var : "";
-  const xs = one ? pts.map((p) => (p.v ? Number(p.v[one]) : NaN)) : [];
-  if (one && xs.every(Number.isFinite) && new Set(xs).size > 1) {
-    const P = pts.map((p, i) => ({ ...p, x: xs[i] })).sort((a, b) => a.x - b.x);
-    const pick = _chartPick.get(sw.id) || (one === "CLOCK_PERIOD" ? "power" : DIE_SIZERS.includes(one) ? "die" : "cells");
-    const a = trendSvg(P, one, "wns", scale);
-    const b = trendSvg(P, one, pick, scale);
-    const seg = "<div class='rn-seg sw-mseg' role='group' aria-label='The second chart shows'>" +
-      ["tns", "hold", "die", "cells", "util", "power", "runtime"].map((id) =>
-        "<button class='rn-segb" + (id === pick ? " is-on" : "") + "' data-chart='" + id + "' aria-pressed='" + (id === pick) + "' title='" + esc(M_BY[id].label + " against " + one) + "'>" + esc(M_BY[id].short) + "</button>").join("") + "</div>";
-    return a || b ? "<div class='sw-plots-wrap'><div class='sw-plots'>" + a + b + "</div>" + seg + "</div>" : "";
-  }
-  const t = tradeSvg(pts);
-  return t ? "<div class='sw-plots-wrap'><div class='sw-plots'>" + t + "</div></div>" : "";
-}
-
-// One metric against the swept value: a line through the finished points, the
-// best one green, failed ones a red cross on the x axis.
-function trendSvg(P, xvar, id, scale) {
-  const m = M_BY[id];
-  const val = (p) => metricOf(p, id);
-  const D = P.filter((p) => val(p) != null);
-  if (D.length < 2) return "";
-  // The y values in the unit the label states (power at its scale, utilisation in %).
-  const k = id === "power" && scale ? 1 / scale.div : id === "util" ? 100 : 1;
-  const unit = id === "runtime" ? "s" : id === "power" ? (scale ? scale.unit : "W") : id === "util" ? "%" : F.show(m.key, 1).unit;
-  const W = 320, H = 180, L = 52, R = 14, T = 12, B = 34;
-  const ys = D.map((p) => val(p) * k);
-  const [x0, x1] = pad(Math.min(...P.map((p) => p.x)), Math.max(...P.map((p) => p.x)));
-  const [y0, y1] = pad(Math.min(...ys), Math.max(...ys));
-  const X = (v) => L + (v - x0) / (x1 - x0) * (W - L - R), Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  const best = m.dir ? D.filter((p) => p.ok).sort((a, b) => (m.dir > 0 ? val(b) - val(a) : val(a) - val(b)))[0] : null;
-  const line = "<polyline class='sw-line' points='" + D.map((p) => X(p.x).toFixed(1) + "," + Y(val(p) * k).toFixed(1)).join(" ") + "'/>";
-  const dots = P.map((p) => {
-    const cx = X(p.x).toFixed(1);
-    if (val(p) == null) {
-      const cy = H - B;
-      return "<g class='sw-pt is-fail'><title>" + esc(p.tag + ": " + xvar + " " + p.x + (p.failed ? ", failed" : ", no result")) + "</title>" +
-        "<path d='M" + (cx - 4) + " " + (cy - 4) + "l8 8M" + (+cx + 4) + " " + (cy - 4) + "l-8 8'/></g>";
-    }
-    const cy = Y(val(p) * k).toFixed(1);
-    return "<g class='sw-pt" + (p === best ? " is-best" : "") + (p.ok ? "" : " is-fail") + "'><title>" + esc(p.tag + ": " + xvar + " " + p.x + ", " + m.label.toLowerCase() + " " + cellText(id, val(p), scale)) + "</title>" +
-      "<circle cx='" + cx + "' cy='" + cy + "' r='4.5'/></g>";
-  }).join("");
-  const xt = P.map((p) => "<text class='sw-tk' x='" + X(p.x).toFixed(1) + "' y='" + (H - B + 14) + "' text-anchor='middle'>" + esc(String(p.x)) + "</text>").join("");
-  const zero = (id === "wns" || id === "tns" || id === "hold") && y0 < 0 && y1 > 0 ? "<line class='sw-zero' x1='" + L + "' x2='" + (W - R) + "' y1='" + Y(0).toFixed(1) + "' y2='" + Y(0).toFixed(1) + "'/>" : "";
-  return "<figure class='sw-plot'><figcaption><b>" + esc(m.label) + "</b>" + (unit ? " (" + esc(unit) + ")" : "") + " by " + esc(xvar) + "</figcaption>" +
-    "<svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='" + esc(m.label + " for each value of " + xvar) + "'>" +
-    "<line class='sw-gridl' x1='" + L + "' x2='" + (W - R) + "' y1='" + T + "' y2='" + T + "'/>" +
-    "<line class='sw-ax' x1='" + L + "' x2='" + L + "' y1='" + T + "' y2='" + (H - B) + "'/><line class='sw-ax' x1='" + L + "' x2='" + (W - R) + "' y1='" + (H - B) + "' y2='" + (H - B) + "'/>" + zero +
-    "<text class='sw-tk' x='" + (L - 6) + "' y='" + (T + 4) + "' text-anchor='end'>" + tick(y1) + "</text><text class='sw-tk' x='" + (L - 6) + "' y='" + (H - B) + "' text-anchor='end'>" + tick(y0) + "</text>" +
-    xt + "<text class='sw-axl' x='" + ((L + W - R) / 2) + "' y='" + (H - 4) + "' text-anchor='middle'>" + esc(xvar) + "</text>" + line + dots + "</svg></figure>";
-}
-
-// Std-cell area (x) against setup WNS (y). Axes span the data (not from 0),
-// points labelled by their value, a label dropped when it would overlap.
-function tradeSvg(pts) {
-  const P = pts.map((p) => ({ ...p, wns: num(p.r, "timing__setup__ws"), area: num(p.r, "design__instance__area__stdcell") })).filter((p) => p.wns != null && p.area != null);
-  if (P.length < 2) return "";
-  const W = 460, H = 200, L = 64, R = 16, T = 14, B = 38;
-  const xs = P.map((p) => p.area), ys = P.map((p) => p.wns);
-  const [x0, x1] = pad(Math.min(...xs), Math.max(...xs)), [y0, y1] = pad(Math.min(...ys), Math.max(...ys));
-  const X = (v) => L + (v - x0) / (x1 - x0) * (W - L - R), Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  const placed = [];
-  const dots = P.map((p) => {
-    const cx = X(p.area), cy = Y(p.wns);
-    const lab = p.v ? Object.values(p.v).join("/") : p.tag;
-    const box = [cx - lab.length * 3.4, cy - 20, cx + lab.length * 3.4, cy - 8];
-    const hit = placed.some((b) => !(box[2] < b[0] || box[0] > b[2] || box[3] < b[1] || box[1] > b[3]));
-    if (!hit) placed.push(box);
-    return "<g class='sw-pt" + (p.ok ? "" : " is-fail") + "'><title>" + esc(p.tag + ": std-cell area " + F.showText("design__instance__area__stdcell", p.area) + ", setup WNS " + F.showText("timing__setup__ws", p.wns)) + "</title>" +
-      "<circle cx='" + cx.toFixed(1) + "' cy='" + cy.toFixed(1) + "' r='5'/>" +
-      (hit ? "" : "<text x='" + cx.toFixed(1) + "' y='" + (cy - 10).toFixed(1) + "' text-anchor='middle'>" + esc(lab) + "</text>") + "</g>";
-  }).join("");
-  const zero = y0 < 0 && y1 > 0 ? "<line class='sw-zero' x1='" + L + "' x2='" + (W - R) + "' y1='" + Y(0).toFixed(1) + "' y2='" + Y(0).toFixed(1) + "'/>" : "";
-  return "<figure class='sw-plot'><figcaption><b>Area against slack</b>, one dot per run</figcaption><svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='Std-cell area against setup slack for each point'>" +
-    "<line class='sw-ax' x1='" + L + "' x2='" + L + "' y1='" + T + "' y2='" + (H - B) + "'/><line class='sw-ax' x1='" + L + "' x2='" + (W - R) + "' y1='" + (H - B) + "' y2='" + (H - B) + "'/>" + zero +
-    "<text class='sw-tk' x='" + (L - 6) + "' y='" + (T + 4) + "' text-anchor='end'>" + tick(y1) + "</text><text class='sw-tk' x='" + (L - 6) + "' y='" + (H - B) + "' text-anchor='end'>" + tick(y0) + "</text>" +
-    "<text class='sw-tk' x='" + L + "' y='" + (H - B + 14) + "'>" + tick(x0) + "</text><text class='sw-tk' x='" + (W - R) + "' y='" + (H - B + 14) + "' text-anchor='end'>" + tick(x1) + "</text>" +
-    "<text class='sw-axl' x='" + ((L + W - R) / 2) + "' y='" + (H - 6) + "' text-anchor='middle'>std-cell area (µm²), smaller is better</text>" +
-    "<text class='sw-axl' transform='translate(14 " + ((T + H - B) / 2) + ") rotate(-90)' text-anchor='middle'>setup WNS (ns)</text>" + dots + "</svg></figure>";
 }
 
 // ------------------------------------------------------------------ continue a sweep
@@ -950,7 +1227,8 @@ async function useConfig(p, sw) {
   });
   const change = rows.filter((r) => !r.same);
   if (!change.length) {
-    toast.show("The config already has " + p.tag + "'s settings (" + rows.map((r) => r.k + " = " + asText(r.to)).join(", ") + ").", "info", 9000);
+    toast.show("The config already has " + p.tag + "'s settings (" + rows.map((r) => r.k + " = " + asText(r.to)).join(", ") + ").", "info", 12000,
+      p.r ? { label: "Run it once to check", run: () => checkRun(p) } : null);
     return;
   }
   const v = await customDialog({
@@ -998,13 +1276,62 @@ async function useConfig(p, sw) {
   const msg = "Saved in " + cfg + ": " + said.join("; ") + "." +
     (stuck.length ? " A pdk:: section of the config still sets " + stuck.join(", ") + " for this PDK: change it there." : "") +
     (shadow.length ? " Setup still has the one-off " + shadow.join(", ") + ", which wins over the config: clear it there." : "");
-  toast.show(msg, stuck.length || shadow.length ? "warn" : "success", 14000, undos.length ? { label: "Undo", run: async () => {
+  const acts = [];
+  if (undos.length) acts.push({ label: "Undo", run: async () => {
     try {
       for (const u of undos.slice().reverse()) await api.configUndo({ backup: u.backup, after: u.after });
       toast.show("The config is back as it was.", "success");
       document.dispatchEvent(new CustomEvent("g:config_changed", { detail: { keys: change.map((r) => r.k), from: "sweep-undo" } }));
     } catch (ex) { toast.show("Undo: " + (ex.message || ex), "warn", 9000); }
-  } } : null);
+  } });
+  // The winner must reproduce (ORFS AutoTuner's best config famously did
+  // not): one plain run from the saved config, its numbers held against the
+  // point's when it ends.
+  if (p.r && !stuck.length && !shadow.length) acts.push({ label: "Run it once to check", run: () => checkRun(p) });
+  toast.show(msg, stuck.length || shadow.length ? "warn" : "success", 14000, acts.length ? acts : null);
 }
 
-export const _test = { parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, typedValue, stillWins, stageLabel: FS.stageLabel };
+// A plain run of the config as saved, through the queue; when it ends, its
+// numbers against the point it should reproduce: "Same numbers as
+// sweep-clk-8" or what differs, with Compare one press away.
+const CHECK_KEYS = [["timing__setup__ws", "setup slack"], ["timing__hold__ws", "hold slack"], ["design__die__area", "die"],
+  ["design__instance__area__stdcell", "std-cell area"], ["power__total", "power"]];
+export async function checkRun(p) {
+  let job;
+  try {
+    const { collectRunPayload } = await import("./setup.js");
+    const base = collectRunPayload();
+    const d = new Date(), pad2 = (x) => String(x).padStart(2, "0");
+    const tag = "check-" + String(p.tag).slice(0, 40) + "-" + pad2(d.getHours()) + pad2(d.getMinutes());
+    const res = await api.queueAdd({ design_dir: state.designDir, spec: { ...base, tag, frm: null, to: null, only: null, skip: [] }, kind: "run", label: "Check of " + p.tag });
+    if (res && res.ok === false) throw new Error(res.reason || "the config check refused it");
+    job = (res && res.jobs && res.jobs[0]) || null;
+    toast.show("Running " + tag + " from the saved config, to check it gives " + p.tag + "'s numbers.", "info", 6000);
+  } catch (ex) { toast.show("The check run didn't start: " + (ex.message || ex), "error", 0); return; }
+  if (!job) return;
+  const design = state.designDir;
+  const onQ = async (e) => {
+    const ev = e.detail || {};
+    const j = ev.type === "queue:job" ? ev.job : (ev.jobs || []).find((x) => x.id === job.id);
+    if (!j || j.id !== job.id || !/^(done|failed|stopped|skipped)$/.test(j.state || "")) return;
+    document.removeEventListener("g:queue", onQ);
+    if (j.state !== "done") { toast.show("The check run " + (j.tag || job.tag || "") + " didn't finish (" + j.state + "): nothing to compare.", "warn", 9000); return; }
+    let runs = [];
+    try { runs = await api.runs(design); } catch (_e) { runs = []; }
+    const r = runs.find((x) => x.tag === j.tag);
+    if (!r) return;
+    const a = (p.r && p.r.key_metrics) || {}, b = r.key_metrics || {};
+    const diffs = [];
+    for (const [k, words] of CHECK_KEYS) {
+      if (typeof a[k] !== "number" || typeof b[k] !== "number") continue;
+      const dl = F.delta(k, b[k], a[k], null);
+      if (dl && !dl.same) diffs.push(words + " " + F.showText(k, a[k]) + " → " + F.showText(k, b[k]));
+    }
+    const cmp = { label: "Compare them", run: async () => { r._design = design; p.r._design = p.r._design || design; (await import("./runs.js")).compareRuns([p.r, r]); } };
+    if (!diffs.length) toast.show("Same numbers as " + p.tag + ": " + r.tag + " reproduces it (setup slack " + F.showText("timing__setup__ws", b.timing__setup__ws) + ").", "success", 12000, cmp);
+    else toast.show("Different from " + p.tag + ": " + diffs.join("; ") + ". Something else changed since it ran (Compare shows what).", "warn", 0, cmp);
+  };
+  document.addEventListener("g:queue", onQ);
+}
+
+export const _test = { planPoints, parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, typedValue, stillWins, stageLabel: FS.stageLabel };

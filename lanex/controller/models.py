@@ -144,6 +144,9 @@ class RunSummary:
     verdict: Optional[Dict[str, Any]] = None
     # Tag of the run this one was resumed from, if any.
     branched_from: Optional[str] = None
+    # The Runs page's tags and archived state (controller/runsmeta.py).
+    tags: List[str] = field(default_factory=list)
+    archived: bool = False
 
 
 @dataclass(frozen=True)

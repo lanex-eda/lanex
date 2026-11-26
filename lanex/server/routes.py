@@ -3702,6 +3702,218 @@ def h_run_delete(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+# ---------------------------------------------------------------------------
+# Runs page (lane 2): tags, archive, bulk delete with undo, the project's
+# baseline and saved views, free columns, "changed vs baseline", export.
+# Every handler names its design or run folders explicitly; none acts on the
+# server's active design by itself.
+# ---------------------------------------------------------------------------
+
+def _runs_known_designs() -> List[str]:
+    """Design folders LanEx knows (opened ones and the active one), resolved."""
+    from ..controller import designs
+    out: List[str] = []
+    for d in list(designs.list_designs()) + [_get_active_design_dir() or ""]:
+        if not d:
+            continue
+        try:
+            out.append(str(Path(d).expanduser().resolve()))
+        except (OSError, RuntimeError):
+            continue
+    return out
+
+
+def _runs_live_dirs() -> List[str]:
+    """Run folders being written now (every queue job's, else the one runner's)."""
+    try:
+        from ..controller import jobs  # lane 1's queue, when present
+        dirs = list(jobs.scheduler.live_run_dirs())
+        if dirs:
+            return dirs
+    except Exception:
+        pass
+    one = _live_run_dir()
+    return [one] if one else []
+
+
+def _runs_design_arg(raw: Any) -> Optional[Path]:
+    """A design folder from a request: known to LanEx, or one with a runs/."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        p = Path(raw).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return None
+    if not p.is_dir():
+        return None
+    if str(p) in _runs_known_designs() or (p / "runs").is_dir():
+        return p
+    return None
+
+
+def h_runs_meta(handler: Any) -> None:
+    """The project's baseline and saved views (``<design>/.gui-runs.json``).
+    GET ``?design_dir=``; POST ``{design_dir, baseline?, views?, default_view?}``."""
+    from ..controller import runsmeta
+    if getattr(handler, "command", "GET") == "POST":
+        body = getattr(handler, "_body", {}) or {}
+        d = _runs_design_arg(body.get("design_dir"))
+        if d is None:
+            _respond(handler, "that project folder is gone or unknown", 404)
+            return
+        patch = {k: body[k] for k in ("baseline", "views", "default_view") if k in body}
+        try:
+            _respond(handler, runsmeta.write_meta(d, **patch))
+        except OSError as ex:
+            _respond(handler, f"couldn't save {runsmeta.META_FILE} in {d}: {ex}", 500)
+        return
+    d = _runs_design_arg(_query_param(handler.path, "design_dir") or _get_active_design_dir())
+    if d is None:
+        _respond(handler, runsmeta._empty_meta())
+        return
+    runsmeta.purge_stale(d)
+    _respond(handler, runsmeta.read_meta(d))
+
+
+def h_runs_bulk(handler: Any) -> None:
+    """One action over many runs: archive, restore, tag, untag, delete (into
+    the trash, with Undo), undo, purge (controller/runsmeta.bulk)."""
+    from ..controller import runsmeta, branch
+    body = getattr(handler, "_body", {}) or {}
+    try:
+        res, status = runsmeta.bulk(
+            str(body.get("action") or ""), body.get("run_dirs") or [],
+            tags=body.get("tags"), batch=body.get("batch"), design_dirs=body.get("design_dirs"),
+            force=bool(body.get("force")), live=_runs_live_dirs(), known=_runs_known_designs(),
+            children_of=branch.children)
+    except Exception as ex:
+        _log.exception("runs bulk failed")
+        _respond(handler, str(ex), 500)
+        return
+    if status >= 400:
+        handler._send_json(res, status)
+        return
+    # A deleted run that was its project's baseline stops being it once purged.
+    if body.get("action") == "purge":
+        for d in body.get("design_dirs") or []:
+            dd = _runs_design_arg(d)
+            if dd is None:
+                continue
+            meta = runsmeta.read_meta(dd)
+            if meta.get("baseline") and not (dd / "runs" / meta["baseline"]).is_dir():
+                runsmeta.write_meta(dd, baseline=None)
+    _respond(handler, res)
+
+
+def h_runs_values(handler: Any) -> None:
+    """Any metric (``m:``) or setting (``s:``) of many runs, for the Runs
+    table's added columns. POST ``{run_dirs, keys}``."""
+    from ..controller import runsmeta
+    body = getattr(handler, "_body", {}) or {}
+    try:
+        _respond(handler, {"values": runsmeta.values(body.get("run_dirs") or [], body.get("keys") or [],
+                                                      live=_runs_live_dirs())})
+    except Exception as ex:
+        _log.exception("runs values failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_runs_changed(handler: Any) -> None:
+    """What each run changed against the baseline (plain settings).
+    POST ``{base, run_dirs}``."""
+    from ..controller import runsmeta
+    body = getattr(handler, "_body", {}) or {}
+    try:
+        _respond(handler, {"changes": runsmeta.changed(body.get("base"), body.get("run_dirs") or [])})
+    except Exception as ex:
+        _log.exception("runs changed failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_runs_keys(handler: Any) -> None:
+    """Metric and setting names this project's runs have (Columns picker),
+    with LibreLane's direction for each metric."""
+    from ..controller import runsmeta
+    d = _runs_design_arg(_query_param(handler.path, "design_dir") or _get_active_design_dir())
+    if d is None:
+        _respond(handler, {"runs_read": 0, "metrics": [], "settings": [], "directions": {}})
+        return
+    try:
+        out = runsmeta.keys(d)
+        dirs = runsmeta.metric_directions()
+        out["directions"] = {m["key"]: dirs[m["key"]] for m in out["metrics"] if m["key"] in dirs}
+        _respond(handler, out)
+    except Exception as ex:
+        _log.exception("runs keys failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_runs_export(handler: Any) -> None:
+    """The runs as JSON (``lanex-runs/1``) or a CSV of every final metric.
+    POST ``{fmt, rows: [{run_dir, ...row}], design, baseline, view}``; the
+    answer is ``{text, mime}`` for the page to save."""
+    from ..controller import runsmeta
+    body = getattr(handler, "_body", {}) or {}
+    rows = [r for r in (body.get("rows") or []) if isinstance(r, dict)][:5000]
+    fmt = str(body.get("fmt") or "json")
+    try:
+        if fmt == "json":
+            text = runsmeta.export_json(rows, design=body.get("design") or {}, baseline=body.get("baseline"),
+                                        view=body.get("view"), all_metrics=True)
+            _respond(handler, {"text": text, "mime": "application/json"})
+            return
+        dirs = [r.get("run_dir") for r in rows if isinstance(r.get("run_dir"), str)]
+        names, per = runsmeta.all_metrics_table(dirs)
+        table = [["Run", "Design", "Result", "Started"] + names]
+        for r in rows:
+            m = per.get(r.get("run_dir"), {})
+            res = r.get("result")
+            label = res.get("label") or res.get("state") or "" if isinstance(res, dict) else (res or "")
+            table.append([r.get("tag", ""), r.get("design", ""), label, r.get("started", "")] +
+                         [m.get(n, "") for n in names])
+        _respond(handler, {"text": runsmeta.excel_csv(table), "mime": "text/csv"})
+    except Exception as ex:
+        _log.exception("runs export failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_compare_image(handler: Any) -> None:
+    """Compare's layout row: a run's final render (``final/render/*.png``),
+    by its folder, for runs of any design LanEx knows. GET ``?run_dir=``."""
+    from ..controller import runsmeta
+    try:
+        run = runsmeta.check_run_dir(_query_param(handler.path, "run_dir"), known=_runs_known_designs())
+    except ValueError as ex:
+        _respond(handler, str(ex), 404)
+        return
+    pngs = sorted((run / "final" / "render").glob("*.png")) if (run / "final" / "render").is_dir() else []
+    if not pngs:
+        _respond(handler, "this run has no rendered layout (it ended before the final render)", 404)
+        return
+    try:
+        if pngs[0].stat().st_size > 12_000_000:
+            _respond(handler, "the render is too big to show here", 413)
+            return
+        handler._send_bytes(pngs[0].read_bytes(), 200, "image/png")
+    except OSError as ex:
+        _respond(handler, str(ex), 500)
+
+
+def h_synth_explore(handler: Any) -> None:
+    """The recipes of a SynthesisExploration run (controller/synthexplore.py),
+    by its folder. GET ``?run_dir=``."""
+    from ..controller import runsmeta, synthexplore
+    try:
+        run = runsmeta.check_run_dir(_query_param(handler.path, "run_dir"), known=_runs_known_designs())
+    except ValueError as ex:
+        _respond(handler, str(ex), 404)
+        return
+    if not synthexplore.is_exploration(run):
+        _respond(handler, "that run is not a synthesis exploration", 404)
+        return
+    _respond(handler, synthexplore.read(run))
+
+
 def serve_view(spec: str) -> Optional[Dict[str, Any]]:
     if "/" in spec:
         tag, fmt = spec.split("/", 1)
@@ -4665,6 +4877,11 @@ def h_dse_start(handler: Any) -> None:
             overrides_list = dse.expand_sweep(spec)
         except ValueError as ex:
             _respond(handler, str(ex), 400)
+            return
+        # The sheet's preview table: points unticked there are not run.
+        overrides_list = dse.drop_points(overrides_list, body.get("drop") or [])
+        if not overrides_list:
+            _respond(handler, "Every planned point is unticked: tick at least one to run.", 400)
             return
     base_overrides = dict(body.get("base_overrides") or {})
     # The whole sweep is checked before the first point: a fixed die that
@@ -6467,6 +6684,14 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/pdk-layers", h_pdk_layers),
     ("/api/update-check", h_update_check),
     ("/api/runs", h_runs),
+    ("/api/runs-meta", h_runs_meta),
+    ("/api/runs-bulk", h_runs_bulk),
+    ("/api/runs-values", h_runs_values),
+    ("/api/runs-changed", h_runs_changed),
+    ("/api/runs-keys", h_runs_keys),
+    ("/api/runs-export", h_runs_export),
+    ("/api/compare-image", h_compare_image),
+    ("/api/synth-explore", h_synth_explore),
     ("/api/known-designs", h_known_designs),
     ("/api/run-step-log", h_run_step_log),
     ("/api/run-files", h_run_files),
@@ -6596,6 +6821,7 @@ _POST_ROUTES = {
     "/api/container/enable-docker-group", "/api/container/start-engine", "/api/tools/cancel",
     "/api/tools/install/", "/api/tools/uninstall/", "/api/pdk/uninstall",
     "/api/pdk/fix-permissions", "/api/copy-spm",
+    "/api/runs-bulk", "/api/runs-values", "/api/runs-changed", "/api/runs-export",
     "/api/verify/report", "/api/warnings/waive", "/api/warnings/unwaive",
     # Layout (lane 3)
     "/api/layout/locate", "/api/layout/mesh/cancel", "/api/layout/analysis/start",
@@ -6603,7 +6829,7 @@ _POST_ROUTES = {
 }
 _BOTH_ROUTES = {
     "/api/run-note", "/api/watch", "/api/settings/pdk-root", "/api/suggest-config",
-    "/api/update-check",
+    "/api/update-check", "/api/runs-meta",
 }
 _GET_ROUTES = {
     "/api/queue", "/api/power/hold", "/api/run/log",
@@ -6626,6 +6852,7 @@ _GET_ROUTES = {
     "/api/reports/drc", "/api/reports/lvs", "/api/fs/roots", "/api/fs/list", "/api/walk-sources",
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
     "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
+    "/api/runs-keys", "/api/compare-image", "/api/synth-explore",
     "/api/timing/paths", "/api/timing/path", "/api/warnings", "/api/verify/summary",
     # Layout (lane 3)
     "/api/layout/nets", "/api/layout/net", "/api/layout/analysis", "/api/layout/viewer-status",

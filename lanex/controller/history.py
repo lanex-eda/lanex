@@ -293,6 +293,9 @@ def _run_signature(run_dir: Path) -> tuple:
         # the Runs table showed the run still pinned.
         _mtime_ns(os.path.join(rd, _PIN_MARKER)),
         _mtime_ns(os.path.join(rd, _IMPORT_MARKER)),
+        # Tags and the archive marker (runsmeta), the same way.
+        _mtime_ns(os.path.join(rd, _TAGS_FILE)),
+        _mtime_ns(os.path.join(rd, _ARCHIVE_MARKER)),
     )
 
 
@@ -366,7 +369,9 @@ def _fast_signature(run_dir: Path, st: Optional[os.stat_result] = None) -> tuple
     return (st.st_mtime_ns, st.st_ino,
             _mtime_ns(os.path.join(rd, _PIN_MARKER)),
             _mtime_ns(os.path.join(rd, _NOTE_FILE)),
-            _mtime_ns(os.path.join(rd, "final", "metrics.json")))
+            _mtime_ns(os.path.join(rd, "final", "metrics.json")),
+            _mtime_ns(os.path.join(rd, _TAGS_FILE)),
+            _mtime_ns(os.path.join(rd, _ARCHIVE_MARKER)))
 
 
 # Who is writing a run right now. The server registers the run controller's
@@ -745,6 +750,15 @@ def _summarise(run_dir: Path) -> RunSummary:
     except Exception:
         reused = 0
 
+    # LibreLane's SynthesisExploration: nine recipes, no final/ folder. Its
+    # verdict and name come from its recipes (synthexplore.py); it has no
+    # final numbers (its pre-layout ones would read like a finished chip's).
+    if (run_dir / "1-synthesis-area-0").is_dir():
+        from . import synthexplore
+        verdict = synthexplore.verdict(run_dir)
+        flow_name = "SynthesisExploration"
+        key = {}
+
     return RunSummary(
         tag=run_dir.name,
         run_dir=str(run_dir),
@@ -765,6 +779,8 @@ def _summarise(run_dir: Path) -> RunSummary:
         pinned=(run_dir / _PIN_MARKER).is_file(),
         origin=run_origin(run_dir),
         note=read_note(run_dir)[:200],
+        tags=_runsmeta.read_tags(run_dir),
+        archived=(run_dir / _ARCHIVE_MARKER).is_file(),
     )
 
 
@@ -1709,6 +1725,7 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
         metrics = (view.get("metrics") or {}).get("values") or {}
         for k, v in metrics.items():
             metric_union.setdefault(k, {})[col] = v
+        renders = sorted((Path(run_dir) / "final" / "render").glob("*.png")) if (Path(run_dir) / "final" / "render").is_dir() else []
         runs.append({
             "col": col,
             "tag": tag,
@@ -1716,21 +1733,38 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
             "run_dir": run_dir,
             "success": _success_from_metrics(metrics, run_dir=Path(run_dir)),
             "summary": view.get("summary") or [],
+            # Compare's layout row: the final render, and the die to draw it
+            # at one scale with the others.
+            "render": bool(renders),
+            "die_bbox": metrics.get("design__die__bbox"),
+            "librelane_version": ((config_by_col[col].get("meta") or {}).get("librelane_version")
+                                  if isinstance(config_by_col[col].get("meta"), dict) else None),
         })
 
     cols = [r["col"] for r in runs]
 
     # Config diff: only keys whose value differs across the runs (or is absent
-    # in some). Compared by JSON repr to avoid type/ordering false-negatives.
+    # in some). Compared by JSON repr to avoid type/ordering false-negatives,
+    # after each run's own folders are written as <run>, <design> and <pdk>:
+    # two run folders (or a run imported from another PC) always differ in
+    # those, which is not what "which settings changed" means. A path that
+    # still differs (another SDC file) is a real difference, and is listed in
+    # ``config_paths`` so the page can fold it apart.
     all_keys = set()
     for cfg in config_by_col.values():
         all_keys.update(cfg.keys())
+    prefixes = {c: _runsmeta._prefixes(Path(c), config_by_col.get(c, {})) for c in cols}
     config_diff: Dict[str, Dict[str, Any]] = {}
+    config_paths: List[str] = []
     for key in sorted(all_keys):
+        if key == "meta":
+            continue
         vals = {c: config_by_col.get(c, {}).get(key) for c in cols}
-        reprs = {json.dumps(_jsonify(v), sort_keys=True) for v in vals.values()}
+        reprs = {json.dumps(_jsonify(_runsmeta._norm(v, prefixes[c])), sort_keys=True) for c, v in vals.items()}
         if len(reprs) > 1:
             config_diff[key] = vals
+            if any(_runsmeta.is_path_value(v) for v in vals.values() if v is not None) or key in ("DESIGN_DIR", "PDK_ROOT", "RUN_TAG"):
+                config_paths.append(key)
 
     # Key-config block: the most decision-relevant vars (clock, utilisation,
     # synth strategy, …) shown for EVERY run — not just the ones that differ —
@@ -1746,7 +1780,10 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
     # optimisation direction is KNOWN from the registry — guessing a direction
     # for an unregistered/renamed metric could highlight the worse run as "best"
     # (a silent Fear-A/J trap), so an unknown metric gets no highlight.
-    meta = _metric_meta()
+    # Directions from LibreLane's registry, looked up by the metric's base
+    # name the way LibreLane's own compare does (a per-corner row reads like
+    # its base metric), with LibreLane's "no direction" kept as unknown.
+    dirs = _runsmeta.metric_directions()
     best: Dict[str, str] = {}
     metric_meta: Dict[str, Dict[str, Any]] = {}
     # Only a run that passed can be the best at anything: a failed or stopped
@@ -1754,12 +1791,12 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
     # short) would otherwise win.
     passed = {r["col"] for r in runs if r.get("success")}
     for metric, per_col in metric_union.items():
-        m = meta.get(metric)
-        known = m is not None
-        hib = bool(m.get("higher_is_better", True)) if known else True
+        m = _runsmeta.direction_of(metric, dirs)
+        known = m is not None and isinstance(m.get("higher_is_better"), bool)
+        hib = bool(m["higher_is_better"]) if known else True
         metric_meta[metric] = {
             "higher_is_better": hib,
-            "critical": bool(m.get("critical", False)) if known else False,
+            "critical": bool(m.get("critical", False)) if m else False,
             "direction_known": known,
         }
         if not known:
@@ -1773,6 +1810,7 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
     return {
         "runs": runs,
         "config_diff": config_diff,
+        "config_paths": config_paths,
         "key_config": key_config,
         "metric_table": metric_union,
         "metric_meta": metric_meta,
@@ -2022,6 +2060,11 @@ _IMPORT_MARKER = "gui-imported.json"
 
 # Empty marker file present iff the user pinned/starred the run (E4.5).
 _PIN_MARKER = ".gui-pin"
+
+# Tags and the archived state (controller/runsmeta.py).
+from . import runsmeta as _runsmeta  # noqa: E402
+_TAGS_FILE = _runsmeta.TAGS_FILE
+_ARCHIVE_MARKER = _runsmeta.ARCHIVE_MARKER
 
 
 # Per-design metric watch-list (E4.2): rules of the form "this metric must stay

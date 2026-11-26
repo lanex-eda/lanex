@@ -182,3 +182,106 @@ export function signed(v, d = 3) {
   if (v === 0) return fixed(0, d, false);
   return (v > 0 ? "+" : "−") + fixed(Math.abs(v), d, false);
 }
+
+// ---------- direction and change ----------------------------------------------------
+// One reading of "better or worse" for Runs, Compare, Analytics and the sweep
+// views. `meta` is the server's metric_meta (higher_is_better,
+// direction_known) or LibreLane's registry entry; it is looked up by the
+// full name, then by the base name (a per-corner row reads like its base
+// metric, as LibreLane's own compare does). A few metrics LibreLane doesn't
+// register read like their registered relatives (controller/runsmeta.py
+// LANEX_DIRECTIONS says why for each).
+export const LANEX_DIRECTIONS = {
+  design__instance__area__stdcell: -1,
+  design__instance__area__macros: -1,
+  design__instance__area__padcells: -1,
+  design__instance__count__stdcell: -1,
+  klayout__drc_error__count: -1,
+  runtime: -1,
+};
+// The registry's direction for the numbers every page shows, for when no
+// metric_meta is at hand (LibreLane common/metrics/library.py).
+const REGISTRY = {
+  timing__setup__ws: 1, timing__hold__ws: 1, timing__setup__tns: 1, timing__hold__tns: 1,
+  timing__setup__wns: 1, timing__hold__wns: 1, timing__setup_r2r__ws: 1, timing__hold_r2r__ws: 1,
+  design__instance__utilization: 1, design__die__area: -1, design__core__area: -1,
+  design__instance__area: -1, design__instance__count: -1, power__total: -1,
+  route__wirelength: -1, route__drc_errors: -1, magic__drc_error__count: -1,
+  design__lvs_error__count: -1, antenna__violating__nets: -1, antenna__violating__pins: -1,
+};
+// +1 higher is better, -1 lower is better, 0 not known (no colour).
+export function direction(key, meta) {
+  const look = (k) => {
+    const m = meta && meta[k];
+    if (!m) return null;
+    if (m.direction_known === false) return 0;
+    if (typeof m.higher_is_better !== "boolean") return 0;
+    return m.higher_is_better ? 1 : -1;
+  };
+  const base = parseKey(key).base;
+  const d = look(key) || look(base);
+  if (d) return d;
+  return LANEX_DIRECTIONS[key] || LANEX_DIRECTIONS[base] || REGISTRY[key] || REGISTRY[base] || 0;
+}
+
+// How far `v` moved from `ref`, one way everywhere:
+//   { abs, pct, absText, pctText, text, cls, same, dir }
+// Δ always; Δ% only where a ratio means something (areas, lengths, power,
+// runtime, counts of 100 or more; never slack, where a reference near zero
+// makes a percentage meaningless). "same" within 0.05 % of the reference,
+// and at least 5 ps of slack or a second of runtime. `cls` is is-better /
+// is-worse only when the direction is known; `scale` (from scaleOf) keeps a
+// power delta in its row's prefix.
+export function delta(key, v, ref, meta, { scale = null, dir = null } = {}) {
+  if (!isNum(v) || !isNum(ref)) return null;
+  const base = parseKey(key).base;
+  const u = key === "runtime" ? "s" : unitOf(base);
+  const d = v - ref;
+  const floor = u === "ns" ? 0.005 : u === "s" ? 1 : 1e-12;
+  const same = Math.abs(d) <= Math.max(Math.abs(ref) * 5e-4, floor);
+  const dd = dir == null ? direction(key, meta) : dir;
+  const out = { abs: d, pct: null, absText: "same", pctText: "", text: "same", cls: "is-same", same, dir: dd };
+  if (same) return out;
+  const sign = d > 0 ? "+" : "−";
+  const a = Math.abs(d);
+  let absText;
+  if (u === "ns") absText = sign + fixed(a, a < 0.1 ? 3 : 2, false);
+  else if (u === "ratio") absText = sign + fixed(a * 100, 1, false) + " pt";
+  else if (u === "W") {
+    const st = scale || (() => { const [div, pre] = stepFor(Math.abs(ref) || a); return { div, unit: pre + "W" }; })();
+    const x = a / st.div;
+    absText = sign + fixed(x, digitsFor(x), false);
+  } else if (u === "s") absText = sign + durText(a);
+  else if (u === "µm²" || u === "µm") absText = sign + (a >= 100 ? fixed(Math.round(a), 0, true) : num(a));
+  else absText = sign + num(Number(a.toPrecision(4)));
+  const ratioOk = ref !== 0 && Math.sign(v) === Math.sign(ref) &&
+    (u === "µm²" || u === "µm" || u === "W" || u === "s" || (u === "" && Math.abs(ref) >= 100));
+  if (ratioOk) {
+    const p = (d / Math.abs(ref)) * 100;
+    out.pct = p;
+    out.pctText = (p > 0 ? "+" : "−") + (Math.abs(p) >= 10 ? Math.round(Math.abs(p)) : Math.abs(p).toFixed(1)) + "%";
+  }
+  out.absText = absText;
+  out.text = absText + (out.pctText ? " " + out.pctText : "");
+  out.cls = !dd ? "" : (d > 0) === (dd > 0) ? "is-better" : "is-worse";
+  return out;
+}
+function durText(s) {
+  if (s < 60) return Math.round(s) + " s";
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  if (m < 60) return m + " min" + (r ? " " + r + " s" : "");
+  return Math.floor(m / 60) + " h " + (m % 60) + " min";
+}
+// The words for a delta's hover: "−0.95 ns, worse than the baseline (higher is better)".
+export function deltaWords(dl, against = "the baseline") {
+  if (!dl) return "";
+  if (dl.same) return "The same as " + against;
+  const how = dl.cls === "is-better" ? "better than " : dl.cls === "is-worse" ? "worse than " : "changed from ";
+  const why = dl.dir > 0 ? " (higher is better)" : dl.dir < 0 ? " (lower is better)" : " (LibreLane gives this number no better or worse direction)";
+  return dl.text + ", " + how + against + why;
+}
+// The direction mark for a column or row head: ↑ higher is better, ↓ lower.
+export function dirMark(dir) { return dir > 0 ? "↑" : dir < 0 ? "↓" : ""; }
+export function dirWords(dir) {
+  return dir > 0 ? "Higher is better" : dir < 0 ? "Lower is better" : "No better or worse direction";
+}

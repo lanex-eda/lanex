@@ -26,7 +26,8 @@ const MOD = resolve(HERE, "..", "server", "static", "modules");
 const toUrl = (p) => pathToFileURL(p).href;
 
 const { api, fmt } = await import(toUrl(resolve(MOD, "api.js")));
-const { csvCell } = await import(toUrl(resolve(MOD, "csvutil.js")));
+const csvMod = await import(toUrl(resolve(MOD, "csvutil.js")));
+const { csvCell } = csvMod;
 const { clampZoom } = await import(toUrl(resolve(MOD, "zoom.js")));
 const toolsModule = await import(toUrl(resolve(MOD, "tools.js")));
 const { normalizeUnavailableLibraries } = toolsModule;
@@ -513,6 +514,39 @@ check("display fidelity: all 300+ real run metrics render faithfully", () => {
 // in Analytics and raw W in Compare; utilisation a fraction in Compare).
 const MF = await import(toUrl(resolve(MOD, "metricfmt.js")));
 const AM0 = await import(toUrl(resolve(MOD, "analytics-model.js")));
+check("metricfmt: one direction by base name, with LibreLane's 'unknown' kept", () => {
+  const meta = { timing__setup__ws: { higher_is_better: true, direction_known: true }, odd__thing: { higher_is_better: true, direction_known: false } };
+  assert.equal(MF.direction("timing__setup__ws__corner:max_ss_100C_1v60", meta), 1, "a corner reads like its base metric");
+  assert.equal(MF.direction("design__instance__area__stdcell", {}), -1, "std-cell area reads like an area");
+  assert.equal(MF.direction("power__total", null), -1, "the registry's direction without metric_meta");
+  assert.equal(MF.direction("odd__thing", meta), 0, "a direction the server doesn't know stays unknown");
+  assert.equal(MF.dirMark(1), "↑");
+});
+
+check("metricfmt: one delta: Δ always, Δ% only where a ratio means something", () => {
+  const ws = MF.delta("timing__setup__ws", 1.41, 2.362, null);
+  assert.equal(ws.absText, "−0.95"); assert.equal(ws.pctText, "", "never a percent of slack"); assert.equal(ws.cls, "is-worse");
+  const die = MF.delta("design__die__area", 7180, 8769, null);
+  assert.equal(die.text, "−1,589 −18%"); assert.equal(die.cls, "is-better");
+  assert.equal(MF.delta("design__die__area", 8769.2, 8769, null).same, true, "within 0.05 % is the same");
+  assert.equal(MF.delta("timing__setup__ws", 2.364, 2.362, null).same, true, "within 5 ps is the same");
+  const util = MF.delta("design__instance__utilization", 0.55, 0.45, null);
+  assert.equal(util.absText, "+10.0 pt");
+  const pw = MF.delta("power__total", 0.001553, 0.001528, null, { scale: MF.scaleOf("power__total", [0.001528]) });
+  assert.equal(pw.text, "+0.025 +1.6%");
+  assert.equal(MF.delta("some__count", 3, 2, null).pctText, "", "a small count gets no percent");
+  assert.equal(MF.delta("some__count", 3, 2, null).cls, "", "no direction: no colour");
+  assert.equal(MF.delta("x", "Infinity", 2, null), null);
+  assert.match(MF.deltaWords(ws), /worse than the baseline \(higher is better\)/);
+});
+
+check("csv: the Excel export has a BOM, CRLF ends, quoted text and bare numbers", () => {
+  const t = csvMod.toCsv([["Run", "WNS (ns)"], ["a,b", 2.5], ["=x", -Infinity], ["＝y", NaN]], { excel: true });
+  assert.equal(t.charCodeAt(0), 0xfeff);
+  assert.equal(t.slice(1), '"Run","WNS (ns)"\r\n"a,b",2.5\r\n"\'=x",-Infinity\r\n"\'＝y",NaN\r\n');
+  assert.equal(csvMod.toCsv([["a", 1], ["b", 2]]), "a,1\nb,2", "the plain CSV is unchanged");
+});
+
 check("metricfmt: power, utilisation and slack read the same on every page", () => {
   const raw = readFileSync(resolve(HERE, "goldens", "display_run", "metrics.json"), "utf8");
   const tokened = raw.replace(/([:\[,]\s*)(-?Infinity|NaN)(\s*[,}\]])/g, '$1"$2"$3');
@@ -788,8 +822,13 @@ check("compare + DSE never index the metric/config table by tag (N1 regression)"
 
 check("compare: a delta says how far a number moved, and whether that is better", () => {
   const up = { higher_is_better: true, direction_known: true }, down = { higher_is_better: false, direction_known: true };
-  assert.deepEqual(cmp.deltaOf(4.1, 2.362, up, "ns"), { text: "+1.74 ns", cls: "is-better" });
-  assert.deepEqual(cmp.deltaOf(10367.1, 8769, down, "µm²"), { text: "+18 %", cls: "is-worse" });
+  // The one delta (metricfmt.delta): Δ always, Δ% only where a ratio means
+  // something (never slack); the unit is in the row label, once.
+  const ws = cmp.deltaOf(4.1, 2.362, up, "ns");
+  assert.equal(ws.text, "+1.74"); assert.equal(ws.cls, "is-better");
+  const area = cmp.deltaOf(10367.1, 8769, down, "µm²");
+  assert.equal(area.text, "+1,598 +18%"); assert.equal(area.cls, "is-worse");
+  assert.equal(cmp.deltaOf(0.001553, 0.001528, down, "", "power__total").text, "+0.025 +1.6%", "power: the row's prefix, and a percent");
   assert.equal(cmp.deltaOf(5, 5, down).text, "same");
   assert.equal(cmp.deltaOf(1226, 842, null).cls, "", "no known direction: no colour");
   assert.equal(cmp.deltaOf(1226, 842, { higher_is_better: true, direction_known: false }).cls, "", "an unknown direction is never coloured");
@@ -799,13 +838,65 @@ check("compare: a delta says how far a number moved, and whether that is better"
   // The delta rides in the cell, after the value; the exact value stays in the title.
   const cell = cmp.summaryCellHtml({ value: 1234.7, unit: "µm" }, cmp.deltaOf(1234.7, 1000, down, "µm"));
   assert.match(cell, /title='1234\.7'/);
-  assert.match(cell, /class='cmp-d is-worse'>\+23 %</);
+  assert.match(cell, /class='cmp-d is-worse' title='[^']*worse than the reference \(lower is better\)'>\+235 \+23%</);
+});
+
+// ------------------------------------------------ studies: point states and charts (lane 2)
+const SMod = await import(toUrl(resolve(MOD, "studymodel.js")));
+check("study: a point's state in plain words, from its job or its run", () => {
+  const done = { step_count: 78, steps_done: 78, steps_failed: 0 };
+  assert.equal(SMod.pointKey({ job: { state: "queued" } }), "queued");
+  assert.equal(SMod.pointKey({ job: { state: "running" } }), "running");
+  assert.equal(SMod.pointKey({ run: null, active: true }), "queued", "a planned point is a row before it runs");
+  assert.equal(SMod.pointKey({ run: null, active: false }), "skipped");
+  assert.equal(SMod.pointKey({ run: { ...done, verdict: { state: "passed" }, key_metrics: { timing__setup__ws: 0.4 } } }), "clean");
+  // LibreLane raises timing violations after the flow ends: a result, not a failure.
+  assert.equal(SMod.pointKey({ run: { ...done, verdict: { state: "failed" }, key_metrics: { timing__setup__ws: -0.42 } } }), "missed");
+  assert.equal(SMod.pointKey({ run: { step_count: 40, steps_done: 35, steps_failed: 1, verdict: { state: "failed", stage: "placement" }, key_metrics: { timing__setup__ws: -2 } } }), "failed",
+    "a run that died mid-flow is a failure, whatever its early slack");
+  assert.equal(SMod.pointKey({ run: { ...done, verdict: { state: "warning", timing_miss: { ws: -0.1 } }, key_metrics: {} } }), "missed");
+  const w = SMod.pointWords("failed", { run: { verdict: { state: "failed", stage: "placement" } }, stageLabel: () => "Placement", code: "DPL-0036" });
+  assert.equal(w.word, "Failed at Placement"); assert.equal(w.detail, "DPL-0036");
+  assert.equal(SMod.pointWords("missed", { run: { key_metrics: { timing__setup__ws: -0.42 } } }).detail, "setup -0.42 ns");
+  assert.equal(SMod.clockText(8), "8 ns (125 MHz)");
+});
+check("study: fail fast fires on two of the first three failing the same way, never on timing missed", () => {
+  const fp = SMod.fingerprint("[ERROR GRT-0116] Global routing finished with congestion", "routing");
+  assert.equal(fp, "routing|GRT-0116");
+  assert.equal(SMod.fingerprint("ERROR: Module `no_such_top' not found!", "synthesis"), "synthesis|error: module <name> not found!");
+  assert.deepEqual(SMod.sameFailure([{ tag: "a", key: "failed", fp }, { tag: "b", key: "clean" }, { tag: "c", key: "failed", fp }]), { fingerprint: fp, points: ["a", "c"] });
+  assert.equal(SMod.sameFailure([{ tag: "a", key: "missed", fp }, { tag: "b", key: "missed", fp }]), null, "a clock too fast is a result");
+  assert.equal(SMod.sameFailure([{ tag: "a", key: "clean" }, { tag: "b", key: "clean" }, { tag: "c", key: "clean" }, { tag: "d", key: "failed", fp }, { tag: "e", key: "failed", fp }]), null, "only the first three count");
+  assert.match(SMod.stripHtml([{ tag: "a", key: "clean" }, { tag: "b", key: "failed" }]), /m-fill[\s\S]*m-cross/);
+});
+const SCh = await import(toUrl(resolve(MOD, "studycharts.js")));
+check("study charts: failed points stay on the chart, the front is the points nothing beats", () => {
+  const pts = [{ x: 10, y: 2.3, key: "clean", tag: "a" }, { x: 9, y: 0.8, key: "clean", tag: "b" }, { x: 8, y: -0.4, key: "missed", tag: "c" }, { x: 7, key: "failed", tag: "d" }, { x: 6, key: "queued", tag: "e" }];
+  const o = SCh.byValueOption({ xvar: "CLOCK_PERIOD", xunit: "ns", clock: true, metric: { key: "timing__setup__ws", label: "Setup WNS", unit: "ns", dir: 1 }, points: pts });
+  assert.equal(o.xAxis.length, 2, "a clock sweep reads in ns and MHz");
+  const failed = o.series.find((s) => s.name === "failed");
+  assert.equal(failed.data.length, 1, "the failed point is drawn (a cross on the rail), not dropped");
+  assert.equal(o.series[0].markLine.data[0].yAxis, 0, "slack has its 0 line");
+  assert.ok(o.series[0].markArea, "negative slack shades 'fails timing'");
+  assert.equal(o.series.find((s) => s.name === "best").data[0].p.tag, "a", "best ignores a point that missed timing");
+  const front = SCh.paretoFront([{ x: 100, y: 1 }, { x: 90, y: 0.5 }, { x: 110, y: 0.9 }, { x: 80, y: 0.2 }], -1, 1);
+  assert.deepEqual(front.map((p) => p.x), [80, 90, 100], "smaller area and larger slack; 110 is beaten by 100");
+  const h = SCh.heatmapOption({ xvar: "A", yvar: "B", xs: [1, 2], ys: [3, 4], metric: { label: "WNS", unit: "ns", dir: 1 },
+    points: [{ xv: 1, yv: 3, y: 0.5, key: "clean" }, { xv: 2, yv: 3, y: -0.5, key: "missed" }, { xv: 1, yv: 4, key: "failed" }] });
+  assert.equal(h.visualMap.min, -0.5); assert.equal(h.visualMap.max, 0.5, "slack diverges around 0");
+  assert.equal(h.visualMap.dimension, 2, "coloured by the metric, never by an id");
+  assert.equal(h.series[1].data.length, 1, "a failed cell is crossed");
 });
 
 // ------------------------------------------------ sweeps (audit G11, 4.7)
 const SW = (await import(toUrl(resolve(MOD, "sweeps.js"))))._test;
 check("sweeps: a range typo is an error, never one text value; values are type-checked", () => {
   assert.deepEqual(SW.parseValuesStrict("35:65:15"), { values: ["35", "50", "65"], error: "" });
+  // N points and a log spread (the advanced sheet's value modes).
+  assert.deepEqual(SW.parseValuesStrict("35..65/4").values, ["35", "45", "55", "65"]);
+  assert.deepEqual(SW.parseValuesStrict("1..100/5 log").values, ["1", "3.16", "10", "31.6", "100"]);
+  assert.match(SW.parseValuesStrict("0..10/3 log").error, /above 0/);
+  assert.match(SW.parseValuesStrict("1..2/1").error, /between 2 and/);
   assert.deepEqual(SW.parseValuesStrict("10, 9, 8").values, ["10", "9", "8"]);
   assert.match(SW.parseValuesStrict("35:65:x").error, /isn't a range/);
   assert.match(SW.parseValuesStrict("35:65").error, /isn't a range/);
@@ -819,6 +910,15 @@ check("sweeps: a range typo is an error, never one text value; values are type-c
   // Text settings keep their colons (a path, a dir:: value).
   assert.equal(SW.parseValuesStrict("dir::src/a.v", "path").error, "");
   assert.equal(SW.countRuns([{ values: "35:65:x" }], "grid"), 0);
+});
+
+check("sweeps: the preview lists the points the server will run, in its order", () => {
+  const grid = SW.planPoints([{ var: "A", values: "1, 2" }, { var: "B", values: "x, y" }], "grid");
+  assert.deepEqual(grid, [{ A: "1", B: "x" }, { A: "1", B: "y" }, { A: "2", B: "x" }, { A: "2", B: "y" }], "itertools.product order");
+  assert.deepEqual(SW.planPoints([{ var: "A", values: "1, 2" }, { var: "B", values: "x, y" }], "list"), [{ A: "1", B: "x" }, { A: "2", B: "y" }]);
+  assert.deepEqual(SW.planPoints([{ var: "A", values: "1, 2" }, { var: "B", values: "x" }], "list"), [], "paired needs equal lengths");
+  assert.deepEqual(SW.planPoints([{ var: "", values: "1" }], "grid"), []);
+  assert.equal(SW.planPoints([{ var: "CLOCK_PERIOD", values: "10:8:1" }], "grid").length, 3);
 });
 
 check("sweeps: the fastest-clock preset starts at this design's clock and goes down", () => {
@@ -1038,7 +1138,7 @@ check("compare: a summary cell shows the rounded value but titles the raw one", 
   // The exported, pure cell builder (the tape-out side-by-side grid).
   const cell = cmp.summaryCellHtml({ value: 1234.7, unit: "µm", status: "pass" });
   assert.match(cell, /title='1234\.7'/, "the exact value is not one hover away");
-  assert.match(cell, />1,235 µm</, "the rounded, grouped display is missing");
+  assert.match(cell, />1,235 <small>µm<\/small></, "the rounded, grouped display is missing");
   assert.match(cell, /cmp-num pass/, "pass/fail status class dropped");
   // An absent row stays the em-dash — never a fabricated 0, never a bare title.
   assert.equal(cmp.summaryCellHtml(null), "<td>—</td>");
@@ -1463,7 +1563,10 @@ check("analytics: deltas are coloured only when the registry knows the direction
   const meta = new Map([["timing__setup__ws", { higher_is_better: true }], ["power__total", { higher_is_better: false }]]);
   assert.equal(AM.delta(3.2, 4.1, AM.directionOf(meta, "timing__setup__ws")).verdict, "worse");
   assert.equal(AM.delta(0.00141, 0.00148, AM.directionOf(meta, "power__total")).verdict, "better");
-  assert.equal(AM.delta(4790, 4546, AM.directionOf(meta, "design__instance__area__stdcell")).verdict, "neutral");
+  // Std-cell area isn't in LibreLane's registry: it reads like the area it is
+  // part of (lower is better), the same on Runs, Compare and Analytics.
+  assert.equal(AM.delta(4790, 4546, AM.directionOf(meta, "design__instance__area__stdcell")).verdict, "worse");
+  assert.equal(AM.delta(4790, 4546, AM.directionOf(meta, "some__unregistered__thing")).verdict, "neutral");
   assert.equal(AM.delta(5, 5, 1).verdict, "same");
   assert.equal(AM.delta("Infinity", 4, 1), null, "non-finite values get no delta");
 });
@@ -2011,19 +2114,34 @@ await checkAsync("context: newest run by default, baseline is the last run befor
     { tag: "a", success: true, started_at: "2026-10-06T18:00" },
   ];
   api.runs = async () => rows.map((r) => ({ ...r }));
+  // One baseline per project, kept by the server (<design>/.gui-runs.json).
+  const saved = [];
+  const metaDoc = new Map();
+  api.runsMeta = async (d) => ({ baseline: metaDoc.get(d) || null, views: [] });
+  api.setRunsMeta = async (d, patch) => { saved.push([d, patch]); metaDoc.set(d, patch.baseline || null); return { baseline: patch.baseline || null, views: [] }; };
   await CX.loadRuns();
   assert.equal(CX.contextRun(), "c");
   assert.equal(CX.contextBaseline(), "a", "the failed run in between is skipped");
+  assert.equal(CX.baselineIsAuto(), true, "no baseline set: the automatic choice, labelled as such");
   assert.equal(state.selectedRunTag, "c");
   await CX.setRun("b");
   assert.equal(CX.contextRun(), "b");
   assert.equal(CX.contextBaseline(), "a");
   assert.equal(events.at(-1).detail.why, "run");
-  CX.setBaseline("");                                     // "Nothing" is a choice that stands
-  await CX.loadRuns();
-  assert.equal(CX.contextBaseline(), "");
+  await CX.setBaseline("c");                              // the run picker's "Compared with"
+  assert.equal(CX.contextBaseline(), "c");
+  assert.equal(CX.baselineIsAuto(), false);
+  assert.equal(CX.projectBaseline("/w/spm"), "c", "the same baseline Runs' star shows");
+  assert.deepEqual(saved.at(-1), ["/w/spm", { baseline: "c" }]);
+  await CX.setRun("c");
+  assert.equal(CX.runIsBaseline(), true);
+  assert.equal(CX.contextBaseline(), "", "the baseline itself compares with nothing");
+  await CX.setProjectBaseline("/w/spm", "");               // Automatic again
+  assert.equal(CX.baselineIsAuto(), true);
+  assert.equal(CX.contextBaseline(), "a");
+  await CX.setRun("b");
   const mem = JSON.parse(store.get("ll.context"))["/w/spm"];
-  assert.deepEqual(mem, { run: "b", baseline: "", picked: true }, "each project remembers its run");
+  assert.deepEqual(mem, { run: "b" }, "each project remembers its run");
   // A run finishes while the user is on the newest: the pages follow it.
   CX.setBaseline("a"); await CX.setRun("c");
   CX.noteRunStarted();
@@ -2037,6 +2155,13 @@ await checkAsync("context: newest run by default, baseline is the last run befor
   rows.unshift({ tag: "e", success: true, started_at: "2026-10-06T22:00" });
   await CX.noteRunFinished();
   assert.equal(CX.contextRun(), "a");
+  // The two old baselines (Runs' star, a picked "Compared with") become the
+  // project's one baseline the first time it is read, and are forgotten.
+  store.set("ll.runsBaseline", JSON.stringify({ "/w/old": "q" }));
+  await CX.ensureProjectMeta("/w/old");
+  assert.equal(CX.projectBaseline("/w/old"), "q");
+  assert.deepEqual(saved.at(-1), ["/w/old", { baseline: "q" }]);
+  assert.equal(JSON.parse(store.get("ll.runsBaseline"))["/w/old"], undefined);
   delete globalThis.document;
   delete globalThis.localStorage;
 });

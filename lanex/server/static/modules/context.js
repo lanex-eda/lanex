@@ -10,9 +10,11 @@
 //     (detail.why: run | baseline | scope | project | run-finished | runs, and
 //     loaded / settled after a load, which the pages that loaded ignore)
 //
-// Each project remembers its own run and baseline (localStorage ll.context).
-// Without a remembered run the newest is shown; the baseline defaults to the
-// newest finished run before it, until the user picks one. When a run finishes,
+// Each project remembers its own run (localStorage ll.context) and has one
+// baseline, kept by the server (<design>/.gui-runs.json; projectBaseline,
+// setProjectBaseline). Without a remembered run the newest is shown; with no
+// baseline set, it is compared with the run a fix was resumed from, else the
+// newest clean run before it (baselineIsAuto() says so). When a run finishes,
 // the context follows it if the user was on the newest run when it started.
 //
 // Scope: "this design" or "all designs you have opened" (ll.runScope, shared
@@ -22,14 +24,109 @@ import { api } from "./api.js";
 import { state, safeStorage } from "./state.js";
 
 const SCOPE_KEY = "ll.runScope";   // "design" | "all"
-const MEM_KEY = "ll.context";      // { [design dir]: { run, baseline, picked } }
+const MEM_KEY = "ll.context";      // { [design dir]: { run } }
 
+// One baseline per project (audit 4.8), kept by the server in
+// <design>/.gui-runs.json: the Runs star, the run picker's "Compared with"
+// and Compare all set it, and every page reads it from here. With none set,
+// the results pages compare with an automatic choice (the run a fix was
+// resumed from, else the last clean run before), always labelled as such.
+const PROJ = new Map();            // normDir(design) -> { baseline, views, default_view, damaged }
+const _projLoading = new Map();
 
-const C = { design: "", run: null, baseline: "", picked: false, runs: [], follow: false };
+const C = { design: "", run: null, baseline: "", auto: true, isBase: false, runs: [], follow: false };
 
 export function contextRun() { return C.run; }
 export function contextBaseline() { return C.baseline; }
+// True when contextBaseline() is the automatic choice, not the project's baseline.
+export function baselineIsAuto() { return C.auto; }
+// True when the run on screen is the project's baseline (nothing to compare with).
+export function runIsBaseline() { return C.isBase; }
 export function contextDesign() { return C.design; }
+
+// ---------------------------------------------------------------- the project's baseline
+export function projectBaseline(design = C.design) {
+  const m = PROJ.get(normDir(design));
+  return (m && m.baseline) || "";
+}
+export function projectMeta(design = C.design) {
+  return PROJ.get(normDir(design)) || { baseline: null, views: [], default_view: null };
+}
+// Read the project's Runs file once (and again with `fresh`). A server that
+// doesn't answer leaves the last known value; never throws.
+export async function ensureProjectMeta(design, { fresh = false } = {}) {
+  const k = normDir(design);
+  if (!k) return projectMeta(design);
+  if (!fresh && PROJ.has(k)) return PROJ.get(k);
+  if (_projLoading.has(k)) return _projLoading.get(k);
+  const p = (async () => {
+    try {
+      const m = await api.runsMeta(design);
+      PROJ.set(k, { baseline: m.baseline || null, views: m.views || [], default_view: m.default_view || null, damaged: m.damaged || null });
+      await adoptOldBaseline(design);
+    } catch (_e) {
+      if (!PROJ.has(k)) PROJ.set(k, { baseline: null, views: [], default_view: null, unread: true });
+    }
+    return PROJ.get(k);
+  })();
+  _projLoading.set(k, p);
+  try { return await p; } finally { _projLoading.delete(k); }
+}
+// Before 4.8 Runs kept a star in ll.runsBaseline and the results pages a
+// picked baseline in ll.context: the first time a project is read, one of
+// them becomes its baseline (the star first), and both are forgotten.
+async function adoptOldBaseline(design) {
+  const k = normDir(design);
+  const m = PROJ.get(k);
+  const stars = safeStorage.getJSON("ll.runsBaseline", null);
+  const mem = safeStorage.getJSON(MEM_KEY, null);
+  const star = stars && stars[k];
+  const picked = mem && mem[k] && mem[k].picked && mem[k].baseline;
+  if (!star && !picked) return;
+  const tag = star || picked;
+  if (stars && star) { delete stars[k]; safeStorage.setJSON("ll.runsBaseline", stars); }
+  if (mem && mem[k]) { delete mem[k].baseline; delete mem[k].picked; safeStorage.setJSON(MEM_KEY, mem); }
+  if (m.baseline) return;
+  try { await api.setRunsMeta(design, { baseline: tag }); m.baseline = tag; } catch (_e) { /* tried once */ }
+}
+// Make `tag` the project's baseline ("" clears it): every page follows.
+export async function setProjectBaseline(design, tag) {
+  const k = normDir(design);
+  const m = PROJ.get(k) || { baseline: null, views: [], default_view: null };
+  const was = m.baseline;
+  m.baseline = tag || null;
+  PROJ.set(k, m);
+  if (k === normDir(C.design)) settleBaseline();
+  emit("baseline");
+  try {
+    const doc = await api.setRunsMeta(design, { baseline: tag || null });
+    m.baseline = doc.baseline || null;
+  } catch (e) {
+    m.baseline = was;
+    if (k === normDir(C.design)) settleBaseline();
+    emit("baseline");
+    throw e;
+  }
+}
+// Saved views and the default view of a project (runs.js).
+export async function saveProjectViews(design, views, defaultView) {
+  const k = normDir(design);
+  const patch = { views };
+  if (defaultView !== undefined) patch.default_view = defaultView;
+  const doc = await api.setRunsMeta(design, patch);
+  const m = PROJ.get(k) || {};
+  PROJ.set(k, { ...m, views: doc.views || [], default_view: doc.default_view || null });
+  return PROJ.get(k);
+}
+// Another window (or LanEx on another port) may have changed it.
+if (typeof window !== "undefined") {
+  window.addEventListener("focus", async () => {
+    if (!C.design || !PROJ.has(normDir(C.design))) return;
+    const before = projectBaseline();
+    await ensureProjectMeta(C.design, { fresh: true });
+    if (projectBaseline() !== before) { settleBaseline(); emit("baseline"); }
+  });
+}
 // The runs of the last loadRuns(), newest first (all designs in "all" scope).
 export function contextRuns() { return C.runs; }
 export function contextRow(tag = C.run, design = C.design) {
@@ -58,7 +155,9 @@ function remember() {
   // A list that came back empty must not erase the run the user picked.
   if (!C.design || !C.run) return;
   const m = memory();
-  m[normDir(C.design)] = { run: C.run, baseline: C.baseline, picked: C.picked };
+  const k = normDir(C.design);
+  // An old picked baseline stays until ensureProjectMeta adopts it.
+  m[k] = m[k] && m[k].picked ? { ...m[k], run: C.run } : { run: C.run };
   // Keep the 30 most recent projects.
   const keys = Object.keys(m);
   for (const k of keys.slice(0, Math.max(0, keys.length - 30))) delete m[k];
@@ -79,11 +178,9 @@ function settle() {
     const own = runs.filter((r) => normDir(r._design) === normDir(design));
     if (mem && mem.run && exists(mem.run, design)) {
       C.run = mem.run; C.design = design;
-      C.baseline = mem.baseline || ""; C.picked = !!mem.picked;
     } else {
       const pick = own[0] || runs[0];
       C.run = pick.tag; C.design = pick._design || design;
-      C.picked = false;
     }
   }
   settleBaseline();
@@ -92,8 +189,14 @@ function settle() {
 function settleBaseline() {
   const same = C.runs.filter((r) => normDir(r._design) === normDir(C.design));
   const ok = (tag) => tag && tag !== C.run && same.some((r) => r.tag === tag);
-  if (C.picked && (C.baseline === "" || ok(C.baseline))) return;   // the user's choice stands
-  C.picked = false;
+  // The project's baseline, when it is set and still there. The run on
+  // screen being the baseline compares with nothing (falling back to the
+  // automatic choice would turn the comparison upside down).
+  const pb = projectBaseline(C.design);
+  C.isBase = !!pb && pb === C.run;
+  if (C.isBase) { C.baseline = ""; C.auto = false; return; }
+  if (ok(pb)) { C.baseline = pb; C.auto = false; return; }
+  C.auto = true;
   const idx = same.findIndex((r) => r.tag === C.run);
   const cur = same[idx];
   // A resumed (fix) run is compared with the run it was resumed from: that
@@ -103,7 +206,7 @@ function settleBaseline() {
   const parent = cur && cur.branched_from && same.find((r) => r.tag === cur.branched_from);
   const partial = parent && parent.verdict && ["stopped", "incomplete", "running"].includes(parent.verdict.state);
   if (parent && !partial && ok(parent.tag)) { C.baseline = parent.tag; return; }
-  const passed = (r) => (r.verdict && r.verdict.state ? r.verdict.state === "passed" : r.success);
+  const passed = (r) => (r.verdict && r.verdict.state ? r.verdict.state === "passed" : r.success) && !r.archived;
   const prev = same.slice(idx + 1).find(passed);
   C.baseline = prev ? prev.tag : "";
 }
@@ -159,7 +262,10 @@ export async function loadRuns({ fresh = false } = {}) {
     if (getRunScope() === "design") state.runs = runs;
     C.runs = runs;
     const before = C.run + "\0" + C.design + "\0" + C.baseline;
+    // The project's baseline is part of the settled context.
+    await ensureProjectMeta(state.designDir || C.design);
     settle();
+    if (normDir(C.design) !== normDir(state.designDir)) { await ensureProjectMeta(C.design); settleBaseline(); }
     if (C.run) await ensureActiveDesignFor(contextRow());
     remember();
     // Run bars repaint; pages ignore "loaded" / "settled" (they asked for it).
@@ -194,20 +300,19 @@ export async function setRun(tag, design) {
   if (!row) return;
   if (row.tag === C.run && normDir(row._design) === normDir(C.design)) return;
   await ensureActiveDesignFor(row);
-  const otherDesign = normDir(row._design) !== normDir(C.design);
   C.run = row.tag;
   C.design = row._design || state.designDir;
-  if (otherDesign) C.picked = false;
+  await ensureProjectMeta(C.design);
   settleBaseline();
   remember();
   emit("run");
 }
 
+// The run picker's "Compared with": a run makes it the project's baseline;
+// "" goes back to the automatic choice. A failed save is put back (and
+// rethrown for the caller to say so).
 export function setBaseline(tag) {
-  C.baseline = tag || "";
-  C.picked = true;
-  remember();
-  emit("baseline");
+  return setProjectBaseline(C.design || state.designDir, tag || "");
 }
 
 // A project was opened: show what it was showing last time.
@@ -216,8 +321,9 @@ export function openProject(designDir) {
   const mem = recall(designDir);
   C.design = designDir;
   C.run = mem ? mem.run : null;
-  C.baseline = mem ? mem.baseline || "" : "";
-  C.picked = !!(mem && mem.picked);
+  C.baseline = "";
+  C.auto = true;
+  C.isBase = false;
   state.selectedRunTag = C.run;
   emit("project");
 }
