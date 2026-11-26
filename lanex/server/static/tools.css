@@ -367,6 +367,78 @@ details.tl-local[open] > .tl-local-sum { border-bottom: 1px solid var(--border);
   .tl-skel i, .tl-state.is-busy i, .tl-sq.is-busy, .tl-var.is-busy .tl-var-dot, .is-flash { animation: none; }
 }
 
+/* ---------- toolsys: LanEx and this computer (modules/toolsys.js) ----------
+ * Reusable: .tl-store (stacked storage bar), .tl-sys-tile (a tl-tile), .tl-clean
+ * (rows to remove). The section is a size container, so the grid follows the
+ * width the page really has under the app's CSS zoom. */
+.tl-sys-body { display: grid; gap: var(--s-4); container-type: inline-size; container-name: tlsys; }
+.tl-store, .tl-clean {
+  position: relative; padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+}
+.tl-store::before, .tl-clean::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent 70%); opacity: 0.8;
+}
+.tl-store-h, .tl-clean-h { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 12px; }
+.tl-store-sum { font-size: 14px; color: var(--text); }
+.tl-store-sum b, .tl-clean-tot b { font-family: var(--mono); font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.tl-store-bar {
+  display: flex; height: 10px; overflow: hidden; border-radius: 3px;
+  background: var(--bg-2); border: 1px solid var(--border-strong);
+}
+.tl-store.is-loading .tl-store-bar { background: linear-gradient(90deg, var(--surface-2), var(--surface-3, var(--surface-2)), var(--surface-2)); background-size: 200% 100%; animation: tl-shimmer 1.6s linear infinite; }
+.tl-store-seg { height: 100%; flex: none; border-right: 1px solid var(--bg-2); }
+.tl-store-seg.is-image, .tl-store-key.is-image i { background: var(--accent); }
+.tl-store-seg.is-pdks, .tl-store-key.is-pdks i { background: var(--met1-hi, var(--met1)); }
+.tl-store-seg.is-runs, .tl-store-key.is-runs i { background: color-mix(in srgb, var(--met1) 45%, var(--surface)); }
+.tl-store-seg.is-other, .tl-store-key.is-other i { background: var(--border-strong); }
+body.theme-light .tl-store-seg.is-pdks, body.theme-light .tl-store-key.is-pdks i { background: color-mix(in srgb, var(--accent) 50%, #fff); }
+body.theme-light .tl-store-seg.is-runs, body.theme-light .tl-store-key.is-runs i { background: color-mix(in srgb, var(--accent) 22%, #fff); }
+.tl-store-free { flex: 1; }
+.tl-store-legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 10px; }
+.tl-store-key {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none;
+  font: inherit; font-size: 13px; color: var(--text-muted); cursor: pointer;
+}
+button.tl-store-key:hover { color: var(--text); }
+button.tl-store-key:focus-visible { outline: 2px solid var(--met1); outline-offset: 2px; border-radius: 2px; }
+.tl-store-key i { width: 14px; height: 6px; border-radius: 1px; flex: none; }  /* a piece of the bar, not a tick box */
+.tl-store-key b { font-family: var(--mono); font-weight: 500; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.tl-store-key.is-free { cursor: default; }
+.tl-store-key.is-free i { background: transparent; border: 1px solid var(--border-strong); }
+.tl-store.is-low .tl-store-free-v, .tl-store.is-low .tl-store-key.is-free b { color: var(--warn); }
+.tl-store.is-critical .tl-store-free-v, .tl-store.is-critical .tl-store-key.is-free b { color: var(--fail); }
+.tl-store.is-critical { border-color: color-mix(in srgb, var(--fail) 40%, var(--border)); }
+.tl-store-warn { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; font-size: 13px; color: var(--warn); }
+.tl-store.is-critical .tl-store-warn { color: var(--fail); }
+.tl-store-note { margin: 8px 0 0; font-size: 12.5px; color: var(--text-muted); }
+/* Tiles: as many as fit, never wider than a reading width (no stretch at 2560). */
+.tl-sys-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 520px)); gap: var(--s-4); }
+.tl-sys-tile .tl-kv > div { grid-template-columns: 104px minmax(0, 1fr); }
+.tl-sys-tile .tl-kv dd { overflow-wrap: anywhere; }
+.tl-sys-sub .tl-warn { margin: 0; font-size: 12.5px; line-height: 1.45; }
+.tl-clean-h { margin-bottom: 4px; }
+.tl-clean-tot { font-size: 13.5px; color: var(--text-muted); }
+.tl-clean-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px 20px;
+  padding: 10px 0; border-top: 1px solid var(--border);
+}
+.tl-clean-row:first-of-type { border-top: 0; }
+.tl-clean-name { font-weight: 600; color: var(--text-strong); }
+.tl-clean-detail { font-family: var(--mono); font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-clean-size { font-family: var(--mono); font-size: 13px; color: var(--text-strong); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.tl-notes { white-space: pre-wrap; max-height: calc(52vh / var(--ll-zoom, 1)); overflow: auto; margin: 0; padding: var(--s-3); font-size: 13px; line-height: 1.5; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm, 6px); }
+.tl-mem-choice { display: grid; gap: 10px; margin: 12px 0; }
+.tl-mem-opt { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; color: var(--text); }
+.tl-mem-gb { width: 72px; font-family: var(--mono); }
+@container tlsys (max-width: 660px) {
+  .tl-sys-tiles { grid-template-columns: minmax(0, 1fr); }
+  .tl-clean-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .tl-clean-size { grid-column: 1; text-align: left; }
+}
+
 /* ---------- widths ---------- */
 /* Wide: viewers (4) and helpers (3) share one row. */
 @media (min-width: 1880px) {

@@ -178,6 +178,69 @@ apt_sources() {
     APT_SNAPSHOT=""
 }
 
+# ------------------------------------------------- 0b. the Windows network  --
+# Setup asked Windows for its proxy (resolved per download site, PAC and WPAD
+# included) and for the root certificates the download sites' TLS chains end
+# in (windows/setup/network.ps1). network-apply writes them into LanEx-owned
+# files: apt, Docker's drop-ins, /etc/lanex/proxy.env and the CA store. It is
+# also installed as /usr/local/lib/lanex/network-apply for the app to use when
+# the network changes. Never a password, never TLS verification turned off.
+network_settings() {
+    local applier="${LANEX_NETWORK_APPLY:-}" snap="${LANEX_NETWORK_FILE:-}" certs="${LANEX_NETWORK_CERTS:-}" out
+    [ -n "$applier" ] && [ -f "$applier" ] || return 0
+    say "Network settings from Windows"
+    if ! command -v python3 >/dev/null 2>&1; then
+        warn "python3 is missing, so the Windows proxy and certificates are applied later."
+        return 0
+    fi
+    tr -d '\r' < "$applier" > /run/lanex-network-apply.py 2>/dev/null \
+        || { warn "could not stage the network helper."; return 0; }
+    if [ -n "$snap" ] && [ -f "$snap" ]; then
+        if [ -n "$certs" ] && [ -f "$certs" ]; then
+            out="$(python3 /run/lanex-network-apply.py --install --input "$snap" --certs "$certs" 2>&1 | tail -n 1)"
+        else
+            out="$(python3 /run/lanex-network-apply.py --install --input "$snap" 2>&1 | tail -n 1)"
+        fi
+    else
+        out="$(python3 /run/lanex-network-apply.py --install 2>&1 | tail -n 1)"
+    fi
+    rm -f /run/lanex-network-apply.py
+    # One plain line (the JSON names no proxy address or certificate).
+    printf '%s' "$out" | python3 -c 'import json,sys
+try:
+    d = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    d = {"ok": False, "error": "the network helper gave no answer"}
+if not d.get("ok"):
+    print("!! " + str(d.get("error") or "the Windows network settings were not applied."))
+elif "installed" in d:
+    print("   network helper installed; no network snapshot from Windows this time.")
+else:
+    m = d.get("mode") or "none"
+    print("   network: " + ("using the proxy Windows uses (" + m + ")" if m != "none" else "direct connection, no proxy")
+          + "; " + str(d.get("certificates") or 0) + " company certificate(s) added to LanEx\x27s Linux.")
+    for n in d.get("notes") or []:
+        print("   note: " + str(n))'
+    load_network_env
+}
+
+# The proxy and certificate settings for this script's own curl, pip and the
+# finalizer. A variable already set (forwarded from Windows for this Setup run)
+# wins: it may carry the sign-in LanEx deliberately does not save.
+load_network_env() {
+    local f=/etc/lanex/proxy.env line k v
+    [ -r "$f" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        k="${line%%=*}"; v="${line#*=}"
+        case "$k" in
+            HTTP_PROXY|http_proxy|HTTPS_PROXY|https_proxy|NO_PROXY|no_proxy|SSL_CERT_FILE|REQUESTS_CA_BUNDLE|PIP_CERT) ;;
+            *) continue ;;
+        esac
+        [ -n "${!k:-}" ] || export "$k=$v"
+    done < "$f"
+}
+
 probe_endpoint() {
     local label="$1" url="$2" out rc code detail family family_code family_rc
     out="$(mktemp)" || die "could not create a temporary network diagnostic."
@@ -227,7 +290,7 @@ probe_endpoint() {
     rm -f "$out"
     case "$code" in
         2??|3??|401|403|404|405) note "${label} reachable (HTTP ${code})." ;;
-        407) network_failure 22 "$label" "The configured proxy requires authentication; a Windows PAC file is not a shell proxy URL." ;;
+        407) network_failure 22 "$label" "The proxy asks for a sign-in. apt, Docker and pip cannot sign in to a proxy, and LanEx never stores passwords. Ask your IT team to let the download sites through without a sign-in." ;;
         429) network_failure 22 "$label" "The service is rate limiting requests; wait for its retry window." ;;
         *) network_failure 22 "$label" "The service returned HTTP ${code}." ;;
     esac
@@ -748,6 +811,10 @@ finalize() {
         sleep 2
     done
     rm -f "/home/${APP_USER}/.local/share/pipx/shared/lib/"*/site-packages/lanex_timeout.pth 2>/dev/null || true
+    # Again now that systemd and Docker run: Docker picks up the proxy and the
+    # company certificates before the image is pulled.
+    network_settings
+    load_network_env
     for tool in ciel librelane; do
         if [ -x "/home/${APP_USER}/.local/share/pipx/venvs/lanex/bin/$tool" ]; then
             ln -sf "/home/${APP_USER}/.local/share/pipx/venvs/lanex/bin/$tool" "/home/${APP_USER}/.local/bin/$tool" 2>/dev/null || true
@@ -826,6 +893,8 @@ main() {
     select_engine
     check_cancel
     write_identity_marker
+    check_cancel
+    network_settings
     check_cancel
     apt_sources
     check_cancel

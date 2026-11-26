@@ -19,6 +19,9 @@ const renderLogs = {
 import { toast } from "./toast.js";
 import { confirmDialog, customDialog } from "./dialog.js";
 import { icon } from "./icons.js";
+// "LanEx and this computer": version and updates, storage, network, WSL
+// memory, clean-up, and the doctor's problems for the verdict band.
+import { paintSystem, sysAttention, diagnosticsBundle, fmtBytes } from "./toolsys.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -281,6 +284,9 @@ export async function renderTools(fresh) {
   } catch (ex) {
     console.error("Tools page render error:", ex);
   }
+  // Loads on its own (each part separately): never holds up the page above.
+  paintSystem(info, { fresh: !!fresh, onChange: () => { try { paintSummary(state.tools || info); } catch (_e) {} } })
+    .catch((ex) => console.error("System section render failure:", ex));
   revealItem();
 }
 
@@ -739,7 +745,7 @@ function paintSummary(info) {
   const items = attentionItems(info, {
     runMode: state.runMode, installJobs: state.installJobs || {},
     pulling: !!(_pull.active || (info.container && info.container.pulling)), desktop: _desktop,
-  });
+  }).concat(sysAttention());
   const head = readiness(items);
   const c = info.container || {};
   const pdk = info.pdk || {};
@@ -747,7 +753,10 @@ function paintSummary(info) {
   // One square per component on the page (the local toolchain only counts
   // with the Local tools engine; with Container the image has it).
   const comps = Array.from(list.querySelectorAll("[data-status]:not(.tl-skel)"))
-    .filter((el) => el.id && (state.runMode === "local" || !el.closest("#local-tools-card")));
+    .filter((el) => el.id && (state.runMode === "local" || !el.closest("#local-tools-card")) &&
+      // The computer's own state (an update, the disk) is not a flow component;
+      // its problems come from the doctor through sysAttention.
+      !el.closest("#tools-system"));
   const kind = (st) => FAIL.has(st) ? "fail" : WARN.has(st) ? "warn" : st === "busy" ? "busy" : st === "off" ? "off" : "pass";
   const counts = { pass: 0, fail: 0, warn: 0, busy: 0, off: 0 };
   comps.forEach((el) => { counts[kind(el.dataset.status)]++; });
@@ -871,13 +880,23 @@ export function diagnosticsText(info, { pdkRoot = "", runMode = "", ua = "" } = 
 }
 
 async function copyDiagnostics() {
-  const text = diagnosticsText(state.tools, {
+  const page = diagnosticsText(state.tools, {
     pdkRoot: _pdkRoot || document.getElementById("pdk-root-input")?.value || "",
-    runMode: state.runMode || "", ua: navigator.userAgent,
+    runMode: state.runMode || "", ua: "",
   });
+  const btn = document.getElementById("tl-copy-diag");
+  if (btn) { btn.disabled = true; btn.textContent = "Collecting…"; }
+  // lanex doctor's share form first (user name and proxy address left out),
+  // then the browser and this page's facts.
+  const text = await diagnosticsBundle(page);
+  if (btn) { btn.disabled = false; btn.textContent = "Copy diagnostics"; }
+  const problems = (text.match(/^\[fail\]/gm) || []).length, warnings = (text.match(/^\[warn\]/gm) || []).length;
+  const counts = problems || warnings
+    ? " (" + [problems && problems + " problem" + (problems === 1 ? "" : "s"), warnings && warnings + " warning" + (warnings === 1 ? "" : "s")].filter(Boolean).join(", ") + ")"
+    : "";
   try {
     await navigator.clipboard.writeText(text);
-    toast.show("Diagnostics copied. Paste them into your bug report.", "success");
+    toast.show("Diagnostics copied" + counts + ". Paste them into your bug report; your user name and proxy address are left out.", "success");
   } catch (_e) {
     const ta = document.createElement("textarea");
     ta.value = text; document.body.appendChild(ta); ta.select();
@@ -1460,11 +1479,13 @@ export function renderPdkStore(info) {
     const n = libCount(p);
     const menu = [];
     if (n && !busy) menu.push(menuItem("Libraries (" + n + ")…", "pdk-libs-btn", "data-pdk='" + esc(key) + "'"));
-    // ciel keeps every variant of a family in one download, so removal is per
-    // family: the item says which variants go with it.
+    // One variant goes on its own (LanEx keeps the others working,
+    // syscleanup.remove_pdk_variant); the whole family stays one item.
     const famKeys = Object.keys(catalog).filter((k) => pdkFamily(catalog, k) === pdkFamily(catalog, key) && installed.has(k));
+    if (isInstalled && !busy && famKeys.length > 1)
+      menu.push(menuItem("Remove " + key + " only…", "pdk-remove-variant-btn", "data-pdk='" + esc(key) + "'", { danger: true }));
     if (isInstalled && !busy) menu.push(menuItem(famKeys.length > 1
-      ? "Remove " + famKeys.join(" and ") + "…" : "Remove " + key + "…", "pdk-uninstall-btn", "data-pdk='" + esc(key) + "'", { danger: true }));
+      ? "Remove all of " + pdkFamily(catalog, key) + " (" + famKeys.join(", ") + ")…" : "Remove " + key + "…", "pdk-uninstall-btn", "data-pdk='" + esc(key) + "'", { danger: true }));
     const tags = ((p.default_variant || p.recommended) ? "<span class='tl-tag' title='The variant LanEx uses by default for this PDK'>default</span>" : "") +
       (p.supported === false ? "<span class='tl-tag is-quiet' title='The LibreLane flow does not support this variant'>not in flow</span>" : "");
     return (
@@ -1519,6 +1540,32 @@ export function renderPdkStore(info) {
       renderTools();
     });
   });
+  drop.querySelectorAll(".pdk-remove-variant-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const pdk = btn.dataset.pdk;
+      closeMenus();
+      const family = pdkFamily(catalog, pdk);
+      const others = [...installed].filter((x) => x !== pdk && pdkFamily(catalog, x) === family);
+      const mb = (pdkInfo.installed_sizes_mb || {})[pdk];
+      const v = (versions[pdk] || {}).installed || "";
+      if (!(await confirmDialog({ title: "Remove " + pdk + "?", danger: true, confirmText: "Remove " + pdk,
+        body: "This deletes the " + pdk + " files of " + family + (v ? " version " + shortHash(v) : "") +
+          (_pdkRoot ? " (in " + _pdkRoot + ")" : "") + (mb ? " and frees about " + sizeStr(mb) : "") + ". " +
+          others.join(" and ") + (others.length === 1 ? " stays" : " stay") + " installed and keep" + (others.length === 1 ? "s" : "") + " working. " +
+          "Designs set to " + pdk + " can't run until you install it again. Kept: " + others.join(", ") + ", your projects and run results." }))) return;
+      try {
+        const r = await api.removePdkVariant(pdk);
+        toast.show("Removed " + pdk + (r.freed_bytes ? ". Freed " + fmtBytes(r.freed_bytes) : "") + ". " +
+          (r.kept && r.kept.length ? r.kept.join(" and ") + " still installed." : ""), "success");
+        renderLogs.append({ payload: { message: "✓ PDK " + pdk + " removed on its own" + (r.kept ? " (kept " + r.kept.join(", ") + ")" : "") } });
+        import("./setup.js").then((m) => m.populatePdkPicker && m.populatePdkPicker()).catch(() => {});
+      } catch (ex) {
+        toast.show("Could not remove " + pdk + ": " + ex.message, "error");
+        renderLogs.append({ payload: { message: "✗ PDK " + pdk + " not removed: " + ex.message, level: "ERROR" } });
+      }
+      renderTools(true);
+    });
+  });
   drop.querySelectorAll(".pdk-uninstall-btn").forEach(btn => {
     btn.addEventListener("click", async () => {
       const pdk = btn.dataset.pdk;
@@ -1528,7 +1575,8 @@ export function renderPdkStore(info) {
       const names = siblings.length ? siblings : [pdk];
       const mb = names.reduce((a, k) => a + ((pdkInfo.installed_sizes_mb || {})[k] || 0), 0);
       const together = names.length > 1
-        ? "ciel keeps " + names.join(" and ") + " in one " + family + " download, so they can only be removed together. "
+        ? "This removes every installed version and variant of " + family + " (" + names.join(" and ") +
+          "). To keep one of them, use Remove … only instead. "
         : "";
       if (!(await confirmDialog({ title: names.length > 1 ? "Remove " + names.join(" and ") + "?" : "Remove " + pdk + "?",
         danger: true, confirmText: names.length > 1 ? "Remove " + names.length + " variants" : "Remove " + pdk,

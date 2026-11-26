@@ -139,7 +139,10 @@ function gridsHtml(t) {
     const fail = rows.filter((r) => isNum(ws(r)) && ws(r) < 0);
     const worst = vals.length ? Math.min(...vals) : null;
     const wr = rows.find((r) => r[kind + "_ws"] === worst);
-    const sum = !vals.length ? "not timed" : fail.length
+    // No clock reached the registers but input-to-output paths were timed:
+    // their slack is real, but it is not the chip's timing.
+    const ioOnly = !!(t.no_clock && t.no_clock.io_paths);
+    const sum = !vals.length ? "not timed" : ioOnly ? "input-to-output paths only · worst " + ns(worst) + " " + U + " · no flip-flop timed" : fail.length
       ? fail.length + " of " + rows.length + " corners fail · worst " + ns(worst) + " " + U + " in " + (wr ? wr.corner : "")
       : "all " + rows.length + " corners pass · worst " + ns(worst) + " " + U;
     return "<section class='an-card tx-gcard" + (S.kind === kind ? " is-on" : "") + (fail.length ? " is-fail" : "") + "' data-tx-gkind='" + kind + "'>" +
@@ -154,10 +157,12 @@ function gridsHtml(t) {
 
 function noClockHtml(t) {
   const nc = t.no_clock || {};
+  const port = Array.isArray(nc.clock_port) ? nc.clock_port.join(", ") : nc.clock_port;
   return "<div class='an-card tx-card'><div class='tx-empty is-warn'>" + icon("alert", { size: 18 }) +
-    "<div><b>No clock reached the registers, so OpenSTA timed no path in any corner.</b>" +
+    "<div><b>" + (nc.io_paths ? "No clock reached the registers, so OpenSTA timed only the paths from an input straight to an output."
+      : "No clock reached the registers, so OpenSTA timed no path in any corner.") + "</b>" +
     "<p>" + esc((nc.registers ? nc.registers + " flip-flops" : "The flip-flops") + (isNum(nc.unclocked) ? ", " + nc.unclocked + " clock pins with no clock" : "") +
-      ". CLOCK_PORT is " + (nc.clock_port ? "\"" + nc.clock_port + "\"" : "not set") + ".") + "</p>" +
+      ". CLOCK_PORT is " + (port ? "\"" + port + "\"" + (nc.port_missing ? ", and the top module has no port by that name" : "") : "not set") + ".") + "</p>" +
     "<p>Set CLOCK_PORT to the clock input of the top module and run again. Until then \"0 violations\" means nothing was checked.</p>" +
     "<button class='btn btn-ghost btn-sm' data-go='setup' data-go-setting='CLOCK_PORT'>" + icon("chevron", { size: 12 }) + " Set CLOCK_PORT</button></div></div></div>";
 }

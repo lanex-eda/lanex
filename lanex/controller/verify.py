@@ -480,42 +480,80 @@ def _min_period(d: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _unclocked(dirs: Dict[str, Path]) -> Optional[int]:
-    """How many register clock pins OpenSTA found no clock on (its
-    ``check_setup -no_clock`` line in sta.log; LibreLane doesn't relay it)."""
+def _sta_log_text(dirs: Dict[str, Path]) -> Optional[str]:
+    """The first readable corner's sta.log (every corner loads the same SDC
+    and netlist, so the clock warnings are the same in each)."""
     for d in dirs.values():
-        f = d / "sta.log"
         try:
-            with f.open("r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read(4_000_000)
+            with (d / "sta.log").open("r", encoding="utf-8", errors="replace") as fh:
+                return fh.read(4_000_000)
         except OSError:
             continue
-        m = _UNCLOCKED_RE.search(text)
-        return int(m.group(1)) if m else 0
     return None
 
 
+def _unclocked(dirs: Dict[str, Path], text: Optional[str] = None) -> Optional[int]:
+    """How many register clock pins OpenSTA found no clock on (its
+    ``check_setup -no_clock`` line in sta.log; LibreLane doesn't relay it)."""
+    if text is None:
+        text = _sta_log_text(dirs)
+    if text is None:
+        return None
+    m = _UNCLOCKED_RE.search(text)
+    return int(m.group(1)) if m else 0
+
+
+def _sdc_clock_port(run: _Run) -> str:
+    """The port LibreLane's base SDC makes the clock on: the first of
+    CLOCK_PORT, or ``__VIRTUAL_CLK__`` when CLOCK_PORT is unset or empty
+    (librelane/scripts/base.sdc)."""
+    p = run.conf("CLOCK_PORT")
+    if isinstance(p, (list, tuple)):
+        p = next((x for x in p if isinstance(x, str) and x.strip()), None)
+    if isinstance(p, str) and p.strip():
+        return p.strip().split()[0]
+    return "__VIRTUAL_CLK__"
+
+
 def _no_clock(run: _Run) -> Optional[Dict[str, Any]]:
-    """``{clock_port, registers, unclocked}`` when sign-off STA ran on a design
-    with flip-flops but no path was timed in any corner (no clock reached
-    them), else None."""
+    """``{clock_port, registers, unclocked, port_missing, io_paths}`` when
+    sign-off STA ran on a design with flip-flops that no clock reached, else
+    None. That is any of:
+
+    * no path was timed in any corner (every slack is OpenSTA's "no path");
+    * OpenSTA's unclocked register pins cover the flip-flops (an input-to-
+      output path can still be timed against the virtual clock the base SDC
+      makes, so a finite slack is no proof a clock reached any register);
+    * the SDC's clock port does not exist (``[STA-0366] port 'clock' not
+      found``, written to sta.log as "port 'clock' not found") and registers
+      are unclocked.
+    """
     dirs = _sta_corner_dirs(run)
     if not dirs:
         return None
     seq = _finite(run.metrics.get("design__instance__count__class:sequential_cell"))
     if not seq:
         return None
+    text = _sta_log_text(dirs)
+    unclk = _unclocked(dirs, text)
+    sdc_port = _sdc_clock_port(run)
+    port_missing = bool(text) and re.search(r"port '" + re.escape(sdc_port) + r"' not found", text) is not None
     vals = list(_by_corner(run.metrics, "timing__setup__ws").values()) or [run.metrics.get("timing__setup__ws")]
-    if any(_num(v) is not None and abs(_num(v)) < _SENTINEL for v in vals):
+    timed = any(_num(v) is not None and abs(_num(v)) < _SENTINEL for v in vals)
+    if not timed:
+        for d in dirs.values():
+            try:
+                with (d / "max.rpt").open("r", encoding="utf-8", errors="replace") as fh:
+                    if "Startpoint:" in fh.read(2_000_000):
+                        timed = True
+                        break
+            except OSError:
+                continue
+    covered = unclk is not None and unclk >= seq
+    if timed and not covered and not (port_missing and unclk != 0):
         return None
-    for d in dirs.values():
-        try:
-            with (d / "max.rpt").open("r", encoding="utf-8", errors="replace") as fh:
-                if "Startpoint:" in fh.read(2_000_000):
-                    return None
-        except OSError:
-            continue
-    return {"clock_port": run.conf("CLOCK_PORT"), "registers": int(seq), "unclocked": _unclocked(dirs)}
+    return {"clock_port": run.conf("CLOCK_PORT"), "registers": int(seq), "unclocked": unclk,
+            "port_missing": port_missing, "sdc_port": sdc_port, "io_paths": timed}
 
 
 # ---------------------------------------------------------------- the checks
@@ -731,23 +769,44 @@ def _checks(run: _Run) -> List[Dict[str, Any]]:
     # LibreLane's checkers pass. That is a vacuous result, never "clean"
     # (LibreLane issue #1028): setup and hold become "Not checked", so the
     # verdict reads "Not enough to call it" with the reason.
+    # The same holds when only input-to-output paths were timed (against the
+    # virtual clock the base SDC makes when CLOCK_PORT names no port): those
+    # slacks are real, but no flip-flop was checked.
     nc = _no_clock(run)
     sta_dirs = _sta_corner_dirs(run)
+    n_unclk = None if nc or not sta_dirs else _unclocked(sta_dirs)
+    top = run.conf("DESIGN_NAME") or "the top module"
     for r in out[-2:]:
         if nc:
             r["status"] = _NOT_RUN
             r["no_clock"] = nc
             port = nc.get("clock_port")
-            r["detail"] = ("No clock reached the registers, so OpenSTA timed no path in any corner and "
-                           "\"0 violations\" means nothing was checked. "
-                           + (f"CLOCK_PORT is \"{port}\": check it names the clock input of {run.conf('DESIGN_NAME') or 'the top module'}."
-                              if port else "CLOCK_PORT is not set: set it to the clock input of the top module."))
-        elif r["id"] == "setup" and sta_dirs:
-            n_unclk = _unclocked(sta_dirs)
-            if n_unclk:
-                r["unclocked"] = n_unclk
-                r["note"] = ((r.get("note") or "") + f" {n_unclk} flip-flop clock pin{'s have' if n_unclk != 1 else ' has'} "
-                             "no clock, so paths through them were not timed (OpenSTA's check in sta.log).").strip()
+            if isinstance(port, (list, tuple)):
+                port = ", ".join(str(p) for p in port) or None
+            unc = nc.get("unclocked")
+            what = ("No clock reached the registers"
+                    + (f" ({unc} flip-flop clock pins with no clock, OpenSTA's check in sta.log)" if unc else ""))
+            timed = ("OpenSTA timed only the paths from an input straight to an output, none through a "
+                     "flip-flop, so \"0 violations\" says nothing about the registers. ") if nc.get("io_paths") else \
+                    "OpenSTA timed no path in any corner and \"0 violations\" means nothing was checked. "
+            if port and nc.get("port_missing"):
+                fix = (f"CLOCK_PORT is \"{port}\", but {top} has no port by that name "
+                       f"(OpenSTA: port '{nc.get('sdc_port')}' not found): set it to the clock input.")
+            elif port:
+                fix = f"CLOCK_PORT is \"{port}\": check it names the clock input of {top}."
+            else:
+                fix = "CLOCK_PORT is not set: set it to the clock input of the top module."
+            r["detail"] = what + ": " + timed + fix
+        elif n_unclk:
+            # Some flip-flops have no clock (a clock made inside the design, a
+            # second clock the SDC doesn't name): the timed paths are real, the
+            # rest were never checked. Setup carries the warning, hold the note.
+            r["unclocked"] = n_unclk
+            r["note"] = ((r.get("note") or "") + f" {n_unclk} flip-flop clock pin{'s have' if n_unclk != 1 else ' has'} "
+                         "no clock, so paths through them were not timed (OpenSTA's check in sta.log).").strip()
+            if r["id"] == "setup" and r["status"] == _PASS:
+                r["status"] = _WARN
+                r["unclocked_warn"] = True
     out.append(_timing_checker(run, _rec("slew", "timing", "Max slew violations"),
                base="design__max_slew_violation__count", specific_var="MAX_SLEW_VIOLATION_CORNERS",
                checker="Checker.MaxSlewViolations", what="Slew violations"))
@@ -1476,6 +1535,11 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
         if st:
             out["stage"] = st
         return out
+    # No clock reached the registers: that is the verdict, even when an
+    # input-to-output path timed against the virtual clock has negative slack.
+    if v["state"] == "incomplete" and any(c["id"] == "setup" and c.get("no_clock") for c in checks):
+        out.update(state="incomplete", label="Timing not checked: no clock", no_clock=True)
+        return out
     miss = _timing_miss(run)
     if miss:
         # LibreLane passed the run (it only enforces the corners in
@@ -1486,12 +1550,14 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
                          f" ({miss['kind']} {miss['ws']:.2f} ns)")
         return out
     if v["state"] == "incomplete":
-        # No clock reached the registers: LibreLane passed a run that timed
-        # nothing. Say why on the verdict line itself, not only in Verify.
-        nc = next((c.get("no_clock") for c in checks if c["id"] == "setup" and c.get("no_clock")), None)
-        out.update(state="incomplete", label="Timing not checked: no clock" if nc else "Not enough to call it")
-        if nc:
-            out["no_clock"] = True
+        out.update(state="incomplete", label="Not enough to call it")
+        return out
+    unc = next((c.get("unclocked") for c in checks if c["id"] == "setup" and c.get("unclocked_warn")), None)
+    if unc:
+        # Some flip-flops have no clock: the paths through them were never
+        # timed, so the run is not "clean" even though every check passed.
+        out.update(state="warning", stage="signoff", unclocked=unc,
+                   label=f"Finished: {unc} flip-flop clock pin{'s' if unc != 1 else ''} not timed")
         return out
     w = len(v["warning_ids"])
     out.update(state="passed", label="Clean" + (f", {w} warning{'s' if w != 1 else ''}" if w else ""))

@@ -162,6 +162,7 @@ def _release_from_json(data: Any) -> Optional[Dict[str, Any]]:
             break
     name = str(data.get("name") or tag)[:120]
     return {
+        "notes": _clean_notes(data.get("body")),
         "tag": tag,
         "version": tag[1:] if tag[:1] in ("v", "V") else tag,
         "name": name,
@@ -171,15 +172,37 @@ def _release_from_json(data: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def fetch_latest(timeout: float = TIMEOUT_S) -> Dict[str, Any]:
-    """One GET of ``releases/latest``. Never raises: ``{"ok", "release"|"error"}``."""
+_NOTES_MAX = 16 * 1024
+_CTRL_RX = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_HTML_RX = re.compile(r"<[^>]{0,200}>")
+
+
+def _clean_notes(body: Any) -> str:
+    """The release text, as plain text: no HTML, no control characters, 16 KB at most.
+
+    It is shown as text (the browser escapes it), so this is about keeping it
+    readable and bounded, not about safety."""
+    s = str(body or "")
+    s = _CTRL_RX.sub("", s.replace("\r\n", "\n"))
+    s = _HTML_RX.sub("", s)
+    if len(s) > _NOTES_MAX:
+        s = s[:_NOTES_MAX].rsplit("\n", 1)[0] + "\n…"
+    return s.strip()
+
+
+def fetch_latest(timeout: float = TIMEOUT_S, etag: str = "") -> Dict[str, Any]:
+    """One GET of ``releases/latest``. Never raises: ``{"ok", "release"|"error"}``.
+
+    With *etag* (the last answer's), GitHub answers 304 when nothing changed;
+    that keeps the cached release and does not count against the 60 requests
+    an hour GitHub allows a client without a token: ``{"ok", "not_modified"}``."""
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(API_URL, headers={
-        "User-Agent": USER_AGENT,
-        "Accept": "application/vnd.github+json",
-    })
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
+    if etag and re.match(r'^(W/)?"[\x21\x23-\x7e]{1,200}"$', etag):
+        headers["If-None-Match"] = etag
+    req = urllib.request.Request(API_URL, headers=headers)
     try:
         from . import tlsctx
 
@@ -189,16 +212,35 @@ def fetch_latest(timeout: float = TIMEOUT_S) -> Dict[str, Any]:
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
             body = r.read(_MAX_BODY + 1)
+            hdrs = getattr(r, "headers", None)
+            new_etag = str((hdrs.get("ETag") if hdrs is not None else "") or "")
         if len(body) > _MAX_BODY:
             return {"ok": False, "error": "answer too large"}
         rel = _release_from_json(json.loads(body.decode("utf-8", errors="replace")))
         if rel is None:
             return {"ok": False, "error": "no usable release in the answer"}
-        return {"ok": True, "release": rel}
+        return {"ok": True, "release": rel, "etag": new_etag}
     except urllib.error.HTTPError as ex:
+        if ex.code == 304:
+            return {"ok": True, "not_modified": True}
+        if ex.code in (403, 429):
+            return {"ok": False, "error": "GitHub's limit for update checks was reached; LanEx tries again tomorrow"}
         return {"ok": False, "error": f"GitHub answered {ex.code}"}
     except Exception as ex:  # offline, DNS, TLS, timeout: silent
         return {"ok": False, "error": type(ex).__name__}
+
+
+def skip_version(version: str) -> Dict[str, Any]:
+    """"Skip this version": the banner and the Tools tile stay quiet about
+    *version* (an empty string shows it again). A newer release still shows."""
+    v = str(version or "").strip()
+    if v and parse_version(v) is None:
+        return status()
+    with _lock:
+        cache = _read_cache()
+        cache["skipped"] = v
+        _write_cache(cache)
+    return status()
 
 
 # ---------------------------------------------------------------- answers
@@ -244,6 +286,10 @@ def status() -> Dict[str, Any]:
         "error": cache.get("error") or "",
         "latest": rel,
         "newer": newer,
+        # "Skip this version": the banner stays quiet for exactly this release.
+        "skipped": bool(newer and cache.get("skipped") and rel
+                        and parse_version(cache.get("skipped")) == parse_version(rel.get("tag"))),
+        "skipped_version": str(cache.get("skipped") or ""),
         "releases_url": RELEASES_URL,
         "interval_s": INTERVAL_S,
     }
@@ -264,11 +310,16 @@ def check(force: bool = False, *, now: Optional[float] = None) -> Dict[str, Any]
         # Never checked, a day old, or a clock that moved back: ask.
         due = force or not last or (t - last) >= INTERVAL_S or t < last
         if due:
-            res = fetch_latest()
+            # The ETag only while a release is cached: a 304 must have something to keep.
+            etag = str(cache.get("etag") or "") if isinstance(cache.get("release"), dict) else ""
+            res = fetch_latest(etag=etag) if etag else fetch_latest()
             cache["checked_at"] = t
             cache["last_ok"] = bool(res.get("ok"))
-            if res.get("ok"):
+            if res.get("ok") and res.get("not_modified"):
+                cache["error"] = ""
+            elif res.get("ok"):
                 cache["release"] = res["release"]
+                cache["etag"] = str(res.get("etag") or "")
                 cache["error"] = ""
             else:
                 cache["error"] = str(res.get("error") or "")

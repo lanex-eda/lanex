@@ -85,12 +85,75 @@ def stamp(tag: str) -> int:
     return 0
 
 
+_INSTALLER_NAMES = ("install.sh", "install-wsl.sh")
+
+
+def artifact_stamps(path: Path) -> dict[str, list[str]]:
+    """``{member: [LANEX_RELEASE_REF values]}`` for every Unix installer in
+    *path*: the file itself, a folder (searched recursively), or a zip/wheel
+    or tar archive (its members)."""
+    import tarfile
+    import zipfile
+
+    found: dict[str, list[str]] = {}
+
+    def take(name: str, text: str) -> None:
+        if Path(name).name in _INSTALLER_NAMES:
+            found[name] = STAMP_RX.findall(text)
+
+    p = Path(path)
+    if p.is_dir():
+        for f in sorted(p.rglob("*")):
+            if f.is_file() and f.name in _INSTALLER_NAMES:
+                take(str(f), f.read_text(encoding="utf-8", errors="replace"))
+    elif zipfile.is_zipfile(p):
+        with zipfile.ZipFile(p) as z:
+            for n in z.namelist():
+                if Path(n).name in _INSTALLER_NAMES:
+                    take(n, z.read(n).decode("utf-8", errors="replace"))
+    elif p.is_file() and tarfile.is_tarfile(p):
+        with tarfile.open(p) as t:
+            for m in t.getmembers():
+                if m.isfile() and Path(m.name).name in _INSTALLER_NAMES:
+                    f = t.extractfile(m)
+                    if f is not None:
+                        take(m.name, f.read().decode("utf-8", errors="replace"))
+    elif p.is_file():
+        take(str(p), p.read_text(encoding="utf-8", errors="replace"))
+    return found
+
+
+def check_artifact(path: Path, tag: str) -> int:
+    """Fail when a release artifact would make the one-liner install ``main`` (or
+    anything but *tag*): every Unix installer in it must carry exactly *tag*."""
+    if not TAG_RX.match(tag or ""):
+        print(f"{tag!r} is not a release tag like v1.2.3", file=sys.stderr)
+        return 2
+    found = artifact_stamps(path)
+    if not found:
+        print(f"{path}: no install.sh or install-wsl.sh in this artifact", file=sys.stderr)
+        return 1
+    bad = {name: refs for name, refs in found.items() if refs != [tag]}
+    for name, refs in bad.items():
+        print(f"{name}: LANEX_RELEASE_REF is {', '.join(refs) or 'missing'}, not {tag}. "
+              f"Stamp it before the release: python scripts/stamp_release_ref.py {tag}", file=sys.stderr)
+    if not bad:
+        print(f"{path}: every installer carries {tag}")
+    return 1 if bad else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("tag", nargs="?", help="release tag to stamp, e.g. v1.1.0")
     group.add_argument("--check", action="store_true", help="verify the stamp")
+    group.add_argument("--check-artifact", metavar="PATH",
+                       help="fail unless every Unix installer in PATH (file, folder, zip, wheel or "
+                            "tar) carries --tag")
+    parser.add_argument("--tag", default="", help="with --check-artifact: the release tag")
     args = parser.parse_args(argv)
+    if args.check_artifact:
+        return check_artifact(Path(args.check_artifact), args.tag)
     return check() if args.check else stamp(args.tag)
 
 

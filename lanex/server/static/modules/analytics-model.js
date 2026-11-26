@@ -12,7 +12,7 @@ import * as FS from "./flowstages.js";
 // Key anatomy, numbers and units live in metricfmt.js, the one formatter
 // Runs, Compare and the sweep views share with this page; they are
 // re-exported here so everything that reads them from this module keeps working.
-import { parseKey, isNum, nonFinite, num, si, unitOf, show, signed, LANEX_DIRECTIONS } from "./metricfmt.js";
+import { parseKey, isNum, nonFinite, num, si, unitOf, show, signed, LANEX_DIRECTIONS, fixedDirection } from "./metricfmt.js";
 export { parseKey, isNum, nonFinite, num, si, unitOf, show, signed };
 
 // ---------- labels ---------------------------------------------------------------
@@ -239,8 +239,8 @@ export function accumulate(steps) {
 // means: "fail" when LibreLane's registry marks the metric critical (or it is a
 // DRC count, which the registry omits for KLayout), "warn" otherwise.
 export const CHECKS = [
-  { group: "Timing", label: "Setup", keys: ["timing__setup_vio__count"], tip: "Paths that arrive too late for the clock edge, in any corner." },
-  { group: "Timing", label: "Hold", keys: ["timing__hold_vio__count"], tip: "Paths that change too soon after the clock edge, in any corner." },
+  { group: "Timing", label: "Setup", keys: ["timing__setup_vio__count"], tip: "Endpoints whose signal arrives too late for the clock edge. LibreLane adds the corners up, so one that fails in two corners counts twice." },
+  { group: "Timing", label: "Hold", keys: ["timing__hold_vio__count"], tip: "Endpoints whose signal changes too soon after the clock edge. LibreLane adds the corners up, so one that fails in two corners counts twice." },
   { group: "Electrical", label: "Max slew", keys: ["design__max_slew_violation__count"], tip: "Signals whose transitions are slower than the library allows." },
   { group: "Electrical", label: "Max cap", keys: ["design__max_cap_violation__count"], tip: "Nets driving more capacitance than the driver allows." },
   { group: "Electrical", label: "Max fanout", keys: ["design__max_fanout_violation__count"], tip: "Nets driving more inputs than the fanout limit." },
@@ -314,6 +314,9 @@ export function delta(a, b, dir) {
 // doesn't register read like their registered relatives (metricfmt.js
 // LANEX_DIRECTIONS), so Runs, Compare and Analytics colour the same numbers.
 export function directionOf(meta, key) {
+  // The few registry directions that don't hold (metricfmt.fixedDirection).
+  const fx = fixedDirection(key);
+  if (fx != null) return fx;
   const m = meta && meta.get && (meta.get(key) || meta.get(parseKey(key).base));
   if (m && typeof m.higher_is_better === "boolean") return m.higher_is_better ? 1 : -1;
   return LANEX_DIRECTIONS[key] || LANEX_DIRECTIONS[parseKey(key).base] || 0;

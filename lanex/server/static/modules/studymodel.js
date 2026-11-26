@@ -84,6 +84,10 @@ export function pointWords(key, { run = null, job = null, stageLabel = (s) => s,
 // "Met timing": finished, setup and hold slack not negative.
 export function metTiming(key, run) {
   if (!run || !(key === "clean" || key === "warnings")) return false;
+  // Flip-flops with no clock were never timed: what was timed passing is not
+  // the design meeting its clock (Verify's verdict, verify.py run_verdict_from).
+  const v = run.verdict || {};
+  if (v.no_clock || v.unclocked) return false;
   const m = run.key_metrics || {};
   return fin(m.timing__setup__ws) && m.timing__setup__ws >= 0 && !(fin(m.timing__hold__ws) && m.timing__hold__ws < 0);
 }

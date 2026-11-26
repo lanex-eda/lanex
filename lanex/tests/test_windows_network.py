@@ -111,13 +111,17 @@ def test_diagnostic_tail_is_bounded_and_redacts_credentials() -> None:
     assert len(result["log_tail"].splitlines()) <= 20
 
 
-def test_pac_is_explained_as_unsupported_not_logged_as_a_proxy_url() -> None:
+def test_proxy_sign_in_is_explained_in_plain_words() -> None:
+    # A PAC file is now resolved by Windows itself (windows/setup/network.ps1);
+    # what Linux tools cannot do is sign in to the proxy.
     result = platform_env.diagnose_network_failure(
         "HTTP 407 Proxy Authentication Required; Windows uses a PAC file",
         dns_result=True,
     )
     assert result is not None
-    assert "PAC files are not shell proxy URLs" in result["remediation"]
+    assert result["category"] == "proxy-auth"
+    assert "never stores passwords" in result["remediation"]
+    assert "PAC" not in result["remediation"]
 
 
 def test_unknown_output_with_working_dns_has_no_false_network_diagnosis() -> None:
@@ -189,7 +193,11 @@ def test_setup_forwards_proxy_without_logging_values_and_detects_pac() -> None:
     assert "HTTP_PROXY:HTTPS_PROXY:NO_PROXY:http_proxy:https_proxy:no_proxy" in setup
     assert "SetProcessEnvironmentVariable('WSLENV', ForwardedWslEnv)" in setup
     assert "SetProcessEnvironmentVariable('WSLENV', PreviousWslEnv)" in setup
-    assert "AutoConfigURL" in setup and "PAC address and proxy credentials are not logged" in setup
+    # A PAC file is resolved per site by Windows itself (setup\network.ps1), and
+    # the snapshot never holds the PAC address or a password.
+    assert "AutoConfigURL" in setup and "TakeNetworkSnapshot" in setup
+    snap = (REPO / "windows" / "setup" / "network.ps1").read_text(encoding="utf-8")
+    assert "GetSystemWebProxy" in snap and "Remove-UserInfo" in snap
 
 
 def test_in_app_apt_strategy_has_bounded_network_policy(monkeypatch: pytest.MonkeyPatch) -> None:
