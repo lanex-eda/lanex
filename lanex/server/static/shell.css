@@ -700,6 +700,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--met1); }
 .wiz-tpl-desc { font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
 .wiz-tpl-tag { margin-top: auto; font-family: var(--cond); font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
 .wiz-tpl-tag::before { content: ""; width: 6px; height: 6px; background: var(--met3); }
+/* A template tied to one PDK family (the SRAM's block ships with sky130). */
+.wiz-tpl-tag + .wiz-tpl-only { margin-top: 0; }
+.wiz-tpl-only::before { background: var(--met4); }
+.wiz-tpl:disabled { opacity: 0.55; cursor: not-allowed; }
+.wiz-tpl:disabled:hover { border-color: var(--border); box-shadow: none; }
 .wiz-tpl-empty { grid-column: 1 / -1; min-height: 0; }
 .wiz-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 18px; }
 .wiz-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }

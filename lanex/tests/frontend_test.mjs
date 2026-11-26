@@ -2937,6 +2937,21 @@ await checkAsync("setup: the server's refusals read in plain words", async () =>
     assert.match(WZ.createProblem({ ...ok, pdk: "" }), /Install one in Tools/);
     assert.match(WZ.createProblem({ ...ok, dest: "/mnt/c/Users/Jo Smith/p" }), /space/);
   });
+  check("wizard: the SRAM example is sky130 only, and says so on another PDK", () => {
+    const sram = { name: "sram", pdks: ["sky130*"] };
+    assert.equal(WZ.tplPdkOk(sram, "sky130A"), true);
+    assert.equal(WZ.tplPdkOk(sram, "sky130B"), true);
+    assert.equal(WZ.tplPdkOk(sram, "gf180mcuD"), false);
+    assert.equal(WZ.tplPdkOk(sram, ""), false);
+    assert.equal(WZ.tplPdkOk({ name: "blinky", pdks: [] }, "ihp-sg13g2"), true);
+    assert.equal(WZ.pdkOnlyWords(sram), "sky130 only");
+    assert.equal(WZ.pdkOnlyWords({ pdks: [] }), "");
+    const pdks = [{ name: "sky130A", ready: true }, { name: "gf180mcuD", ready: true }];
+    const base = { dest: "/home/u/p", clock: 25, hasClock: true, pdks, tpl: sram };
+    assert.equal(WZ.createProblem({ ...base, pdk: "sky130A" }), "");
+    assert.match(WZ.createProblem({ ...base, pdk: "gf180mcuD" }), /needs a sky130 PDK.*gf180mcuD has no such block\. Pick sky130A/);
+    assert.match(WZ.createProblem({ ...base, pdk: "gf180mcuD", pdks: [pdks[1]] }), /Install sky130 in Tools/);
+  });
   check("words: no false claim that the config file is never written", () => {
     const cfg = readFileSync(resolve(MOD, "config.js"), "utf8");
     const help = readFileSync(resolve(MOD, "help.js"), "utf8");
