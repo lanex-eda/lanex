@@ -3,6 +3,9 @@
 // random pairs, one clock after each pair goes in, and ends with PASS, or
 // with FAIL and a non-zero exit when a product is wrong.
 module mult_tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     reg         clk = 1'b0;
     reg         rst = 1'b1;
     reg  [7:0]  a = 8'd0, b = 8'd0;
@@ -31,7 +34,7 @@ module mult_tb;
             checked = checked + 1;
             if (p !== want) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: %0d * %0d = %0d, expected %0d", $time, x, y, p, want);
+                $display("FAIL at %t: %0d * %0d = %0d, expected %0d", $realtime, x, y, p, want);
             end
         end
     endtask

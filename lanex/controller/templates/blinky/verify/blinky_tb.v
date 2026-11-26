@@ -3,6 +3,9 @@
 // checks the LED against the model on every cycle and ends with PASS, or
 // with FAIL and a non-zero exit when the design got it wrong.
 module blinky_tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     reg  clk = 1'b0;
     reg  rst = 1'b1;
     wire led;
@@ -32,7 +35,7 @@ module blinky_tb;
             @(negedge clk);
             if (led !== model[3]) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: led = %b, expected %b", $time, led, model[3]);
+                $display("FAIL at %t: led = %b, expected %b", $realtime, led, model[3]);
             end
             if (led !== last) toggles = toggles + 1;
             last = led;
