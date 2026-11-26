@@ -167,7 +167,7 @@ export const api = {
   runDiagrams: (tag) => _fetch("/api/run-diagrams?tag=" + encodeURIComponent(tag)),
   renderDot: (tag, path, force) =>
     _fetch("/api/render-dot?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path) +
-      (force ? "&force=1" : "")),
+      (force ? "&force=1" : ""), { method: "POST", body: "{}" }),
   revealDesign: (designDir) =>
     _fetch("/api/reveal", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
   revealFile: (tag, path) =>

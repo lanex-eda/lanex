@@ -2805,7 +2805,8 @@ def h_run_diagrams(handler: Any) -> None:
 
 
 def h_render_dot(handler: Any) -> None:
-    """Render a run's .dot diagram to a cached SVG (served via /api/run-file)."""
+    """Render a run's .dot diagram to a cached SVG (served via /api/run-file).
+    POST (``?tag=&path=``): it runs Graphviz and writes the SVG into the run."""
     tag = _query_param(handler.path, "tag")
     rel = _query_param(handler.path, "path")
     force = (_query_param(handler.path, "force") or "").lower() in ("1", "true", "yes")
@@ -6815,7 +6816,7 @@ _POST_ROUTES = {
     "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave",
     "/api/sim/run-all", "/api/sim/preview", "/api/ide/index", "/api/ide/definition", "/api/ide/references",
     "/api/ide/symbols", "/api/ide/hierarchy", "/api/ide/search", "/api/ide/replace", "/api/ide/schematic",
-    "/api/ide/schematic-cancel", "/api/ide/caps", "/api/celllib/view",
+    "/api/ide/schematic-cancel", "/api/ide/caps", "/api/render-dot", "/api/celllib/view",
     "/api/celllib/view/close", "/api/macros/add", "/api/macros/settings", "/api/macros/place",
     "/api/custom-cells/save", "/api/custom-cells/remove", "/api/custom-cells/enable",
     "/api/custom-macros/save", "/api/custom-macros/remove", "/api/custom-macros/enable",
@@ -6854,7 +6855,7 @@ _GET_ROUTES = {
     "/api/health", "/api/presence", "/api/hello", "/api/about", "/api/steps", "/api/variables",
     "/api/design-formats", "/api/flows", "/api/pdks", "/api/scls", "/api/pdk-ready", "/api/runs",
     "/api/known-designs", "/api/run-step-log", "/api/run-files", "/api/run-images",
-    "/api/run-outputs", "/api/run-diagrams", "/api/render-dot", "/api/run-gui-meta",
+    "/api/run-outputs", "/api/run-diagrams", "/api/run-gui-meta",
     "/api/run-reproduce", "/api/run-bundle", "/api/trends", "/api/desktop-tools",
     "/api/container-tools", "/api/layout/sources", "/api/layout/render", "/api/layout/thumb",
     "/api/layout/probe", "/api/layout/instances", "/api/layout/mesh", "/api/layout/markers",
