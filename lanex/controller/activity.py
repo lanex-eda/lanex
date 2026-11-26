@@ -21,6 +21,7 @@ opened KLayout and closed the cockpit is still working.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -155,7 +156,25 @@ def busy() -> List[str]:
         with installer._in_progress_lock:
             return bool(installer._in_progress)
 
-    probe("a flow run", _flow)
+    # The job queue: every run going (any project) and the runs waiting, named.
+    queued_words: List[str] = []
+    try:
+        from . import jobs
+        snap = [j for j in jobs.scheduler.jobs_snapshot_live() if j.get("state") != "paused"]
+        if snap:
+            names = sorted({os.path.basename(str(j.get("design_dir") or "").rstrip("/")) for j in snap})
+            n = len(snap)
+            queued_words.append(("a flow run" if n == 1 else f"{n} flow runs") + f" ({', '.join(names[:3])})")
+        waiting = sum(1 for q in list(jobs.scheduler._queues.values()) for j in q["jobs"]
+                      if j.get("state") == "queued" and not q.get("paused"))
+        if waiting:
+            queued_words.append(f"{waiting} run{'s' if waiting != 1 else ''} waiting in the queue")
+    except Exception:
+        queued_words = []
+    if queued_words:
+        out.extend(queued_words)
+    else:
+        probe("a flow run", _flow)
     probe("a design-space sweep", _sweep)
     probe("a simulation", _sim)
     probe("a command you started", _manual)

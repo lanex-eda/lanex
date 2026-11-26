@@ -377,14 +377,34 @@ def h_runs(handler: Any) -> None:
         _respond(handler, [])
         return
     try:
-        _respond(handler, history.mark_live(history.list_runs(design_dir), _live_run_dir()))
+        rows = history.list_runs(design_dir)
+        for rd in _live_run_dirs():
+            rows = history.mark_live(rows, rd)
+        _annotate_run_origin(rows)
+        _respond(handler, rows)
     except Exception as ex:
         _log.exception("list_runs failed")
         _respond(handler, str(ex), 500)
 
 
+def _annotate_run_origin(rows: List[Dict[str, Any]]) -> None:
+    """Every Runs row says who started it (lane 2 shows it): ``started_by``
+    "lanex" / "sweep" / "terminal" and the queue ``job_id``, also as
+    ``origin.source``. (``origin`` itself stays the dict Runs reads today.)"""
+    from ..controller import jobs
+    for r in rows or []:
+        try:
+            o = jobs.run_row_origin(r.get("run_dir") or "")
+        except Exception:
+            o = {"started_by": "lanex", "job_id": None}
+        r["started_by"] = o["started_by"]
+        r["job_id"] = o["job_id"]
+        if isinstance(r.get("origin"), dict):
+            r["origin"]["source"] = o["started_by"]
+
+
 def _live_run_dir() -> Optional[str]:
-    """The run folder of the flow running right now, or None."""
+    """The run folder of the flow the open project follows right now, or None."""
     try:
         from ..server.app import get_runner
         r = get_runner()
@@ -393,19 +413,38 @@ def _live_run_dir() -> Optional[str]:
         return None
 
 
-def _live_probe() -> Optional[str]:
-    """:func:`_live_run_dir` for history's caches: lets them trust a finished
-    run's quick signature while always re-reading the live one. A runner that
-    was never created runs nothing; one whose run folder is not known yet
-    makes every run count as possibly live."""
+def _live_run_dirs() -> List[str]:
+    """Every run folder being written now (every project, every queue job,
+    followed terminal runs)."""
+    try:
+        from ..controller import jobs
+        out = list(jobs.scheduler.live_run_dirs())
+    except Exception:
+        out = []
+    one = _live_run_dir()
+    if one and one not in out:
+        out.append(one)
+    return out
+
+
+def _live_probe() -> Any:
+    """The live run folders, for history's caches: lets them trust a finished
+    run's quick signature while always re-reading the live ones. A live job
+    whose run folder is not known yet makes every run count as possibly live."""
     from ..server import app as _app
+    from ..controller import jobs
+    out: List[str] = []
     r = _app._RUNNER
-    if r is None or not r.running:
-        return None
-    rd = r.run_dir
-    if not rd:
-        raise RuntimeError("live run folder not known yet")
-    return rd
+    if r is not None and r.running:
+        if not r.run_dir:
+            raise RuntimeError("live run folder not known yet")
+        out.append(r.run_dir)
+    for j in jobs.scheduler.jobs_snapshot_live():
+        if not j.get("run_dir"):
+            raise RuntimeError("live run folder not known yet")
+        out.append(j["run_dir"])
+    out += [f.run_dir for f in list(jobs.scheduler._followers.values()) if f.alive]
+    return out or None
 
 
 history.set_live_probe(_live_probe)
@@ -485,7 +524,11 @@ def h_tools(handler: Any) -> None:
 
 def h_run_status(handler: Any) -> None:
     from ..server.app import get_runner
-    r = get_runner()
+    from ..controller import jobs
+    # ?job_id= : one queue job's run (the queue popover's Show); else the run
+    # the open project follows.
+    want = _query_param(handler.path, "job_id")
+    r = (jobs.scheduler.runner(want) if want else None) or get_runner()
     # A run cancelled before LibreLane created its run dir leaves status
     # pointing at a path that never came to exist, while /api/runs (rightly)
     # doesn't list it. Report None instead of a phantom path so the two
@@ -493,12 +536,17 @@ def h_run_status(handler: Any) -> None:
     run_dir = r.run_dir
     if run_dir and not Path(run_dir).is_dir():
         run_dir = None
+    job_id = getattr(r, "job_id", None)
     _respond(handler, {
         "running": r.running,
         "cancelled": r.cancelled,
-        "paused": r.paused,
+        "paused": r.paused or bool(getattr(r, "awaiting_next", False)),
         "run_dir": run_dir,
         "step_statuses": r.step_statuses,
+        # Which queue job the open project follows (pages ignore the events
+        # of every other run going at the same time).
+        "job_id": job_id,
+        "design_dir": getattr(r, "design_dir", None),
     })
 
 
@@ -1267,7 +1315,8 @@ def _clean_overrides(overrides: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
-                       custom_cells: bool = True) -> Dict[str, Any]:
+                       custom_cells: bool = True,
+                       share: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Single source of truth for the user-data payload of a run.
 
     Turns a run-request body into the pieces that carry USER-SUPPLIED data into
@@ -1333,11 +1382,26 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
     # callers send ``{**overrides, **threads}`` to LibreLane and the command.
     from ..controller import runresources
     _cf = _resolve_config_file(design_dir)
+    # *share*: this run's part of the PC when several go at once (the job
+    # queue), or the thread count the run menu set. None: the whole PC.
+    facts = None
+    if share:
+        m = runresources.machine()
+        facts = {"cores": share.get("cores") or m.get("cores"),
+                 "available_gb": share.get("available_gb") if share.get("available_gb") is not None else m.get("available_gb"),
+                 "total_gb": m.get("total_gb")}
     sized = runresources.plan(
         design_dir=design_dir,
         config_files=([str(_cf)] if _cf else []) + list(extra_config_files),
         flow_factory=_run_flow_cls(design_dir, body.get("flow")),
-        overrides=overrides, pdk=pdk)
+        overrides=overrides, pdk=pdk, facts=facts)
+    if share and sized.get("record"):
+        rec = sized["record"]
+        if share.get("fixed"):
+            rec["reason"] = f"{share.get('cores')} threads, as set in the Run menu"
+        elif share.get("share", 1) > 1:
+            rec["reason"] = (rec.get("reason") or "") + f", shared by {share['share']} runs at once"
+        rec["share"] = share.get("share")
     return {
         "pdk": pdk,
         "scl": scl,
@@ -1492,11 +1556,12 @@ def _design_refusal(handler: Any, design_dir: Optional[str]) -> Optional[str]:
     return None
 
 
-def _other_flow_busy(*, sweep_ok: bool = False, runner_ok: bool = False) -> Optional[str]:
-    """Another flow already has the machine: a sweep's queue (which starts its
-    next point the moment the runner goes idle), a flow run, or a ``librelane``
-    command from the Console. Two flows at once double the memory a full run
-    needs and can write into the same run folder. A plain refusal, or None."""
+def _other_flow_busy(*, sweep_ok: bool = True, runner_ok: bool = False) -> Optional[str]:
+    """A flow LanEx's queue does not schedule is going in this project: a
+    ``librelane`` command from the Console (it may name the same run folder),
+    or (for the Console) a LanEx run of the open project. Runs and sweeps no
+    longer refuse each other: they wait in the job queue, which keeps them to
+    what memory allows. A plain refusal, or None."""
     try:
         from ..controller import dse
         if not sweep_ok and dse.job.active:
@@ -1532,23 +1597,46 @@ def h_run_start(handler: Any) -> None:
         # run, with nothing changed. The fix route plans and starts it.
         b = body["branch_from"] if isinstance(body["branch_from"], dict) else {}
         _apply_fix(handler, {"tag": b.get("tag"), "sets": {}, "start": b.get("step") or "auto",
-                             "run_mode": body.get("run_mode"), "mode": body.get("mode"), "to": body.get("to"), "new_tag": body.get("tag")})
+                             "run_mode": body.get("run_mode"), "mode": body.get("mode"), "to": body.get("to"),
+                             "new_tag": body.get("tag"), "when": body.get("when")})
         return
     data, status = _start_run(body)
     _respond(handler, data, status)
 
 
+_RUN_SPEC_KEYS = ("flow", "run_mode", "mode", "tag", "frm", "to", "only", "skip", "overrides", "sources",
+                  "extras", "threads", "priority", "keep_awake", "notify", "checks_ack", "initial_state",
+                  "branched_from", "sweep", "label", "pdk", "scl")
+
+
+def _run_spec(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The part of a run request a queue job keeps (``jobs.py`` ``spec``)."""
+    return {k: body.get(k) for k in _RUN_SPEC_KEYS if body.get(k) is not None}
+
+
 def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
                branched_from: Optional[Dict[str, Any]] = None,
-               overrides_ready: bool = False) -> Tuple[Any, int]:
+               overrides_ready: bool = False, design_dir: Optional[str] = None,
+               runner: Any = None, share: Optional[Dict[str, Any]] = None,
+               dry: bool = False, continue_of: Optional[Dict[str, Any]] = None,
+               reserve: Any = None) -> Tuple[Any, int]:
     """Start a run from a run-request body: ``(reply, status)``.
+
+    Called without *runner* (a Run click, Resume from a stage, Verify's
+    re-run), the run goes through the job queue: it starts now when a slot
+    and memory are free (``body.when`` "now", the default) or waits in the
+    queue (``when: "queue"``, checked first so a config LibreLane refuses is
+    told now, not in an hour). The queue's launcher calls back here with the
+    job's own *runner* and the machine *share* its threads are sized to.
 
     *initial_state* and *branched_from* make it a run resumed from another
     one (``-i`` with ``frm``; recorded in ``gui-run.json``). *overrides_ready*
     says the body's overrides already hold the per-run custom cells (a
-    resumed run inherits the old run's), so they are not merged again."""
-    from ..server.app import get_runner
-    design_dir = _get_active_design_dir()
+    resumed run inherits the old run's), so they are not merged again.
+    *dry* runs every check and returns before anything starts.
+    *continue_of* is the ``gui-run.json`` of the run an interrupted job
+    continues in its own folder (kept, with this attempt added)."""
+    design_dir = design_dir or _get_active_design_dir()
     if not design_dir:
         return "No project is open. Open or create one on Setup, then run.", 400
     gone = _design_refusal(None, design_dir)
@@ -1563,9 +1651,33 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
     config_file = _resolve_config_file(design_dir)
     if config_file is None:
         return "no config.{json,yaml,tcl} found in design directory", 400
+    if runner is None and not dry:
+        busy = _other_flow_busy(runner_ok=True)
+        if busy:
+            return busy, 409
+        from ..controller import jobs
+        spec = _run_spec(body)
+        if initial_state:
+            spec["initial_state"] = str(Path(initial_state).resolve())
+        if branched_from:
+            spec["branched_from"] = branched_from
+        if body.get("when") == "queue":
+            data, st = _start_run(body, initial_state=initial_state, branched_from=branched_from,
+                                  overrides_ready=overrides_ready, design_dir=design_dir, dry=True)
+            if st != 200 or not (isinstance(data, dict) and data.get("ok")):
+                return data, st
+            spec["checks_ack"] = True
+            try:
+                job = jobs.scheduler.add(design_dir, spec, kind="run", position=body.get("position") or "end")
+            except ValueError as ex:
+                return str(ex), 400
+            return {"ok": True, "started": False, "queued": True, "job_id": job["id"], "job": job,
+                    "reason": job.get("reason") or "Waiting in the queue"}, 200
+        return jobs.scheduler.submit_now(design_dir, spec, initial_state=initial_state,
+                                         branched_from=branched_from)
     config_warning = _multi_config_warning(design_dir)
-    r = get_runner()
-    if r.running:
+    r = runner
+    if r is not None and r.running:
         return "already running", 400
     busy = _other_flow_busy(runner_ok=True)
     if busy:
@@ -1591,7 +1703,8 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
         # ONE shared helper (override cleaning that preserves 0/False, custom-cell
         # overrides, the hard-macro overlay). The DSE sweep path calls the exact
         # same helper, so a swept run can never silently differ from this one.
-        _asm = _assemble_overrides(design_dir, body, custom_cells=not overrides_ready)
+        _asm = _assemble_overrides(design_dir, body, custom_cells=not overrides_ready,
+                                   share=_thread_share(body, share))
         pdk, scl = _asm["pdk"], _asm["scl"]
         overrides = _asm["overrides"]
         run_overrides = {**overrides, **_asm["threads"]}  # + threads sized to this PC
@@ -1639,6 +1752,17 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
         if chk["blocking"] or (chk["problems"] and not body.get("checks_ack")):
             return {"ok": False, "started": False, "config_check": chk,
                     "reason": " ".join(configcheck.blockers_text(chk))}, 200
+        initial_state = initial_state or body.get("initial_state") or None
+        rng = _range_refusal(flow_factory, body, initial_state)
+        if rng:
+            return {"ok": False, "started": False, "reason": rng, "range_error": True}, 200
+        if body.get("only"):
+            body = {**body, "frm": body["only"], "to": body["only"]}
+        if dry:
+            return {"ok": True, "started": False, "checked": True, "flow": flow_name,
+                    "resources": _asm["resources"]}, 200
+        if reserve is not None:
+            body = {**body, "tag": reserve(body.get("tag") or None)}
         state_rel = None
         if initial_state:
             try:
@@ -1695,6 +1819,25 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             )
         except Exception:
             _log.debug("cli_command_for failed for gui-run.json", exc_info=True)
+        job_id = getattr(r, "job_id", None)
+        if job_id:
+            gui_meta["job_id"] = job_id
+        if body.get("sweep"):
+            gui_meta["sweep"] = body["sweep"]
+        if body.get("priority") == "low":
+            gui_meta["priority"] = "low"
+            try:
+                r.low_priority = True
+            except Exception:
+                pass
+        if continue_of:
+            # Continuing an interrupted run in its own folder: what it was
+            # started with stays; this attempt is added to its record.
+            attempt = {"at": platform_env.local_now().isoformat(timespec="seconds"), "how": "continue",
+                       "from_step": body.get("frm"), "job_id": job_id,
+                       "cli_command": gui_meta.get("cli_command")}
+            gui_meta = {**continue_of, "attempts": list(continue_of.get("attempts") or []) + [attempt]}
+            gui_meta.pop("outcome", None)
         result = r.start(
             flow_factory=flow_factory,
             config_files=[str(config_file)],
@@ -1727,10 +1870,69 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             result["command"] = gui_meta.get("cli_command")
             result["resources"] = gui_meta.get("resources")
             result["flow"] = flow_name
+            if body.get("tag"):
+                result["tag"] = body.get("tag")
         return result, 200
     except Exception as ex:
         _log.exception("run start failed")
         return str(ex), 500
+
+
+def _thread_share(body: Dict[str, Any], share: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The machine facts this run's threads are sized to: its share of the
+    PC when several runs go at once (the queue says), or the thread count the
+    run menu set ("Threads: 8")."""
+    t = body.get("threads")
+    try:
+        n = int(t) if t not in (None, "", "auto") else None
+    except (TypeError, ValueError):
+        n = None
+    if n and n > 0:
+        out = dict(share or {})
+        out["cores"] = n
+        if out.get("available_gb") is None:
+            try:
+                from ..controller import runresources
+                out["available_gb"] = runresources.machine().get("available_gb")
+            except Exception:
+                pass
+        out["fixed"] = True
+        return out
+    return share if share and share.get("share", 1) > 1 else None
+
+
+def _range_refusal(flow_factory: Any, body: Dict[str, Any], initial_state: Optional[str]) -> Optional[str]:
+    """Plain words for a step range LibreLane would get wrong, or None.
+
+    Checked on 3.0.4 (research, section 6): ``--from`` in a new run with no
+    ``-i`` stops at once with "missing required input"; ``--to`` before
+    ``--from`` silently runs to the end of the flow; ids that match nothing
+    stop with "no step(s) with ID"."""
+    frm = body.get("only") or body.get("frm")
+    to = body.get("only") or body.get("to")
+    steps = [s.id for s in (getattr(flow_factory, "Steps", None) or [])]
+    if not steps:
+        return None
+    low = [s.lower() for s in steps]
+
+    def pos(sid: Any) -> Optional[int]:
+        try:
+            return low.index(str(sid).lower())
+        except ValueError:
+            return None
+    for name, sid in (("start", frm), ("stop", to)):
+        if sid and pos(sid) is None:
+            return f"The flow has no step '{sid}' to {name} at. Pick a step from the list."
+    for sid in body.get("skip") or []:
+        if sid and not any(__import__("fnmatch").fnmatch(s, str(sid).lower()) for s in low):
+            return f"The flow has no step '{sid}' to skip."
+    if frm and to and pos(to) < pos(frm):
+        return ("That range ends before it starts: LibreLane would run to the end of the flow instead. "
+                "Pick a stop step after the start step.")
+    if frm and pos(frm) and not initial_state:
+        return ("Starting part-way needs a run to start from: LibreLane reads the results of the steps "
+                "before it. Use Resume from a stage on a finished run, or run the whole flow.")
+    return None
 
 
 # The ONE canonical order LanEx resolves a design's config file in. Preflight and
@@ -1825,8 +2027,19 @@ def h_cli_command(handler: Any) -> None:
         return
     run_mode = "container" if body.get("run_mode") == "container" else "local"
     # Assemble EXACTLY like a real run so the revealed command is faithful:
-    # cleaned overrides + custom cells + macro overlay + picker sources (A3).
-    asm = _assemble_overrides(design_dir, body)
+    # cleaned overrides + custom cells + macro overlay + picker sources (A3),
+    # and threads sized to the share of the PC this run would get if it
+    # started now beside the runs going (the run menu's live command).
+    share = None
+    try:
+        from ..controller import jobs as _jobs
+        k = _jobs.scheduler.running_count() + 1
+        if k > 1:
+            f = _jobs.scheduler.facts()
+            share = _jobs.share_of(f.get("cores"), f.get("free_gb"), k)
+    except Exception:
+        share = None
+    asm = _assemble_overrides(design_dir, body, share=_thread_share(body, share))
     pdk, scl = asm["pdk"], asm["scl"]
     pdk_root = os.environ.get("PDK_ROOT") or None
     try:
@@ -1842,11 +2055,12 @@ def h_cli_command(handler: Any) -> None:
         cli_flow = None if _fl["error"] else _fl["cli"]
     except Exception:
         cli_flow = None
+    only = body.get("only") or None
     cmd = manualcmd.cli_command_for(
         design_dir=design_dir, config_file=str(config_file),
         flow=cli_flow, pdk=pdk, scl=scl, pdk_root=pdk_root,
         run_mode=run_mode, tag=body.get("tag") or None,
-        frm=body.get("frm") or None, to=body.get("to") or None,
+        frm=only or body.get("frm") or None, to=only or body.get("to") or None,
         skip=body.get("skip") or [], overrides={**asm["overrides"], **asm["threads"]},
         extra_sources=asm["extra_sources"], extra_extras=asm["extra_extras"],
         extra_config_files=asm["extra_config_files"],
@@ -1906,21 +2120,286 @@ def h_manual_result(handler: Any) -> None:
 
 
 def h_run_cancel(handler: Any) -> None:
-    from ..controller import dse
+    """Stop one run: ``{job_id}``, else the run the open project follows.
+    Stopping a sweep point stops its sweep (its waiting points too)."""
+    from ..controller import dse, jobs
     from ..server.app import get_runner
-    # Stop during a sweep stops the sweep: otherwise the queue would start
-    # the next point the moment this run ends.
-    sweep = dse.job.active
-    if sweep:
+    body = getattr(handler, "_body", {}) or {}
+    jid = body.get("job_id") or getattr(get_runner(), "job_id", None)
+    if jid and str(jid).startswith("term:"):
+        # LanEx follows it but did not start it: its container has no name
+        # LanEx gave it, and killing "a container in this folder" could hit a
+        # viewer (audit G5). The person stops it where they started it.
+        _respond(handler, "This run was started in a terminal, outside LanEx. Stop it there (Ctrl+C in that "
+                          "terminal). LanEx keeps following it until it ends.", 409)
+        return
+    j = jobs.scheduler.job(jid) if jid else None
+    sweep = False
+    if j is not None and j.get("group") and dse.job.active and dse.job.sweep_id == j.get("group"):
         dse.job.cancel()
-    get_runner().cancel()
-    _respond(handler, {"status": "cancelled", "sweep_stopped": sweep})
+        jobs.scheduler.remove(group=j["group"], reason="Not run: the sweep was stopped")
+        sweep = True
+    if j is not None:
+        jobs.scheduler.stop(jid)
+    else:
+        get_runner().cancel()
+    _respond(handler, {"status": "cancelled", "sweep_stopped": sweep, "job_id": jid})
 
 
 def h_run_resume(handler: Any) -> None:
+    """Step by step: the next step (``{job_id}``, else the open project's
+    run). A container run between steps holds no slot; its next step starts
+    when one is free."""
+    from ..controller import jobs
     from ..server.app import get_runner
-    get_runner().resume()
+    body = getattr(handler, "_body", {}) or {}
+    r = get_runner()
+    jid = body.get("job_id") or getattr(r, "job_id", None)
+    j = jobs.scheduler.job(jid) if jid else None
+    if j is not None and j.get("state") == "paused" and getattr(jobs.scheduler.runner(jid), "awaiting_next", False):
+        try:
+            res = jobs.scheduler.resume_step(jid)
+        except KeyError as ex:
+            _respond(handler, str(ex), 409)
+            return
+        _respond(handler, {"status": "resumed" if res.get("started") else "queued", **res})
+        return
+    (jobs.scheduler.runner(jid) or r).resume()
     _respond(handler, {"status": "resumed"})
+
+
+# ---------------------------------------------------------------------------
+# The job queue (controller/jobs.py documents every field, state and route).
+# ---------------------------------------------------------------------------
+
+def _queue_design(body: Dict[str, Any]) -> Optional[str]:
+    raw = body.get("design_dir") or _get_active_design_dir()
+    if not raw:
+        return None
+    try:
+        p = platform_env.to_host_path(str(raw)) or str(raw)
+    except Exception:
+        p = str(raw)
+    return p if Path(p).expanduser().is_dir() else None
+
+
+def h_queue(handler: Any) -> None:
+    """GET: every project's queue, runs at once, memory, ETA, keep-awake."""
+    from ..controller import jobs
+    try:
+        _respond(handler, jobs.scheduler.snapshot())
+    except Exception as ex:
+        _log.exception("queue snapshot failed")
+        _respond(handler, f"Couldn't read the queue: {ex}", 500)
+
+
+def h_queue_add(handler: Any) -> None:
+    """Add runs to a project's queue: ``{design_dir, spec | specs, group?,
+    kind?, label?, position?}``. Each spec is checked like a Run click first
+    (LibreLane's config loader, the top module, the clock port)."""
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    dd = _queue_design(body)
+    if not dd:
+        _respond(handler, "That project folder is not there. Open it on Setup, then queue the run.", 400)
+        return
+    specs = body.get("specs") if isinstance(body.get("specs"), list) else [body.get("spec") or {}]
+    if not specs or not all(isinstance(s, dict) for s in specs):
+        _respond(handler, "spec must be a run request (an object)", 400)
+        return
+    kind = body.get("kind") if body.get("kind") in ("run", "point") else "run"
+    out = []
+    for i, s in enumerate(specs):
+        tag_err = _bad_tag(s.get("tag"))
+        if tag_err:
+            _respond(handler, tag_err, 400)
+            return
+        if i == 0 or kind == "run":
+            data, st = jobs.scheduler.check_only(dd, _run_spec(s), kind=kind)
+            if st != 200 or not (isinstance(data, dict) and data.get("ok")):
+                if st != 200:
+                    _respond(handler, data, st)
+                else:
+                    _respond(handler, {**(data or {}), "ok": False, "queued": False})
+                return
+        spec = _run_spec(s)
+        spec["checks_ack"] = True
+        try:
+            out.append(jobs.scheduler.add(dd, spec, kind=kind, group=body.get("group"),
+                                          label=(s.get("label") or body.get("label")),
+                                          position=body.get("position") or "end"))
+        except ValueError as ex:
+            _respond(handler, str(ex), 400)
+            return
+    _respond(handler, {"ok": True, "jobs": out})
+
+
+def h_queue_move(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    to = body.get("to")
+    if to not in ("top", "up", "down", "bottom") and not isinstance(to, int):
+        _respond(handler, "to is top, up, down, bottom or a position", 400)
+        return
+    try:
+        _respond(handler, jobs.scheduler.move(str(body.get("id") or ""), to))
+    except KeyError as ex:
+        _respond(handler, str(ex).strip("'\""), 404)
+
+
+def h_queue_remove(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    if not (body.get("id") or body.get("group") or body.get("finished")):
+        _respond(handler, "Say which: id, group, or finished", 400)
+        return
+    gone = jobs.scheduler.remove(job_id=body.get("id") or None, group=body.get("group") or None,
+                                 finished=bool(body.get("finished")))
+    _respond(handler, {"removed": gone})
+
+
+def h_queue_pause(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    jobs.scheduler.pause(bool(body.get("paused", True)), design_dir=body.get("design_dir") or None)
+    _respond(handler, {"paused": bool(body.get("paused", True))})
+
+
+def h_queue_stop(handler: Any) -> None:
+    from ..controller import dse, jobs
+    body = getattr(handler, "_body", {}) or {}
+    if body.get("all"):
+        if dse.job.active:
+            dse.job.cancel()
+        _respond(handler, {"stopped": jobs.scheduler.stop(everything=True)})
+        return
+    jid = str(body.get("id") or "")
+    if not jid:
+        _respond(handler, "Say which run to stop (id), or all", 400)
+        return
+    _respond(handler, {"stopped": jobs.scheduler.stop(jid)})
+
+
+def h_queue_stop_after(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    jobs.scheduler.stop_after_current(bool(body.get("on", True)))
+    _respond(handler, {"on": bool(body.get("on", True))})
+
+
+def h_queue_settings(handler: Any) -> None:
+    """``{max_parallel: "auto" | 1..16, keep_awake?: bool}`` (machine-wide)."""
+    from ..controller import jobs, power
+    body = getattr(handler, "_body", {}) or {}
+    out: Dict[str, Any] = {}
+    if "max_parallel" in body:
+        try:
+            out["max_parallel"] = jobs.scheduler.set_parallel(body.get("max_parallel"))
+        except (TypeError, ValueError) as ex:
+            _respond(handler, str(ex) if isinstance(ex, ValueError) else "max_parallel is auto or a number", 400)
+            return
+    if "keep_awake" in body:
+        power.set_enabled(bool(body.get("keep_awake")))
+        out["keep_awake"] = power.enabled()
+    _respond(handler, out)
+
+
+def h_queue_recover(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    try:
+        _respond(handler, jobs.scheduler.recover(str(body.get("id") or ""), str(body.get("action") or "")))
+    except KeyError as ex:
+        _respond(handler, str(ex).strip("'\""), 404)
+    except ValueError as ex:
+        _respond(handler, str(ex), 409)
+
+
+def h_queue_resume(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    try:
+        _respond(handler, jobs.scheduler.resume_step(str(body.get("id") or "")))
+    except KeyError as ex:
+        _respond(handler, str(ex).strip("'\""), 409)
+
+
+def h_queue_orphan(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    name = str(body.get("name") or "")
+    if body.get("action") != "stop" or not name.startswith("lanex-flow-"):
+        _respond(handler, "Only a LanEx run container (lanex-flow-…) can be stopped here.", 400)
+        return
+    _respond(handler, {"stopped": jobs.scheduler.stop_orphan(name)})
+
+
+def h_power_hold(handler: Any) -> None:
+    """GET: should the PC stay awake now? The Windows launcher polls this
+    and holds Windows awake (``SetThreadExecutionState``/``PowerSetRequest``)
+    while ``hold`` is true; macOS and Linux are held by the server itself."""
+    from ..controller import jobs, power
+    power.note_poll()
+    want, why, n = jobs.scheduler.hold_wanted()
+    st = power.state()
+    hold = bool(want) and st.get("enabled", True)
+    _respond(handler, {"hold": hold, "reason": why if hold else "",
+                       "since": st.get("since") if hold else None, "jobs": n if hold else 0,
+                       "enabled": st.get("enabled", True), "how": st.get("how") or "",
+                       "note": st.get("note") or ""})
+
+
+_LOG_RANGE_MAX = 64 * 1024 * 1024
+
+
+def h_run_log(handler: Any) -> None:
+    """A run's whole console output, by byte range: ``?tag=&design_dir=&from=&to=``
+    (JSON ``{text, from, to, size, source}``) or ``&download=1`` (the file,
+    as an attachment). The console LanEx kept (``lanex-console.log``) when
+    there is one, else LibreLane's ``flow.log``."""
+    tag = _query_param(handler.path, "tag")
+    dd = _queue_design({"design_dir": _query_param(handler.path, "design_dir")})
+    if not dd or not tag or _bad_tag(tag):
+        _respond(handler, "missing or bad tag / design_dir", 400)
+        return
+    run = Path(dd) / "runs" / tag
+    which = _query_param(handler.path, "source")
+    cand = [run / "lanex-console.log", run / "flow.log"]
+    if which == "flow":
+        cand = [run / "flow.log"]
+    path = next((c for c in cand if c.is_file()), None)
+    if path is None:
+        _respond(handler, f"This run has no log yet ({run}).", 404)
+        return
+    if _query_param(handler.path, "download") == "1":
+        try:
+            data = path.read_bytes()
+        except OSError as ex:
+            _respond(handler, f"Couldn't read {path.name}: {ex}", 500)
+            return
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/plain; charset=utf-8")
+        handler.send_header("Content-Disposition", f'attachment; filename="{tag}-{path.name}"')
+        handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.end_headers()
+        handler.wfile.write(data)
+        return
+    try:
+        size = path.stat().st_size
+        a = max(0, int(_query_param(handler.path, "from") or 0))
+        b_raw = _query_param(handler.path, "to")
+        b = min(size, int(b_raw)) if b_raw else size
+        if b - a > _LOG_RANGE_MAX:
+            a = b - _LOG_RANGE_MAX
+        with open(path, "rb") as f:
+            f.seek(a)
+            chunk = f.read(max(0, b - a))
+    except (OSError, ValueError) as ex:
+        _respond(handler, f"Couldn't read {path.name}: {ex}", 500)
+        return
+    _respond(handler, {"text": chunk.decode("utf-8", "replace"), "from": a, "to": a + len(chunk),
+                       "size": size, "source": path.name, "path": str(path)})
 
 
 def h_reproducible(handler: Any) -> None:
@@ -3002,14 +3481,17 @@ def _live_run_meta(tag: Optional[str]) -> Optional[Tuple[Dict[str, Any], str]]:
     if not tag:
         return None
     try:
+        from ..controller import jobs
         from ..server.app import get_runner
-        r = get_runner()
-        rd = r.run_dir
-        meta = r.gui_meta
-        if not rd or not meta or Path(rd).name != tag:
-            return None
-        meta.setdefault("tag", tag)
-        return meta, str(rd)
+        # Every run going (several can, the job queue), the open project's first.
+        for r in [get_runner()] + list(jobs.scheduler._runners.values()):
+            rd = getattr(r, "run_dir", None)
+            meta = getattr(r, "gui_meta", None)
+            if not rd or not meta or Path(rd).name != tag:
+                continue
+            meta.setdefault("tag", tag)
+            return meta, str(rd)
+        return None
     except Exception:
         return None
 
@@ -3824,9 +4306,9 @@ def h_verify_rerun(handler: Any) -> None:
     if p.get("blocked"):
         _respond(handler, p["blocked"], 409)
         return
-    if get_runner().running:
-        _respond(handler, "A run is in progress. Re-run the step after it finishes.", 409)
-        return
+    # The re-run is a new run through the job queue: it starts beside a run
+    # that is going when there is room, else it says why it waits.
+    _ = get_runner
     overrides = dict(p["overrides"])
     try:
         from ..controller import customcells
@@ -3895,83 +4377,224 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                           run_mode: str, base_overrides: Dict[str, Any],
                           dse_body: Optional[Dict[str, Any]] = None,
                           sweep_id: Optional[str] = None, flowsel: Optional[Dict[str, Any]] = None):
-    """Return a ``start_one(tag, overrides)`` closure for the DSE queue that
-    starts a run through the shared runner and blocks until it finishes.
+    """Return a ``start_one(tag, overrides)`` closure for the sweep: it puts
+    the point in the job queue (``kind: "point"``, ``group``: the sweep) and
+    blocks until the point has ended. The queue decides how many points run
+    at once (memory and cores, ``jobs.py``), so a sweep's points run N at a
+    time; the sweep calls ``start_one`` for every point at once.
 
-    Each sweep point is assembled through the SAME ``_assemble_overrides`` helper
-    as a Setup run (override cleaning, custom cells, macro overlay, picker
-    sources/extras), so a swept run is identical to the same run launched from
-    Setup instead of silently dropping that context (audit A2)."""
-    import time
-    from ..server.app import get_runner
+    Each point is assembled at its start through the SAME
+    ``_assemble_overrides`` helper as a Setup run (override cleaning, custom
+    cells, macro overlay, picker sources/extras), by :func:`_launch_point`."""
+    from ..controller import dse, jobs
 
     def start_one(tag: str, overrides: Dict[str, Any]) -> Dict[str, Any]:
-        r = get_runner()
-        # Wait for any prior run to clear (defensive; queue is sequential).
-        for _ in range(600):
-            if not r.running:
-                break
-            time.sleep(0.5)
-        # Fold the swept point onto the sweep's base overrides, THEN run it all
-        # through the shared assembler so cleaning + custom cells + macro overlay
-        # + picker sources apply exactly as they do for a Setup run.
-        synthetic = dict(dse_body or {})
-        synthetic["overrides"] = {**base_overrides, **overrides}
-        asm = _assemble_overrides(design_dir, synthetic)
-        pdk, scl = asm["pdk"], asm["scl"]
-        # Resolve the pdk_root that actually holds this PDK for the run mode
-        # (ciel homes, not just $PDK_ROOT) — otherwise a sky130 sweep on a box
-        # whose $PDK_ROOT points elsewhere fails every config with "PDK not
-        # found", exactly like the lint/run-start paths used to.
-        pdk_root = os.environ.get("PDK_ROOT") or None
-        if pdk:
-            try:
-                pf = pdk_mod.check_pdk_ready(pdk, scl, run_mode)
-                pdk_root = pf.get("pdk_root") or pdk_root
-            except Exception:
-                pass
-        # Stop may have landed while this point was being prepared: launching
-        # it now would run a point the person already stopped.
-        from ..controller import dse as _dse
-        if _dse.job.cancelled:
+        if dse.job.cancelled:
             return {"ok": False, "kind": "stopped", "reason": "stopped"}
-        gui_meta = _sweep_point_meta(design_dir, config_file, flow_name, run_mode, tag, pdk, scl,
-                                     pdk_root, asm, sweep_id, overrides)
-        res = r.start(
-            flow_factory=(flowsel or {}).get("cls") or _flow_factory(flow_name),
-            config_files=[str(config_file)],
-            design_dir=design_dir,
-            pdk=pdk, scl=scl, pdk_root=pdk_root,
-            tag=tag, overwrite=True,
-            config_overrides={**asm["overrides"], **asm["threads"]},
-            extra_sources=asm["extra_sources"],
-            extra_extras=asm["extra_extras"],
-            extra_config_files=asm["extra_config_files"],
-            run_mode=run_mode, flow_name=(flowsel or {}).get("cli") if flowsel else flow_name,
-            gui_meta=gui_meta,
-        )
-        if not res.get("ok"):
-            return {"ok": False, "kind": "error",
-                    "reason": "did not start: " + str(res.get("error") or res.get("message") or "the runner refused")}
-        # Block until this run completes.
-        time.sleep(0.5)
-        for _ in range(86400 * 2):  # generous upper bound; ~12h at 0.5s
-            if not r.running:
-                break
-            time.sleep(0.5)
-        from ..controller import dse
-        run_dir = Path(design_dir) / "runs" / tag
+        spec = {
+            "tag": tag, "run_mode": run_mode, "flow": flow_name, "mode": "auto",
+            "overrides": {**base_overrides, **overrides},
+            "sources": list((dse_body or {}).get("sources") or []),
+            "extras": list((dse_body or {}).get("extras") or []),
+            "sweep": {"id": sweep_id, "values": dict(overrides)} if sweep_id else None,
+            "point_values": dict(overrides),
+            "keep_awake": (dse_body or {}).get("keep_awake", True),
+        }
+        try:
+            job = jobs.scheduler.add(design_dir, {k: v for k, v in spec.items() if v is not None},
+                                     kind="point", group=sweep_id)
+        except ValueError as ex:
+            return {"ok": False, "kind": "error", "reason": str(ex)}
+        fin = jobs.scheduler.wait_job(job["id"]) or {}
+        st = fin.get("state")
+        if st == "skipped":
+            return {"ok": False, "kind": "skipped", "reason": fin.get("reason") or "not run", "skipped": True}
+        if st == "stopped":
+            return {"ok": False, "kind": "stopped", "reason": "stopped"}
+        out_o = fin.get("outcome") or {}
+        if out_o.get("result") == "not-started":
+            return {"ok": False, "kind": "error", "reason": "did not start: " + str(out_o.get("message") or "")[:300]}
+        run_tag = fin.get("tag") or tag
+        run_dir = Path(design_dir) / "runs" / run_tag
         if sweep_id:
             dse.stamp_run(run_dir, sweep_id, overrides)
         # How the point really ended, read from its folder the way Flow reads
-        # it: a container run that exits non-zero leaves r.error unset, so
-        # "launched and the runner went idle" used to count as passed.
+        # it: a container run that exits non-zero is not a passed point.
         out = dse.point_outcome(run_dir)
-        if out.get("ok") and r.error:
-            out = {**out, "ok": False, "kind": "error", "reason": str(r.error)}
+        if out.get("ok") and out_o.get("result") == "error":
+            out = {**out, "ok": False, "kind": "error", "reason": str(out_o.get("message") or "the run failed")}
+        if run_tag != tag:
+            out["tag"] = run_tag
         return out
 
     return start_one
+
+
+def _launch_point(job: Dict[str, Any], runner: Any, share: Optional[Dict[str, Any]],
+                  dry: bool) -> Tuple[Any, int]:
+    """The queue starting one sweep point: assembled like a Setup run, with
+    the point's ``gui-run.json`` (``sweep``) and the exact CLI command."""
+    spec = dict(job.get("spec") or {})
+    design_dir = job["design_dir"]
+    config_file = _config_file_for(design_dir)
+    if config_file is None:
+        return "This project has no config file any more.", 400
+    run_mode = "container" if spec.get("run_mode") == "container" else "local"
+    from ..controller import configcheck, jobs
+    flowsel = configcheck.resolve_flow([str(config_file)], spec.get("flow") or None)
+    if flowsel["error"]:
+        return flowsel["error"], 400
+    if dry:
+        return {"ok": True, "started": False, "checked": True}, 200
+    asm = _assemble_overrides(design_dir, spec, share=share)
+    pdk, scl = asm["pdk"], asm["scl"]
+    pdk_root = os.environ.get("PDK_ROOT") or None
+    if pdk:
+        try:
+            pf = pdk_mod.check_pdk_ready(pdk, scl, run_mode)
+            pdk_root = pf.get("pdk_root") or pdk_root
+        except Exception:
+            pass
+    tag = jobs.reserve_tag(design_dir, spec.get("tag") or None)
+    jobs.scheduler.note_tag(job["id"], tag)
+    values = spec.get("point_values") or ((spec.get("sweep") or {}).get("values")) or {}
+    sweep_id = (spec.get("sweep") or {}).get("id") or job.get("group")
+    gui_meta = _sweep_point_meta(design_dir, config_file, flowsel["name"], run_mode, tag, pdk, scl,
+                                 pdk_root, asm, sweep_id, values)
+    gui_meta["job_id"] = job["id"]
+    res = runner.start(
+        flow_factory=flowsel["cls"],
+        config_files=[str(config_file)],
+        design_dir=design_dir,
+        pdk=pdk, scl=scl, pdk_root=pdk_root,
+        # The folder is reserved (mkdir), so the name is this point's alone:
+        # no --overwrite, which would delete the folder LibreLane is given.
+        tag=tag,
+        config_overrides={**asm["overrides"], **asm["threads"]},
+        extra_sources=asm["extra_sources"],
+        extra_extras=asm["extra_extras"],
+        extra_config_files=asm["extra_config_files"],
+        run_mode=run_mode, flow_name=flowsel["cli"],
+        gui_meta=gui_meta,
+    )
+    if not res.get("ok"):
+        jobs.unreserve(design_dir, tag)
+        return {"ok": False, "started": False, "reason": str(res.get("reason") or "the runner refused")}, 200
+    return {"ok": True, "started": True, "tag": tag, "command": gui_meta.get("cli_command"),
+            "resources": asm.get("resources")}, 200
+
+
+def _job_launcher(job: Dict[str, Any], runner: Any, share: Optional[Dict[str, Any]], dry: bool,
+                  *, initial_state: Optional[str] = None,
+                  branched_from: Optional[Dict[str, Any]] = None) -> Tuple[Any, int]:
+    """How the job queue starts a job: the checks and assembly of a Run
+    click, with the job's own runner and this machine share. The run folder
+    is reserved first (``mkdir``), so two starts never share one."""
+    from ..controller import jobs
+    if job.get("kind") == "point":
+        return _launch_point(job, runner, share, dry)
+    spec = dict(job.get("spec") or {})
+    dd = job["design_dir"]
+    init = initial_state or spec.get("initial_state") or None
+    bfrom = branched_from or spec.get("branched_from") or None
+    if dry:
+        return _start_run(spec, design_dir=dd, dry=True, initial_state=init, branched_from=bfrom,
+                          overrides_ready=bool(bfrom))
+    cont = None
+    reserved: List[str] = []
+    reserve = None
+    if job.get("kind") == "continue":
+        tag = spec.get("tag")
+        if not tag or not (Path(dd) / "runs" / tag).is_dir():
+            return "The run folder to continue is not there any more.", 409
+        cont = jobs._gui_meta(str(Path(dd) / "runs" / tag)) or {}
+        jobs.scheduler.note_tag(job["id"], tag)
+    else:
+        if _bad_tag(spec.get("tag")):
+            return _bad_tag(spec.get("tag")), 400
+
+        def reserve(want: Optional[str]) -> str:
+            # Once every check passed: the folder is made now, so a refused
+            # run leaves nothing behind and two starts never share one.
+            t = jobs.reserve_tag(dd, want or None)
+            reserved.append(t)
+            jobs.scheduler.note_tag(job["id"], t)
+            return t
+    data, st = _start_run(spec, design_dir=dd, runner=runner, share=share, initial_state=init,
+                          branched_from=bfrom, overrides_ready=bool(bfrom), continue_of=cont,
+                          reserve=reserve)
+    ok = st == 200 and isinstance(data, dict) and data.get("ok") and data.get("started", True) is not False
+    if not ok:
+        for t in reserved:
+            jobs.unreserve(dd, t)
+    if isinstance(data, dict):
+        data = dict(data)
+        if reserved:
+            data.setdefault("tag", reserved[-1])
+        elif spec.get("tag"):
+            data.setdefault("tag", spec.get("tag"))
+    return data, st
+
+
+def _job_outcome(run_dir: str) -> Dict[str, Any]:
+    """How a finished queue job went, read from its folder (the sweep's own
+    reading: Verify's verdict, the failing stage)."""
+    from ..controller import dse
+    return dse.point_outcome(run_dir)
+
+
+def _job_ended(job: Dict[str, Any]) -> None:
+    """After any queue job ends: a sweep point's result goes into its sweep's
+    record, also when the point ran after a restart (no sweep thread waits)."""
+    from ..controller import dse
+    if job.get("kind") != "point" or not job.get("group") or not job.get("tag"):
+        return
+    if dse.job.active and dse.job.sweep_id == job.get("group"):
+        return          # the sweep's own thread records it
+    if job.get("state") not in ("done", "failed"):
+        return
+    try:
+        run_dir = Path(job["design_dir"]) / "runs" / job["tag"]
+        vals = ((job.get("spec") or {}).get("point_values")) or {}
+        dse.stamp_run(run_dir, job["group"], vals)
+        res = dse.point_outcome(run_dir)
+        res["values"] = vals
+        dse.record_point(job["design_dir"], job["group"], job["tag"], res)
+    except Exception:
+        _log.debug("could not record a sweep point after a restart", exc_info=True)
+
+
+_JOBS_WIRED = [False]
+
+
+def wire_jobs() -> None:
+    """Register how the job queue starts runs (idempotent; tests call it)."""
+    from ..controller import jobs
+    from ..server import app as _app
+    jobs.scheduler.set_launcher(_job_launcher)
+    jobs.scheduler.set_runner_factory(lambda job: _app.make_runner(job))
+    jobs.scheduler.set_outcome_reader(_job_outcome)
+    jobs.scheduler.on_job_end(_job_ended)
+    _JOBS_WIRED[0] = True
+
+
+def start_job_service() -> None:
+    """At server start: wire the queue, read every known project's queue,
+    recover what was going, start the scheduler and the terminal-run watcher."""
+    from ..controller import designs, jobs
+    wire_jobs()
+    dirs = []
+    try:
+        dirs = list(designs.list_designs())
+    except Exception:
+        pass
+    a = _get_active_design_dir()
+    if a:
+        dirs.insert(0, a)
+    jobs.scheduler.start_service(dirs)
+
+
+wire_jobs()
 
 
 def h_dse_start(handler: Any) -> None:
@@ -3986,7 +4609,9 @@ def h_dse_start(handler: Any) -> None:
     if why:
         _respond(handler, why, 409)
         return
-    busy = _other_flow_busy()
+    # Its points wait in the job queue beside any other run (only a Console
+    # librelane command in this project holds it back).
+    busy = _other_flow_busy(runner_ok=True)
     if busy:
         _respond(handler, busy, 409)
         return
@@ -4105,10 +4730,16 @@ def h_dse_start(handler: Any) -> None:
             "ended": None,
         }
     dse.record_sweep(design_dir, manifest)
+    from ..controller import jobs as _jobs
+    # Every point goes into the queue at once; the queue runs as many at a
+    # time as memory and cores allow. A stop rule (first clean point, two
+    # points failing the same way early) drops the points still waiting.
     result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags,
                            sweep_id=sweep_id, stop_when_good=bool(body.get("stop_when_good")),
                            on_point=lambda tag, res: dse.record_point(design_dir, sweep_id, tag, res),
-                           on_done=lambda end: dse.record_end(design_dir, sweep_id, end))
+                           on_done=lambda end: dse.record_end(design_dir, sweep_id, end),
+                           parallel=max(1, len(tags)),
+                           on_halt=lambda why: _jobs.scheduler.skip_group(sweep_id, why))
     if not result.get("ok"):
         if prior:
             dse.record_sweep(design_dir, prior)
@@ -4166,19 +4797,31 @@ def h_dse_plan(handler: Any) -> None:
 
 
 def h_dse_cancel(handler: Any) -> None:
-    from ..controller import dse
-    from ..server.app import get_runner
+    """Stop the sweep: its waiting points leave the queue, its running ones stop."""
+    from ..controller import dse, jobs
+    sid = dse.job.sweep_id
     dse.job.cancel()
-    try:
-        get_runner().cancel()
-    except Exception:
-        pass
+    if sid:
+        jobs.scheduler.remove(group=sid, reason="Not run: the sweep was stopped")
+        for j in jobs.scheduler.jobs_snapshot_live():
+            if j.get("group") == sid:
+                jobs.scheduler.stop(j["id"])
     _respond(handler, {"ok": True})
 
 
 def h_dse_status(handler: Any) -> None:
-    from ..controller import dse
-    _respond(handler, dse.job.status())
+    """The sweep's progress. Its points wait in the job queue: which run now
+    and which wait comes from there (``running_tags``, ``queued``)."""
+    from ..controller import dse, jobs
+    st = dse.job.status()
+    if st.get("active") and st.get("sweep_id"):
+        g = jobs.scheduler.group_jobs(st["sweep_id"])
+        tag = lambda j: j.get("tag") or (j.get("spec") or {}).get("tag")  # noqa: E731
+        run = [tag(j) for j in g if j.get("state") in ("starting", "running", "stopping", "paused")]
+        st["running_tags"] = run
+        st["running"] = run[0] if run else None
+        st["queued"] = [tag(j) for j in g if j.get("state") == "queued"] + list(st.get("queued") or [])
+    _respond(handler, st)
 
 
 def h_system_resources(handler: Any) -> None:
@@ -5551,13 +6194,22 @@ def _apply_fix(handler: Any, body: Dict[str, Any]) -> None:
         # the top-module/clock reading doesn't hold it up (a config LibreLane
         # refuses still does; see _start_run).
         "checks_ack": bool(r) or bool(body.get("checks_ack")),
+        # "Add to queue" from the Run menu: the resumed run waits its turn.
+        "when": body.get("when") or "now",
     }
     state = str(Path(design_dir) / r["state"]) if r and r.get("state") else None
     data, st = _start_run(run_body, initial_state=state, branched_from=branch.branch_meta(p) if r else None)
+    if st == 200 and isinstance(data, dict) and data.get("busy"):
+        _respond(handler, {**data, "ok": False, "started": False, "tag": p["tag"], "undo": undo, "plan": p})
+        return
     if st != 200 or not (isinstance(data, dict) and data.get("ok")):
         # The config change stays (with its Undo): say so rather than hide it.
         msg = data if st != 200 else (data or {}).get("reason") or "the run didn't start"
         _respond(handler, {"ok": True, "started": False, "error": str(msg), "undo": undo, "plan": p})
+        return
+    if data.get("queued") or data.get("busy"):
+        _respond(handler, {**data, "ok": not data.get("busy"), "started": False, "tag": p["tag"], "resume": r,
+                           "undo": undo, "plan": p})
         return
     _respond(handler, {"ok": True, "started": True, "tag": p["tag"], "resume": r, "undo": undo,
                        "changes": p["changes"], "command": data.get("command")})
@@ -5755,6 +6407,19 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/run/start", h_run_start),
     ("/api/run/cancel", h_run_cancel),
     ("/api/run/resume", h_run_resume),
+    ("/api/run/log", h_run_log),
+    ("/api/queue/add", h_queue_add),
+    ("/api/queue/move", h_queue_move),
+    ("/api/queue/remove", h_queue_remove),
+    ("/api/queue/pause", h_queue_pause),
+    ("/api/queue/stop-after-current", h_queue_stop_after),
+    ("/api/queue/stop", h_queue_stop),
+    ("/api/queue/settings", h_queue_settings),
+    ("/api/queue/recover", h_queue_recover),
+    ("/api/queue/resume", h_queue_resume),
+    ("/api/queue/orphan", h_queue_orphan),
+    ("/api/queue", h_queue),
+    ("/api/power/hold", h_power_hold),
     ("/api/reproducible", h_reproducible),
     ("/api/tools/install-ciel", h_tools_install_ciel),
     ("/api/container/pull", h_container_pull),
@@ -5797,6 +6462,9 @@ _POST_ROUTES = {
     "/api/xquartz/restart", "/api/open-in-tool", "/api/layout/open", "/api/write-config",
     "/api/set-design-dir", "/api/diff", "/api/cli-command", "/api/manual/run",
     "/api/manual/cancel", "/api/run/start", "/api/run/cancel", "/api/run/resume",
+    "/api/queue/add", "/api/queue/move", "/api/queue/remove", "/api/queue/pause",
+    "/api/queue/stop-after-current", "/api/queue/stop", "/api/queue/settings",
+    "/api/queue/recover", "/api/queue/resume", "/api/queue/orphan",
     "/api/reproducible", "/api/tools/install-ciel", "/api/container/pull",
     "/api/container/enable-docker-group", "/api/container/start-engine", "/api/tools/cancel",
     "/api/tools/install/", "/api/tools/uninstall/", "/api/pdk/uninstall",
@@ -5811,6 +6479,7 @@ _BOTH_ROUTES = {
     "/api/update-check",
 }
 _GET_ROUTES = {
+    "/api/queue", "/api/power/hold", "/api/run/log",
     "/api/templates", "/api/project/defaults", "/api/project/files", "/api/run-export",
     "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems", "/api/kb/errors", "/api/floorplan/estimate",
     "/api/timing-paths", "/api/dse/sweeps", "/api/dse/status", "/api/system-resources",

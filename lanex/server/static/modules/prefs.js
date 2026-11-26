@@ -36,6 +36,13 @@ export const PREFS = [
   { id: "notify", key: "ll.notifyRuns", group: "Runs", label: "Tell me when a run finishes", type: "bool", def: "1", on: "1", off: "0",
     hint: "A notification with the result while LanEx is in the background." },
   { id: "chime", key: "ll.runChime", group: "Runs", label: "Play a sound when a run ends", type: "bool", def: "0", on: "1", off: "0" },
+  // The Run menu's How (runmenu.js). Runs at once and keep-awake belong to the
+  // machine, not this browser: the server keeps them (/api/queue/settings).
+  { id: "runThreads", key: "ll.runThreads", group: "Runs", label: "Threads per run", type: "choice", def: "auto",
+    options: [["auto", "Auto"], ["2", "2"], ["4", "4"], ["8", "8"], ["16", "16"], ["32", "32"]],
+    hint: "Auto sizes routing, KLayout and timing threads to this PC and to the other runs going at the same time." },
+  { id: "runLowPrio", key: "ll.runLowPrio", group: "Runs", label: "Run at low priority", type: "bool", def: "0", on: "1", off: "0",
+    hint: "Other apps stay quick; a run takes a little longer. Container runs only." },
 
   // ---- Editor
   { id: "lintOnSave", key: "ll.lintOnSave", group: "Editor", label: "Check syntax on save", type: "bool", def: "1", on: "1", off: "0",

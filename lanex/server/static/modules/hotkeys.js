@@ -16,7 +16,8 @@ export const SHORTCUTS = [
   { keys: "1 … 9, 0", desc: "The pages, top to bottom in the left rail" },
   { keys: "Alt ← / Alt →", desc: "Back and forward between pages (the mouse's side buttons too)" },
   { keys: "Ctrl Enter", desc: "Start a run, from any page" },
-  { keys: "r", desc: "Start a run (on Setup and Flow)" },
+  { keys: "r", desc: "Start a run (on Setup and Flow); when every slot is taken, add it to the queue" },
+  { keys: "Shift R", desc: "Add a run to the queue (on Setup and Flow)" },
   { keys: "Ctrl `", desc: "Open or close the Console: log, command, journal, command line" },
   { keys: "/", desc: "Filter the step log on Flow" },
   { keys: "t", desc: "Switch light or dark" },
@@ -99,6 +100,10 @@ export function setupHotkeys() {
     if (page) go(page[1], {}, { link: false });
     // The top bar's Run: it starts the flow without leaving this page.
     if (e.key === "r" && runKeyAllowed("r", { tab: currentTab() }) && !(state.status && state.status.running)) document.getElementById("btn-run-global")?.click();
+    // Shift+R: into the queue, even with a slot free (it starts when its turn comes).
+    if (e.key === "R" && e.shiftKey && runKeyAllowed("r", { tab: currentTab() })) {
+      import("./setup.js").then((m) => m.startFromMenu("queue")).catch(() => {});
+    }
     if (e.key === "/") {
       // Flow: filter the log of the step on screen.
       const s = document.querySelector("#sec-pipeline.section-active .fl-insp .lv-q input");

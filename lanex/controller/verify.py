@@ -1236,7 +1236,17 @@ def _planned_steps(run: _Run) -> Tuple[int, List[str]]:
 
 
 def _flow_state(run: _Run) -> Dict[str, Any]:
-    stopped = [s for s in run.steps if s["status"] == "stopped"]
+    # A run continued in its own folder (the job queue's Continue, LibreLane's
+    # --run-tag with -i and --from) leaves the step it was cut off in as a
+    # folder that never finished; the retry gets the next number. That cut
+    # folder is superseded, not a stop.
+    done_at: Dict[str, int] = {}
+    for s in run.steps:
+        if s["status"] == "done":
+            k = s["id"] or s["dir"].split("-", 1)[-1]
+            done_at[k] = max(done_at.get(k, -1), s["n"])
+    stopped = [s for s in run.steps if s["status"] == "stopped"
+               and done_at.get(s["id"] or s["dir"].split("-", 1)[-1], -1) <= s["n"]]
     raised_checkers = [s for s in stopped if (s["id"] or "").startswith("Checker.")
                        or s["dir"].split("-", 1)[-1].startswith("checker-")]
     err_lines: List[str] = []

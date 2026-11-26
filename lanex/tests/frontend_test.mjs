@@ -954,7 +954,8 @@ check("SSE: reconnect past ring eviction re-hydrates from run/status (N3)", () =
   assert.match(apiSrc, /addEventListener\("gap"/, "no gap-event listener");
   assert.match(apiSrc, /_wasDisconnected/, "reconnect-after-drop not tracked");
   assert.match(apiSrc, /run_status_resync/, "resync broadcast missing");
-  assert.match(apiSrc, /runStatus:\s*\(\)\s*=>\s*_fetch\("\/api\/run\/status"\)/,
+  // (It may name one queue job: runStatus(jobId).)
+  assert.match(apiSrc, /runStatus:\s*\(\w*\)\s*=>\s*_fetch\("\/api\/run\/status"/,
     "api.runStatus endpoint missing");
   const appSrc = readFileSync(resolve(HERE, "..", "server", "static", "app.js"), "utf8");
   const i = appSrc.indexOf('ev.type === "run_status_resync"');
@@ -2937,7 +2938,8 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.match(pal, /A\("stop", "Stop the run", "Run", "stop", \(\) => click\("btn-cancel"\)\)/);
     const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
     assert.match(setup, /getElementById\("btn-cancel"\)\?\.addEventListener\("click", \(\) => requestStop\(\)\)/);
-    assert.equal((setup.match(/api\.cancelRun\(\)/g) || []).length, 2, "cancelRun is called only from requestStop and a start stopped mid-way");
+    // (It names the run the window follows: several can go at once.)
+    assert.equal((setup.match(/api\.cancelRun\(/g) || []).length, 2, "cancelRun is called only from requestStop and a start stopped mid-way");
     const fl = readFileSync(resolve(MOD, "flow.js"), "utf8");
     assert.ok(!/act === "stop"\) api\.cancelRun/.test(fl), "Flow's Stop skips the confirm");
     assert.match(fl, /m\.requestStop\(\)/);
@@ -3368,6 +3370,134 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.match(ide, /state\.diags = implicitIsError\(diags\)/);
     assert.match(ide, /d\.code === "IMPLICIT" && d\.severity === "warning" && inRun\(d\)/);
     assert.match(readFileSync(resolve(MOD, "ide", "lintinfo.js"), "utf8"), /IMPLICIT: "[^"]*Yosys stops synthesis/);
+  });
+}
+
+// ---------- the run engine (lane 1): queue chip, following one run, the run menu, the log store
+{
+  const RF = await import(toUrl(resolve(MOD, "runfollow.js")));
+  check("run follow: a window follows its own project's run, the next one after it ends", () => {
+    const st = { designDir: "/p/spm" };
+    const ev = (type, job_id, design_dir = "/p/spm", extra = {}) => ({ type, job_id, design_dir, ...extra });
+    assert.equal(RF.followsRun(ev("info", "j1", "/p/spm", { step_graph: [] }), st), true);
+    assert.equal(st.followJob, "j1");
+    // Another project's run, or another run of this project while j1 runs: not shown.
+    assert.equal(RF.followsRun(ev("log", "j9", "/p/other"), st), false);
+    assert.equal(RF.followsRun(ev("info", "j2", "/p/spm", { step_graph: [] }), st), false);
+    assert.equal(RF.followsRun(ev("step_started", "j2"), st), false);
+    // j1 ends; j2's next step takes over.
+    assert.equal(RF.followsRun(ev("flow_done", "j1"), st), true);
+    assert.equal(RF.followsRun(ev("step_started", "j2"), st), true);
+    assert.equal(st.followJob, "j2");
+    // Older events with no job id always pass; a trailing slash is the same folder.
+    assert.equal(RF.followsRun({ type: "log" }, st), true);
+    assert.equal(RF.sameDesign("/p/spm/", "/p/spm"), true);
+    // Opening another project forgets what the old one followed.
+    st.designDir = "/p/blinky";
+    assert.equal(RF.followsRun(ev("log", "j3", "/p/blinky"), st), true);
+    assert.equal(st.followJob, "j3");
+    RF.followJob(st, "j7", true);
+    assert.equal(RF.followsRun(ev("log", "j3", "/p/blinky"), st), false);
+  });
+
+  const Q = await import(toUrl(resolve(MOD, "queue.js")));
+  check("queue: time left is rounded so it never ticks, and the chip says what is going on", () => {
+    assert.equal(Q.etaWords(null), "");
+    assert.equal(Q.etaWords(30), "less than a minute");
+    assert.equal(Q.etaWords(9 * 60 + 40), "about 10 min");
+    assert.equal(Q.etaWords(23 * 60), "about 25 min");
+    assert.equal(Q.etaWords(80 * 60), "about 1 h 20");
+    assert.equal(Q.chipText({ jobs: [] }).hidden, true);
+    const run = (id, extra = {}) => ({ id, state: "running", project: "spm", step: { index: 42, total: 80 }, ...extra });
+    let t = Q.chipText({ jobs: [run("a")], eta: { known: false } });
+    assert.equal(t.text, "Running · spm · step 43 of 80");
+    t = Q.chipText({ jobs: [run("a", { remaining_s: 700 })], eta: {} });
+    assert.equal(t.text, "Running · spm · about 10 min left");
+    t = Q.chipText({ jobs: [run("a"), run("b"), { id: "c", state: "queued" }], eta: { known: true, seconds: 4800 } });
+    assert.equal(t.text, "Running 2 · 1 queued · about 1 h 20 left");
+    assert.equal(t.short, "Running 2 · 1 queued");
+    t = Q.chipText({ jobs: [run("a"), { id: "c", state: "queued" }], eta: { known: false, unknown_count: 2 } });
+    assert.equal(t.text, "Running 1 · 1 queued");
+    assert.match(t.title, /2 of the 2 have no estimate/);
+    t = Q.chipText({ jobs: [{ id: "c", state: "queued", reason: "Waiting for memory: needs 2.1 GB, 1.4 GB free" }] });
+    assert.equal(t.text, "1 queued · waiting for memory");
+    t = Q.chipText({ paused: true, jobs: [{ id: "c", state: "queued" }, { id: "d", state: "queued" }] });
+    assert.equal(t.text, "Queue paused · 2 waiting");
+    t = Q.chipText({ jobs: [run("a", { origin: "terminal" }), run("b", { origin: "terminal" })], eta: {} });
+    assert.equal(t.text, "Running 2 from a terminal");
+    t = Q.chipText({ jobs: [run("a"), run("b", { origin: "terminal" })], eta: {} });
+    assert.equal(t.text, "Running 2 · 1 from a terminal");
+    t = Q.chipText({ jobs: [{ id: "i", state: "interrupted" }] });
+    assert.equal(t.text, "1 run interrupted");
+    assert.equal(t.tone, "warn");
+    t = Q.chipText({ jobs: [{ id: "f", state: "failed" }, { id: "g", state: "done" }] });
+    assert.equal(t.text, "Queue done · 1 finished · 1 failed");
+    assert.equal(Q.chipText({ jobs: [{ id: "f", state: "failed" }] }, { seenFail: new Set(["f"]) }).hidden, true);
+  });
+  check("queue: the stage bar is one cell per stage, sized by its steps", () => {
+    const segs = Q.stageSegments(["Yosys.Synthesis", "Yosys.JsonHeader", "OpenROAD.Floorplan", "OpenROAD.DetailedRouting"]);
+    assert.ok(segs.length >= 2 && segs.reduce((a, s) => a + s.n, 0) === 4);
+    const html = Q.segBar(segs, 2, { label: "step 3 of 4" });
+    assert.match(html, /role='progressbar'/);
+    assert.match(html, /aria-valuetext='step 3 of 4'/);
+    assert.ok((html.match(/is-done/g) || []).length >= 1);
+  });
+
+  const RM = await import(toUrl(resolve(MOD, "runmenu.js")));
+  check("run menu: the command splits into whole arguments and marks what LanEx sized", () => {
+    assert.deepEqual(RM.shellSplit("librelane --dockerized config.json -c 'VERILOG_FILES=a.v b.v' -c X=1"),
+      ["librelane", "--dockerized", "config.json", "-c", "VERILOG_FILES=a.v b.v", "-c", "X=1"]);
+    assert.deepEqual(RM.shellSplit("a 'it'\\''s' \"q\\\"d\""), ["a", "it's", "q\"d"]);
+    const html = RM.argSpans("librelane --docker-no-tty --dockerized config.json -c DRT_THREADS=8 -T OpenROAD.CTS");
+    assert.match(html, /class='a is-exe'>librelane</);
+    assert.match(html, /is-sized[^>]*>-c DRT_THREADS=8</);
+    assert.match(html, /-T OpenROAD.CTS</);
+    assert.match(html, /‹named at start›/, "no tag yet: the placeholder says LanEx names the run");
+    assert.ok(!/‹named at start›/.test(RM.argSpans("librelane x --run-tag r1")));
+    assert.ok(!/<script/.test(RM.argSpans("librelane '<script>'")), "arguments are escaped");
+    assert.deepEqual(RM.skippable(["Verilator.Lint", "Checker.LintErrors", "Yosys.Synthesis"]), ["Verilator.Lint", "Yosys.Synthesis"]);
+  });
+  check("run menu: Run while every slot is taken adds to the queue, and says where", () => {
+    const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+    assert.match(setup, /when: slotFree\(\) \? "now" : "queue"/);
+    assert.match(setup, /"Add to queue"/);
+    const idx = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+    for (const id of ["queue-chip", "queue-pop", "run-threads", "run-lowprio", "run-keepawake", "run-cmd", "run-now", "run-queue", "run-skip-list"]) {
+      assert.ok(idx.includes('id="' + id + '"'), id + " missing from index.html");
+    }
+    assert.match(idx, /id="run-menu" role="dialog" aria-label="Run options" data-keep/);
+  });
+
+  check("log store: typed arrays, the oldest fifth goes at once, levels the way the tools print them", () => {
+    const s = new LV.LogStore(10);
+    for (let i = 0; i < 12; i++) s.push(i === 3 ? "[ERROR DRT-0001] bad" : i === 5 ? "[WARNING GRT-0227] hm" : "line " + i);
+    assert.equal(s.kind.constructor.name, "Uint8Array");
+    const drop = s.trim();
+    assert.equal(drop, 4);
+    assert.equal(s.length, 8);
+    assert.equal(s.dropped, 4);
+    assert.equal(s.text[0], "line 4");
+    assert.equal(s.num[0], 5, "line numbers stay the run's own after a trim");
+    assert.equal(s.ne, 0);
+    assert.equal(s.nw, 1);
+    // A Rich record wrapped at 80 columns: the continuation keeps the level.
+    const r = new LV.LogStore();
+    r.push("[10:20:30] WARNING  The clock port 'clk' is not");
+    r.push("                    connected to anything");
+    assert.equal(r.kindOf(1), "warn");
+    assert.equal(LV.lineKind("%Warning-UNUSED: x.v:3: signal y is not used"), "warn");
+    assert.equal(LV.lineKind("%Error: x.v:9: syntax error"), "err");
+    assert.equal(LV.lineKind("3 FAILED checks: none"), "", "FAILED alone is not an error line any more");
+    assert.equal(LV.lowerBound(Uint32Array.from([1, 3, 5, 7]), 5), 2);
+    assert.equal(LV.upperBound(Uint32Array.from([0, 1, 3, 3, 6]), 3), 4);
+  });
+  check("log store: 200 000 lines go in fast", () => {
+    const s = new LV.LogStore();
+    const t0 = Date.now();
+    for (let i = 0; i < 200000; i++) s.push((i % 97 === 0 ? "[WARNING STA-1140] " : "[INFO GRT-0101] ") + "routing iteration " + i + " overflow " + (i * 7 % 1000));
+    assert.equal(s.length, 200000);
+    assert.ok(Date.now() - t0 < 1500, "pushing 200k lines took " + (Date.now() - t0) + " ms");
+    assert.ok(s.nw > 2000);
   });
 }
 

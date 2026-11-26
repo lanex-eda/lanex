@@ -21,6 +21,8 @@
   <link rel="stylesheet" href="/static/tools.css" />
   <link rel="stylesheet" href="/static/runs.css" />
   <link rel="stylesheet" href="/static/settings.css" />
+  <link rel="stylesheet" href="/static/queue.css" />
+  <link rel="stylesheet" href="/static/logview.css" />
   <link rel="stylesheet" href="/static/vendor/driverjs/driver.css" />
   <link rel="stylesheet" href="/static/guide.css" />
   <link rel="stylesheet" href="/static/skeleton.css" />
@@ -55,6 +57,8 @@
   <link rel="modulepreload" href="/static/modules/palettemodel.js" />
   <link rel="modulepreload" href="/static/modules/help.js" />
   <link rel="modulepreload" href="/static/modules/runend.js" />
+  <link rel="modulepreload" href="/static/modules/runfollow.js" />
+  <link rel="modulepreload" href="/static/modules/runmenu.js" />
   <link rel="modulepreload" href="/static/modules/reportcard.js" />
   <link rel="modulepreload" href="/static/modules/verify-model.js" />
   <link rel="modulepreload" href="/static/modules/problems.js" />
@@ -138,6 +142,15 @@
       </button>
 
       <div class="tb-right">
+        <!-- The run queue (queue.js): hidden until something runs, waits or needs an answer. -->
+        <div class="q-wrap">
+          <button id="queue-chip" class="q-chip" hidden type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="queue-pop" data-tone="idle">
+            <i class="q-via" aria-hidden="true"></i><span class="q-text"></span><span class="q-short" aria-hidden="true"></span>
+            <svg class="chev" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="menu q-pop" id="queue-pop" role="dialog" aria-label="Run queue" hidden></div>
+          <span id="queue-live" class="sr-only" aria-live="polite"></span>
+        </div>
         <div class="run-split" role="group" aria-label="Run">
           <button id="btn-run-global" class="run-main" disabled data-tip="Run the flow on this project (r)">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg><span>Run</span>
@@ -145,40 +158,66 @@
           <button id="run-opts-btn" class="run-opts" aria-haspopup="menu" aria-expanded="false" aria-controls="run-menu" aria-label="Run options" data-tip="Run mode and engine">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
           </button>
-          <div class="menu run-menu" id="run-menu" role="menu" hidden>
-            <div class="menu-lane">Mode</div>
-            <button class="menu-item menu-radio mode-btn mode-btn-active" role="menuitemradio" data-mode="auto">
-              <span class="radio" aria-hidden="true"></span>
-              <span class="mi-text"><b>Full auto</b><small>Every step, start to finish, ending in a GDS.</small></span>
-            </button>
-            <button class="menu-item menu-radio mode-btn" role="menuitemradio" data-mode="semi">
-              <span class="radio" aria-hidden="true"></span>
-              <span class="mi-text"><b>Step by step</b><small>Pause after each step so you can inspect it.</small></span>
-            </button>
-            <div class="menu-sep" role="separator"></div>
-            <div class="menu-lane">Engine</div>
-            <button class="menu-item menu-radio engine-btn engine-btn-active" role="menuitemradio" data-runmode="container">
-              <span class="radio" aria-hidden="true"></span>
-              <span class="mi-text"><b>Container</b><small>Recommended. Every EDA tool comes in LibreLane's image.</small></span>
-            </button>
-            <button class="menu-item menu-radio engine-btn" role="menuitemradio" data-runmode="local">
-              <span class="radio" aria-hidden="true"></span>
-              <span class="mi-text"><b>Local tools</b><small>Use the EDA tools installed on this machine.</small></span>
-            </button>
-            <div class="menu-sep" role="separator"></div>
-            <div class="menu-lane">Run up to</div>
-            <label class="menu-field"><select id="run-stop-after" aria-label="Stop the run after a stage"></select></label>
-            <div class="menu-lane">Resume from</div>
-            <label class="menu-field"><select id="run-resume-from" aria-label="Resume from a stage of the run on the results pages"></select></label>
-            <p class="menu-note" id="run-resume-note"></p>
-            <div class="menu-sep" role="separator"></div>
-            <div class="menu-lane">While it runs</div>
-            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-show"/>
-              <span class="mi-text"><b>Show the flow when a run starts</b><small>Otherwise you stay on the page you're on.</small></span></label>
-            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-notify"/>
-              <span class="mi-text"><b>Tell me when a run finishes</b><small>A notification with the result while LanEx is in the background.</small></span></label>
-            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-chime"/>
-              <span class="mi-text"><b>Play a sound</b><small>A short chime when a run ends.</small></span></label>
+          <div class="menu run-menu rm" id="run-menu" role="dialog" aria-label="Run options" data-keep hidden>
+            <!-- WHAT runs: LibreLane's flow, --to, -i/--from (from a run), --skip -->
+            <div class="rm-sec"><span class="menu-lane">What</span></div>
+            <div class="rm-row"><span class="rm-k">Flow</span><p class="menu-note rm-v" id="run-flow-note"></p></div>
+            <div class="rm-row"><span class="rm-k">Stop</span>
+              <label class="menu-field rm-v"><select id="run-stop-after" aria-label="Stop the run after a stage"></select></label></div>
+            <div class="rm-row"><span class="rm-k">Start</span>
+              <div class="rm-v"><label class="menu-field"><select id="run-resume-from" aria-label="Start from a stage of the run on the results pages"></select></label>
+              <p class="menu-note" id="run-resume-note"></p></div></div>
+            <div class="rm-row"><span class="rm-k">Only</span>
+              <div class="rm-v"><label class="menu-field"><select id="run-only" aria-label="Run only one step, from the run on the results pages"></select></label>
+              <p class="menu-note" id="run-only-note" hidden></p></div></div>
+            <div class="rm-row"><span class="rm-k">Skip</span>
+              <details class="rm-v rm-skip" id="run-skipsteps"><summary>No steps skipped</summary>
+                <p class="menu-note">Skipping a step can make later steps fail or leave the sign-off incomplete.</p>
+                <div class="rm-skip-list" id="run-skip-list"></div></details></div>
+            <!-- HOW it runs -->
+            <div class="rm-sec"><span class="menu-lane">How</span></div>
+            <div class="rm-row"><span class="rm-k">Mode</span>
+              <div class="rm-v rm-seg" role="radiogroup" aria-label="Mode">
+                <button class="menu-item menu-radio mode-btn mode-btn-active" role="radio" aria-checked="true" data-mode="auto" title="Every step, start to finish, ending in a GDS.">
+                  <span class="radio" aria-hidden="true"></span><span class="mi-text"><b>Full auto</b></span></button>
+                <button class="menu-item menu-radio mode-btn" role="radio" aria-checked="false" data-mode="semi" title="Pause after each step so you can inspect it. A paused run holds no slot in the queue.">
+                  <span class="radio" aria-hidden="true"></span><span class="mi-text"><b>Step by step</b></span></button>
+              </div></div>
+            <div class="rm-row"><span class="rm-k">Engine</span>
+              <div class="rm-v rm-seg" role="radiogroup" aria-label="Engine">
+                <button class="menu-item menu-radio engine-btn engine-btn-active" role="radio" aria-checked="true" data-runmode="container" title="Recommended. Every EDA tool comes in LibreLane's image. Several can run at once.">
+                  <span class="radio" aria-hidden="true"></span><span class="mi-text"><b>Container</b></span></button>
+                <button class="menu-item menu-radio engine-btn" role="radio" aria-checked="false" data-runmode="local" title="Use the EDA tools installed on this machine. One local run at a time.">
+                  <span class="radio" aria-hidden="true"></span><span class="mi-text"><b>Local tools</b></span></button>
+              </div></div>
+            <div class="rm-row"><span class="rm-k">Threads</span>
+              <div class="rm-v rm-inline">
+                <label class="menu-field rm-narrow"><select id="run-threads" aria-label="Threads for this run">
+                  <option value="auto">Auto</option><option value="2">2</option><option value="4">4</option><option value="8">8</option><option value="16">16</option><option value="32">32</option></select></label>
+                <span class="menu-note" id="run-threads-note">Sized to this PC and the runs going.</span></div></div>
+            <div class="rm-row"><span class="rm-k"></span>
+              <div class="rm-v rm-checks">
+                <label class="menu-check rm-check"><input type="checkbox" id="run-lowprio"/> <span><b>Low priority</b> <small>Other apps stay quick; the run takes a little longer.</small></span></label>
+                <label class="menu-check rm-check"><input type="checkbox" id="run-keepawake"/> <span><b>Keep the PC awake while runs go</b> <small id="run-keepawake-note">Closing the lid or pressing the power button still puts it to sleep.</small></span></label>
+              </div></div>
+            <!-- WHEN, and what happens around it -->
+            <div class="rm-sec"><span class="menu-lane">When</span></div>
+            <div class="rm-row"><span class="rm-k"></span>
+              <div class="rm-v rm-checks">
+                <label class="menu-check rm-check"><input type="checkbox" id="run-pref-show"/> <span><b>Show the flow when a run starts</b></span></label>
+                <label class="menu-check rm-check"><input type="checkbox" id="run-pref-notify"/> <span><b>Tell me when a run finishes</b></span></label>
+                <label class="menu-check rm-check"><input type="checkbox" id="run-pref-chime"/> <span><b>Play a sound</b></span></label>
+              </div></div>
+            <!-- COMMAND: what LanEx will run, built by the server like the run itself -->
+            <div class="rm-sec rm-cmd-head"><span class="menu-lane">Command</span>
+              <button class="btn btn-ghost btn-xs" id="run-cmd-copy" type="button">Copy</button></div>
+            <div class="rm-cmd" id="run-cmd" aria-live="off"><span class="menu-note">Open a project to see the command.</span></div>
+            <p class="menu-note rm-cmd-note" id="run-cmd-note">The same run from a terminal in LanEx's Linux.</p>
+            <div class="rm-foot">
+              <button class="btn btn-primary btn-sm" id="run-now" type="button">Run now</button>
+              <button class="btn btn-ghost btn-sm" id="run-queue" type="button">Add to queue</button>
+              <span class="menu-note rm-slot" id="run-slot"></span>
+            </div>
           </div>
         </div>
 
