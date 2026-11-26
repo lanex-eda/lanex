@@ -92,6 +92,10 @@ function deltaHtml(key, { short = false } = {}) {
   const dir = M.directionOf(_meta, key);
   const d = M.delta(a, b, dir);
   if (!d) return "";
+  // "No change" by the one rule Runs and Compare use (metricfmt.delta:
+  // within 0.05 %, and 5 ps of slack), not only an exact match.
+  const one = F.delta(key, a, b, null, { dir });
+  if (one && one.same) d.verdict = "same";
   const { base } = M.parseKey(key);
   const u = F.unitOf(base);
   const bs = F.show(key, b);
@@ -406,8 +410,11 @@ function renderOverview() {
       "<span class='an-disclaim'>LanEx shows what LibreLane's tools reported. It is not a sign-off.</span></div>" +
     "</div>" + strip + subsetNote +
     "<div class='an-kpis'>" + kpiTiming() + kpiArea() + kpiPower() + kpiRouting() + "</div>" +
-    (_b ? "<p class='an-basenote'>" + icon("diff", { size: 13 }) + " Changes are against <b>" + esc(_baseTag) + "</b>. Green is better and red is worse, by LibreLane's own direction for each metric.</p>"
-        : "<p class='an-basenote'>" + icon("diff", { size: 13 }) + " Pick a run under <b>Compare with</b> to see what changed.</p>");
+    (_b ? "<p class='an-basenote'>" + icon("diff", { size: 13 }) + " Changes are against <b>" + esc(_baseTag) + "</b> " +
+          (ctx.baselineIsAuto() ? "(automatic: the last clean run before this one, or the run a fix came from)" : "(the baseline of this project)") +
+          ". Green is better and red is worse, by LibreLane's own direction for each metric.</p>"
+        : ctx.runIsBaseline() ? "<p class='an-basenote'>" + icon("diff", { size: 13 }) + " This run is the baseline of this project: every other run is measured against it.</p>"
+        : "<p class='an-basenote'>" + icon("diff", { size: 13 }) + " Pick a run under <b>Compare with</b> to make it the baseline and see what changed.</p>");
 }
 
 

@@ -201,6 +201,15 @@ export const api = {
     "/api/run-file?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path),
   deleteRun: (tag, force) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag, force: !!force }) }),
   runNote: (tag) => _fetch("/api/run-note?tag=" + encodeURIComponent(tag)),
+  // The Runs page (lane 2): the project's baseline and saved views, bulk
+  // actions, free columns, changed-vs-baseline, the names for Columns, export.
+  runsMeta: (designDir) => _fetch("/api/runs-meta?design_dir=" + encodeURIComponent(designDir || "")),
+  setRunsMeta: (designDir, patch) => _fetch("/api/runs-meta", { method: "POST", body: JSON.stringify({ design_dir: designDir, ...patch }) }),
+  runsBulk: (body) => _fetch("/api/runs-bulk", { method: "POST", body: JSON.stringify(body), timeout: 120000 }),
+  runsValues: (runDirs, keys) => _fetch("/api/runs-values", { method: "POST", body: JSON.stringify({ run_dirs: runDirs, keys }), timeout: 120000 }),
+  runsChanged: (base, runDirs) => _fetch("/api/runs-changed", { method: "POST", body: JSON.stringify({ base, run_dirs: runDirs }), timeout: 120000 }),
+  runsKeys: (designDir) => _fetch("/api/runs-keys?design_dir=" + encodeURIComponent(designDir || "")),
+  runsExport: (body) => _fetch("/api/runs-export", { method: "POST", body: JSON.stringify(body), timeout: 120000 }),
   setRunNote: (tag, note) => _fetch("/api/run-note", { method: "POST", body: JSON.stringify({ tag, note }) }),
   setRunPin: (tag, pinned) => _fetch("/api/run-pin", { method: "POST", body: JSON.stringify({ tag, pinned }) }),
   getWatch: (design) => _fetch("/api/watch" + (design ? "?design=" + encodeURIComponent(design) : "")),

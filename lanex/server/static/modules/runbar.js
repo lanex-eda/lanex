@@ -45,7 +45,16 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
       const tag = ctx.contextBaseline();
       const row = tag ? ctx.contextRow(tag) : null;
       b.closest(".rb-field").hidden = !ctx.contextRun();
-      paintPick(b, row, { empty: "Nothing", hint: ctx.baselineChoices().length ? "" : "no other run" });
+      paintPick(b, row, { empty: ctx.runIsBaseline() ? "This run is the baseline" : "Nothing to compare with",
+        hint: ctx.runIsBaseline() ? "" : ctx.baselineChoices().length ? "no clean run before it" : "no other run" });
+      // The same mark everywhere: BASELINE for the project's baseline, AUTO
+      // for the automatic choice (context.js).
+      if (row) {
+        const t = b.querySelector(".rb-tags");
+        t.insertAdjacentHTML("afterbegin", ctx.baselineIsAuto()
+          ? "<span class='rb-tag' title='The last clean run before this one (or the run a fix came from). Pick a run to make it the baseline.'>auto</span>"
+          : "<span class='rb-tag is-base' title='The baseline of this project: every page measures against it.'>baseline</span>");
+      }
     }
   };
 
@@ -93,12 +102,15 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
         "<div class='rb-list' role='listbox' tabindex='-1' aria-label='Runs'></div>" +
         "<div class='rb-pop-foot'><button class='linklike' data-rb-runs>Notes, files and every run in Runs " + icon("chevron", { size: 12 }) + "</button></div>";
     } else {
+      // One baseline per project (context.js): picking a run makes it the
+      // baseline every page measures against; Automatic clears it.
       const choices = ctx.baselineChoices();
-      S.items = [{ none: true, cur: !ctx.contextBaseline() }]
-        .concat(choices.map((r) => ({ row: r, design: r._design, cur: r.tag === ctx.contextBaseline() })));
+      const pb = ctx.projectBaseline();
+      S.items = [{ none: true, cur: !pb }]
+        .concat(choices.map((r) => ({ row: r, design: r._design, cur: r.tag === pb })));
       pop.innerHTML =
-        "<div class='rb-pop-head'><div><b>Compare with</b><span>Changes on this page are measured against this run. " +
-        "By default it is the last run before this one that passed.</span></div></div>" +
+        "<div class='rb-pop-head'><div><b>Compare with</b><span>Every page measures against this run. " +
+        "Picking one makes it the baseline of " + esc(ctx.designLabel(ctx.contextDesign()) || "this project") + "; Runs marks it with a star.</span></div></div>" +
         "<div class='rb-list' role='listbox' tabindex='-1' aria-label='Compare with'></div>";
     }
     paintList();
@@ -140,8 +152,10 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
     const it = (S.visible || [])[i];
     if (!it) return;
     close();
-    if (S.which === "base") ctx.setBaseline(it.none ? "" : it.row.tag);
-    else await ctx.setRun(it.row.tag, it.design);
+    if (S.which === "base") {
+      ctx.setBaseline(it.none ? "" : it.row.tag).catch((e) =>
+        import("./toast.js").then((m) => m.toast.show("Couldn't save the baseline: " + (e.message || e), "error")));
+    } else await ctx.setRun(it.row.tag, it.design);
   };
 
   // ------------------------------------------------------------ wiring
@@ -229,7 +243,7 @@ function paintLive(btn, tag) {
 function optionHtml(id, it, i) {
   if (it.none) {
     return "<div class='rb-opt" + (it.cur ? " is-cur" : "") + "' role='option' id='" + id + "-o" + i + "' data-i='" + i + "' aria-selected='" + (it.cur ? "true" : "false") + "'>" +
-      "<span class='rb-mark is-none'></span><span class='rb-o-name'>Nothing</span><span class='rb-o-facts'>no comparison, no changes shown</span><span class='rb-o-when'></span>" +
+      "<span class='rb-mark is-none'></span><span class='rb-o-name'>Automatic</span><span class='rb-o-facts'>the run a fix came from, else the last clean run before</span><span class='rb-o-when'></span>" +
       "<span class='rb-o-cur'>" + (it.cur ? icon("check", { size: 13 }) : "") + "</span></div>";
   }
   const r = it.row, v = verdict(r);
@@ -239,6 +253,7 @@ function optionHtml(id, it, i) {
   if (typeof ws === "number" && Number.isFinite(ws) && Math.abs(ws) < 1e20) facts.push("setup " + (ws >= 0 ? "+" : "") + ws.toFixed(2) + " ns");
   const tags = (it.newest ? "<span class='rb-tag is-new'>newest</span>" : "") +
     (it.base ? "<span class='rb-tag'>compared with</span>" : "") +
+    (S_projBase(r) ? "<span class='rb-tag is-base'>baseline</span>" : "") +
     (r.pinned ? "<span class='rb-tag'>pinned</span>" : "");
   return "<div class='rb-opt" + (it.cur ? " is-cur" : "") + "' role='option' id='" + id + "-o" + i + "' data-i='" + i + "' aria-selected='" + (it.cur ? "true" : "false") + "'>" +
     "<span class='rb-mark is-" + v.cls + "'></span>" +
@@ -263,6 +278,8 @@ function groupByDesign(runs) {
 
 const isCur = (r) => r.tag === ctx.contextRun() && ctx.normDir(r._design) === ctx.normDir(ctx.contextDesign());
 const isBase = (r) => r.tag === ctx.contextBaseline() && ctx.normDir(r._design) === ctx.normDir(ctx.contextDesign());
+// The project's own baseline (not the automatic choice).
+const S_projBase = (r) => !!r && r.tag === ctx.projectBaseline(r._design);
 function isNewest(r) {
   const same = ctx.contextRuns().filter((x) => ctx.normDir(x._design) === ctx.normDir(r._design));
   return !!same.length && same[0].tag === r.tag;
