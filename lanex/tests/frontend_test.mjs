@@ -1724,7 +1724,8 @@ check("analytics: metric keys split into base + modifiers", () => {
   assert.deepEqual(AM.parseKey("timing__setup__ws__corner:max_ss_100C_1v60"), { base: "timing__setup__ws", mods: { corner: "max_ss_100C_1v60" } });
   assert.deepEqual(AM.parseKey("flow__warnings__count:DRT-0349"), { base: "flow__warnings__count", mods: { code: "DRT-0349" } });
   assert.deepEqual(AM.parseKey("design__rows:unithd"), { base: "design__rows", mods: { code: "unithd" } });
-  assert.equal(AM.cornerShort("nom_tt_025C_1v80"), "TT 25 \u00b0C 1.80 V \u00b7 nom RC");
+  // Z2: one corner namer (cornergrid.js cornerWords) on every page.
+  assert.equal(AM.cornerShort("nom_tt_025C_1v80"), "typical process, 25 \u00b0C, 1.80 V, nominal wire RC");
   assert.equal(AM.cornerShort("odd-corner"), "odd-corner", "unknown corner names are shown raw");
 });
 

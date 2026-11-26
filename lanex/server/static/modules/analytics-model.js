@@ -13,6 +13,7 @@ import * as FS from "./flowstages.js";
 // Runs, Compare and the sweep views share with this page; they are
 // re-exported here so everything that reads them from this module keeps working.
 import { parseKey, isNum, nonFinite, num, si, unitOf, show, signed, LANEX_DIRECTIONS, fixedDirection, METRIC_NAMES } from "./metricfmt.js";
+import { cornerWords } from "./cornergrid.js";
 export { parseKey, isNum, nonFinite, num, si, unitOf, show, signed };
 
 // ---------- labels ---------------------------------------------------------------
@@ -51,7 +52,6 @@ export function categoryOf(key) {
 
 // ---------- PVT corners ----------------------------------------------------------
 
-const PROC = { ss: "Slow-slow", ff: "Fast-fast", tt: "Typical", sf: "Slow-fast", fs: "Fast-slow" };
 
 // "max_ss_100C_1v60" -> { rc: "max", proc: "ss", temp: "100 °C", volt: "1.60 V" }
 // Unknown shapes return { raw } only; the UI then shows the raw name.
@@ -67,24 +67,10 @@ export function parseCorner(name) {
   return out;
 }
 
-// Compact one-line form for charts: "SS 100 °C 1.60 V · max RC".
-export function cornerShort(name) {
-  const c = parseCorner(name);
-  const bits = [c.proc ? c.proc.toUpperCase() : "", c.temp || "", c.volt || ""].filter(Boolean).join(" ");
-  if (!bits) return name;
-  return bits + (c.rc ? " · " + c.rc + " RC" : "");
-}
-
-// Long form for tips: "Slow-slow process · 100 °C · 1.60 V · max wire RC".
-export function cornerLabel(name) {
-  const c = parseCorner(name);
-  const bits = [];
-  if (c.proc) bits.push(PROC[c.proc] || c.proc.toUpperCase());
-  if (c.temp) bits.push(c.temp);
-  if (c.volt) bits.push(c.volt);
-  if (c.rc) bits.push(c.rc + " RC");
-  return bits.length >= 2 ? bits.join(" · ") : name;
-}
+// A corner in words: one namer for every page (cornergrid.js cornerWords):
+// "slow process, 100 °C, 1.60 V, max wire RC"; an unknown name stays raw.
+export function cornerShort(name) { return cornerWords(name) || String(name); }
+export function cornerLabel(name) { return cornerWords(name) || String(name); }
 
 // All corners that carry `base`, with values: [{corner, value}] in metric order.
 export function byCorner(values, base) {

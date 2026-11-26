@@ -260,7 +260,8 @@ body.theme-light .lx-stage.is-on .lx-stage-n { color: var(--accent); }
 .lx-res-t { font: 500 13px/1.3 var(--mono); color: var(--text-strong); }
 .lx-res-s { font-size: 12px; color: var(--text-muted); }
 .lx-res-h {
-  display: flex; padding: 10px 14px 4px; font: 600 11.5px/1 var(--cond); letter-spacing: 0.1em;
+  /* The app's mono caps in the side panel (the glass over the canvas keeps --cond). */
+  display: flex; padding: 10px 14px 4px; font: 500 11px/1 var(--mono); letter-spacing: 0.14em;
   text-transform: uppercase; color: var(--text-muted);
 }
 
@@ -714,7 +715,7 @@ body.theme-light .lx-dfor { color: var(--accent); }
 .lx-focus-back:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
 .lx-focus-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px 4px; }
 .lx-focus-h2 { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 14px; }
-.lx-focus-k { font: 600 11.5px/1.2 var(--cond); letter-spacing: 0.12em; text-transform: uppercase; color: var(--met1); }
+.lx-focus-k { font: 500 11px/1.2 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--met1); }
 body.theme-light .lx-focus-k { color: var(--accent); }
 .lx-focus-t { margin: 2px 14px 0; font-size: 13.5px; color: var(--text); overflow-wrap: anywhere; }
 .lx-focus-t b { font: 600 12.5px/1.3 var(--mono); color: var(--text-strong); }

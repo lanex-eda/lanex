@@ -100,11 +100,21 @@ const ROW_H = 34;
 
 // The section's host; verify.js calls this whenever the run, the baseline or
 // the verify payload changes.
+// Another page (Analytics' corner grid) asks for one corner's paths: now,
+// when this run's explorer is up, else when it next draws.
+let _want = null;
+export function pickCorner(tag, kind, corner) {
+  if (S.tag === tag && S.rep && document.getElementById("vf-tx")?.isConnected) {
+    S.kind = kind; S.corner = corner; S.bin = null; S.sel = null; loadList();
+  } else _want = { tag, kind, corner };
+}
+
 export async function renderTimingExplorer({ tag, base, rep }) {
   const host = document.getElementById("vf-tx");
   if (!host) return;
   const runChanged = tag !== S.tag;
   if (runChanged) { S.corner = null; S.sel = null; S.bin = null; S.q = ""; S.only = ""; S.detail = null; }
+  if (_want && _want.tag === tag) { S.kind = _want.kind; S.corner = _want.corner; S.bin = null; S.sel = null; _want = null; }
   S.tag = tag; S.base = base || ""; S.rep = rep;
   wire(host);
   const t = (rep && rep.details && rep.details.timing) || {};

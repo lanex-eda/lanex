@@ -510,7 +510,7 @@ function paintMetrics(out, data, cols, filter) {
     const unit = scale ? scale.unit : MF.show(k, 1).unit;
     const n = g ? g.kids.length : 0;
     // The row of Analytics' All metrics (metricrows.js): plain name, critical tag, unit and direction, the key in mono with its count.
-    const label = sub ? MR.nameHtml({ key: k, kid: true })
+    const label = sub ? "<div class='an-mname-t'>" + MR.nameHtml({ key: k, kid: true }) + "</div>"
       : (n ? "<button class='cmp-fold-b' data-fold='" + esc(g.base) + "' aria-expanded='" + _openBases.has(g.base) + "' aria-label='Show the " + n + " values'>" + icon("chevron", { size: 11 }) + "</button>" : "<span class='cmp-fold-sp'></span>") +
         "<div class='an-mname-t'>" + MR.nameHtml({ key: g.self || "", base: g.base, critical: crit(g), count: MR.countWords(g.kids), unit, dir }) + "</div>";
     const cells = cols.map((c, i) => {

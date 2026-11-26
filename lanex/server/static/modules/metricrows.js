@@ -15,6 +15,7 @@
 
 import { escapeHtml } from "./html.js";
 import * as MF from "./metricfmt.js";
+import { cornerWords } from "./cornergrid.js";
 
 const esc = escapeHtml;
 
@@ -36,7 +37,12 @@ export function statusOf(key, v, critical = () => false) {
 // The name cell. `kid`: a corner/net/iteration row under its metric.
 export function nameHtml({ key = "", base = "", kid = false, critical = false, count = "", unit = "", dir = 0 } = {}) {
   base = base || MF.parseKey(key).base;
-  if (kid) return "<span class='an-kidname'>" + esc(key.slice(base.length).replace(/^__/, "").replace(/__/g, " · ")) + "</span>";
+  if (kid) {
+    // A corner row says its corner in words (cornergrid.js), LibreLane's name under it.
+    const c = MF.parseKey(key).mods.corner, w = c ? cornerWords(c) : "";
+    const raw = key.slice(base.length).replace(/^__/, "").replace(/__/g, " · ");
+    return w ? "<span class='an-mlabel'>" + esc(w) + "</span><code>" + esc(raw) + "</code>" : "<span class='an-kidname'>" + esc(raw) + "</span>";
+  }
   const k = key || base;
   const label = MF.metricName(k) || MF.metricName(base);
   const crit = critical ? "<span class='an-crit' data-an-tip='LibreLane marks this metric critical: a non-zero count fails the flow.' tabindex='0'>critical</span>" : "";

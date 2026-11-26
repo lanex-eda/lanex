@@ -228,6 +228,8 @@ body.theme-light .an-v.is-neg { color: var(--fail); }
 /* ---------- timing ---------- */
 .an-ttable { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 table.an-ttable th, table.an-ttable td { padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent); text-align: right; white-space: nowrap; }
+/* Numbers in a table are tabular mono (the table standard); the row heads stay words. */
+table.an-ttable td { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; }
 .an-ttable thead th { font-weight: 600; color: var(--text-strong); font-size: 13px; border-bottom-color: var(--border-strong); }
 .an-ttable thead th small { font-weight: 400; color: var(--text-muted); }
 .an-ttable th[scope=row] { text-align: left; font-weight: 400; color: var(--text-muted); }
@@ -236,6 +238,9 @@ table.an-ttable th, table.an-ttable td { padding: 8px 10px; border-bottom: 1px s
 .an-notes { margin: var(--s-4) 0 0; padding: var(--s-3) 0 0; list-style: none; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-muted); }
 .an-notes .an-v { color: var(--text); }
 .an-corners { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-5); }
+/* The corner grids inside Analytics' "By corner" card: Verify's cards, one column in this half-width card. */
+.an-cgrids { grid-template-columns: minmax(0, 1fr); gap: var(--s-3); }
+.an-cgcard { background: transparent; box-shadow: none; }
 .an-corner-col .an-sub { margin-top: 0; }
 .an-corner-col + .an-corner-col .an-div-label { display: none; }
 .an-corner-col + .an-corner-col .an-div-row { grid-template-columns: minmax(0, 1fr) 72px; }

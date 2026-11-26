@@ -41,6 +41,7 @@ import { startCoach } from "./coach.js";
 import { getPref, setPref as setAppPref } from "./prefs.js";
 import * as MF from "./metricfmt.js";
 import { showEmpty, setRunBarActions } from "./empty.js";
+import { cornerWords } from "./cornergrid.js";
 
 const BG = { dark: "#06080d", light: "#ffffff" };
 // The census uses the Cells tab's categories (one taxonomy: the server's
@@ -1917,7 +1918,8 @@ function slackWord(s) {
 // corner only (sign-off times them all; Verify shows each).
 function pathsCornerNote(d) {
   const t = (d && d.timing) || {};
-  const corner = t.corner ? "<code>" + esc(t.corner) + "</code>" : "the default corner";
+  // A corner in words (cornergrid.js), with LibreLane's name beside it.
+  const corner = t.corner ? esc(cornerWords(t.corner) || t.corner) + " (<code>" + esc(t.corner) + "</code>)" : "the default corner";
   const all = t.corners > 1 ? " Sign-off times " + t.corners + " corners; Verify's Timing shows every one and the worst." : "";
   if (stageId() === "final") {
     return "<p class='muted lx-focus-l'>Timed in one corner, " + corner + ", with " +
@@ -1939,8 +1941,9 @@ function pathFocusHtml() {
     const timed = placed.some((q) => q.arrival != null);
     const miss = (p.missing && p.missing.insts) || [];
     html += "<div class='lx-focus-h'><span class='lx-focus-k'>" + esc(p.kind === "cells" ? "Cells" : p.delay_type === "min" ? "Hold path" : "Setup path") +
-      (p.corner ? " · " + esc(p.corner) : "") + "</span><button class='btn btn-ghost btn-sm' data-path-clear>Clear</button></div>" +
+      "</span><button class='btn btn-ghost btn-sm' data-path-clear>Clear</button></div>" +
       "<p class='lx-focus-t'><b>" + esc(p.startpoint || "?") + "</b> → <b>" + esc(p.endpoint || "?") + "</b></p>" +
+      (p.corner ? "<p class='muted lx-focus-l'>" + esc(cornerWords(p.corner) || p.corner) + " <code>" + esc(p.corner) + "</code></p>" : "") +
       (p.slack != null ? "<p class='lx-focus-s'>Slack " + slackWord(p.slack) + " <span class='muted'>" + (p.slack >= 0 ? "meets timing" : "fails timing") + "</span></p>" : "") +
       (p.from === "link" && p.label ? "<p class='muted lx-focus-l'>" + esc(p.label) + "</p>" : "") +
       ((p.clockInsts || []).length || (p.clockNets || []).length

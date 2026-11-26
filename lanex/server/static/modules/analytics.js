@@ -32,6 +32,7 @@ import { verdictOfRun } from "./verdict.js";
 import { showEmpty, setRunBarActions } from "./empty.js";
 import * as SM from "./studymodel.js";
 import * as MR from "./metricrows.js";
+import { cornerGridHtml, cornerWords, wireGridKeys } from "./cornergrid.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -605,22 +606,26 @@ function renderTiming() {
     });
     return list;
   };
-  const cornerChart = (base, cls, title) => {
+  // Corners: the one picture Verify draws (cornergrid.js, lane 4): process
+  // across, wire RC down, the worst marked. A cell opens its paths in Verify.
+  const cornerGrid = (base, kind, title) => {
     const list = corners(base);
-    if (!list.length) return "";
-    const fin = list.filter((x) => M.isNum(x.value));
-    const worst = fin.length ? fin.reduce((a, b) => (b.value < a.value ? b : a)) : null;
-    return "<div class='an-corner-col'><div class='an-sub'>" + esc(title) + "</div>" + C.divergingBars(list.map((x) => {
-      const s = F.show(base, x.value);
-      return {
-        label: M.cornerShort(x.corner), sub: x.corner, value: M.isNum(x.value) ? x.value : NaN,
-        text: esc(s.text) + provBtn(base + "__corner:" + x.corner), worst: worst && x.corner === worst.corner,
-        tip: title.replace(/ by corner$/, "") + ": " + s.text + " " + s.unit + "\n" + M.cornerLabel(x.corner) + (worst && x.corner === worst.corner ? " (worst corner)" : "") + "\n" + base + "__corner:" + x.corner,
-      };
-    }), { cls }) + "</div>";
+    if (list.length < 2) return "";
+    const rows = list.map((x) => ({ corner: x.corner, v: M.isNum(x.value) && Math.abs(x.value) < 1e12 ? x.value : null }));
+    const vals = rows.map((r) => r.v).filter(M.isNum);
+    const fail = vals.filter((v) => v < 0).length;
+    const worst = vals.length ? Math.min(...vals) : null;
+    const wr = rows.find((r) => r.v === worst);
+    const sum = !vals.length ? "not timed" : fail ? fail + " of " + rows.length + " corners fail · worst " + F.slack(worst) + " ns in " + (wr ? wr.corner : "")
+      : "all " + rows.length + " corners pass · worst " + F.slack(worst) + " ns";
+    return "<section class='an-card tx-gcard an-cgcard" + (fail ? " is-fail" : "") + "'>" +
+      "<div class='tx-gh'><span class='an-eyebrow'>" + esc(title) + "</span><span class='an-u'>ns</span></div>" +
+      cornerGridHtml(rows, { value: (r) => r.v, fmt: (v) => F.slack(v), kind, label: title,
+        tip: (r) => r.corner + " — " + cornerWords(r.corner) + "\n" + title + ": " + F.slack(r.v) + " ns\n" + base + "__corner:" + r.corner + "\nClick to list its paths in Verify" }) +
+      "<p class='tx-gsum" + (fail ? " is-fail" : "") + "'>" + esc(sum) + "</p></section>";
   };
-  const cset = cornerChart("timing__setup__ws", "s1", "Setup slack by corner");
-  const chold = cornerChart("timing__hold__ws", "s2", "Hold slack by corner");
+  const cset = cornerGrid("timing__setup__ws", "setup", "Setup · worst slack by corner");
+  const chold = cornerGrid("timing__hold__ws", "hold", "Hold · worst slack by corner");
   const ncorners = corners("timing__setup__ws").length;
 
   // Electrical checks per corner: only list corners with violations.
@@ -646,9 +651,23 @@ function renderTiming() {
       "<div class='an-card'><div class='an-card-h'>Summary <span class='muted'>worst over all corners</span></div>" + table +
         (other ? "<ul class='an-notes'>" + other + "</ul>" : "") + "</div>" +
       (cset || chold ? "<div class='an-card'><div class='an-card-h'>By corner <span class='muted'>" + ncorners + " PVT corners: process, temperature, voltage, wire RC</span></div>" +
-        "<div class='an-corners'>" + cset + chold + "</div>" +
-        "<p class='an-foot'>Bars grow right for positive slack; red bars left of the line fail. The outlined row is the worst corner.</p></div>" : "") +
+        "<div class='tx-grids an-cgrids'>" + cset + chold +
+        "<p class='tx-glegend'><span>◆ worst corner</span><span>red: fails</span><span>Click a corner to list its paths in Verify.</span></p></div></div>" : "") +
     "</div>" + flow;
+  wireCornerGrids(el);
+}
+
+// A corner cell opens that corner's paths in Verify's timing explorer.
+function wireCornerGrids(el) {
+  if (!el || el._cgWired) return;
+  el._cgWired = true;
+  wireGridKeys(el);
+  el.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(".cg-b");
+    if (!b) return;
+    import("./timing.js").then((m) => m.pickCorner(_tag, b.dataset.cgKind, b.dataset.cgCorner));
+    import("./nav.js").then((m) => m.go("verify", { section: "vf-timing" }));
+  });
 }
 
 // Setup/hold slack at each STA checkpoint the flow ran (pre-PnR, mid-PnR …,
