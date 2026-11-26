@@ -619,6 +619,55 @@ def point_outcome(run_dir: str | Path) -> Dict[str, Any]:
             "steps_done": rx.get("steps_done")}
 
 
+_CODE = re.compile(r"\b([A-Z]{2,4}-\d{4})\b")
+
+
+def failure_fingerprint(res: Dict[str, Any]) -> Optional[str]:
+    """How a point failed, as ``step|code`` (the tool's code, GRT-0116) or
+    ``step|words`` (its first words, numbers and paths taken out): two points
+    with the same fingerprint failed the same way. None for anything that
+    isn't a failure of the flow (clean, timing missed, stopped, skipped)."""
+    if res.get("ok") or res.get("skipped") or res.get("kind") not in ("halted", "error"):
+        return None
+    reason = str(res.get("reason") or "")
+    m = _CODE.search(reason)
+    tail = m.group(1) if m else re.sub(r"\d+(\.\d+)?", "<n>", re.sub(r"/\S+", "<path>", reason.lower()))[:100].strip()
+    if not tail:
+        return None
+    return str(res.get("step") or res.get("stage") or "") + "|" + tail
+
+
+def fingerprint_words(fp: str) -> str:
+    step, _, tail = fp.partition("|")
+    return (step + ", " if step else "") + tail
+
+
+def proof_stop(res: Dict[str, Any], swept: List[str], flow: str = "Classic") -> Optional[str]:
+    """Why every other point would fail like this one, when that is certain:
+    it failed at a step that runs before the first step reading any swept
+    setting (varstage). None otherwise, or when LibreLane can't be asked."""
+    if res.get("ok") or res.get("kind") != "halted" or not swept:
+        return None
+    step = str(res.get("step") or "")
+    try:
+        from . import introspect, varstage
+        steps = introspect.flow_steps(flow) or []
+        first = varstage.resume_point(swept, flow, steps=steps)
+    except Exception:
+        return None
+    if not first or not steps:
+        return None
+    idx = next((i for i, s in enumerate(steps) if s.get("id") == step), None)
+    if idx is None:
+        m = re.match(r"^(\d+)-", step)
+        idx = int(m.group(1)) - 1 if m else None
+    if idx is None or idx >= first["index"]:
+        return None
+    reason = str(res.get("reason") or "it failed")
+    return ("the first point failed at %s (%s), which runs before %s is used, so the other points would fail the same way"
+            % (step, reason[:160], first.get("by") or ", ".join(swept)))
+
+
 def failed_before_any_step(res: Dict[str, Any]) -> bool:
     """A point that ended before LibreLane finished a single step: the run
     never started, or its config did not load. The same reason twice in a row
@@ -919,6 +968,7 @@ class DseJob:
             self.running_tag = None
             self.running_tags = []
             self._early = {}
+            self._ended_fps = []
             self._failed_fast = None
             self._thread = threading.Thread(
                 target=self._run, args=(start_one, list(overrides_list), list(tags)),
@@ -988,6 +1038,21 @@ class DseJob:
         # Two points that ended the same way before any step ran (the
         # config did not load, the run would not start): the rest would too,
         # so they are not run.
+        # Fail fast, with proof: the point failed at a step that runs before
+        # any swept setting is read, so its value can't matter and every other
+        # point would fail the same way. (Two points failing the same way at a
+        # step that does read it is only evidence: a utilisation sweep reaching
+        # its limit fails like that, and with points running N at a time the
+        # failures end first. The study summary says so and offers Stop; it
+        # never stops by itself. A clock too fast is a result, never a failure.)
+        if not self._cancel.is_set() and not failed_before_any_step(res):
+            why = proof_stop(res, list(ov.keys()))
+            with self._lock:
+                self._ended_fps.append(failure_fingerprint(res))
+            if why and self._remaining():
+                self._failed_fast = why
+                self._stop_rest("failed-fast", "Not run: " + why)
+                return
         early = str(res.get("reason") or res.get("kind") or "") if failed_before_any_step(res) else None
         if early and not self._cancel.is_set():
             with self._lock:

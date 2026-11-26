@@ -1334,7 +1334,8 @@ function sweepRowHtml(g, cols, gk, open) {
   const [why, word] = running ? ["Running now", ""] : !isShort ? (cut ? ["LanEx was closed or restarted while a point ran", "interrupted"] : ["", ""])
     : end === "stopped" ? ["You stopped it", "stopped"]
     : end === "first-clean" ? ["Stopped at the first clean run, as asked", "first clean"]
-    : end === "failed-fast" ? ["Stopped: two points failed the same way before any step ran (" + (sw.ended.detail || "") + "), so the rest would too", "failed early"]
+    : end === "failed-fast" ? [/^(the first point|two of the first)/.test(sw.ended.detail || "") ? "Stopped early: " + sw.ended.detail
+      : "Stopped: two points failed the same way before any step ran (" + (sw.ended.detail || "") + "), so the rest would too", "failed early"]
     : end === "done" ? ["Some of its runs were deleted", "runs deleted"]
     : end === "interrupted" && !sw.ended.assumed ? ["LanEx was closed or restarted while it ran", "interrupted"]
     : stopped ? ["It was stopped", "stopped"]

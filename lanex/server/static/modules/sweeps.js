@@ -653,6 +653,9 @@ export function endReason(sw, pts) {
   if (e.reason === "stopped") return "You stopped it: " + of + ".";
   if (e.reason === "first-clean") return "It stopped at the first clean run, as asked: " + of + ".";
   if (e.reason === "done") return of + ": the others' runs were deleted.";
+  // The sweep's own stop rules (dse.py): a failure before any swept setting
+  // is read (proof), or two of the first points failing the same way.
+  if (e.reason === "failed-fast" && /^(the first point|two of the first)/.test(e.detail || "")) return "It stopped early: " + e.detail + ". " + of + ". Fix the cause, then run the ones left.";
   if (e.reason === "failed-fast") return "It stopped after two points failed the same way before any step ran (" + (e.detail || "the run would not start") + "): the rest would have too. " + of + ".";
   if (e.reason === "interrupted" && !e.assumed) return "LanEx was closed or restarted while it ran: " + of + ".";
   if (pts.some((p) => p.state === "stopped")) return "It was stopped: " + of + ".";
