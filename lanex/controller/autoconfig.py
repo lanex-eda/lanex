@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -165,6 +167,75 @@ def _detect_clock_port(text: str, top: str) -> Optional[str]:
     return None
 
 
+# An instantiation: a name, its parameters (#(...), up to three levels of
+# parentheses inside) or a space, an instance name (an array range allowed),
+# then "(". One bounded pass per file; the name before is collected and the
+# declared modules among those names are the instantiated ones. The keyword
+# in "module foo (" is collected too, and is never a declared module.
+_INST_RX = re.compile(r"\b([A-Za-z_][A-Za-z0-9_$]*)(?:\s*#\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\s*|\s+)"
+                      r"[A-Za-z_][A-Za-z0-9_$]*\s*(?:\[[^\]]*\]\s*)?\(")
+_INPUT_RX = re.compile(r"\binput\b[^;]*?\b([A-Za-z_][A-Za-z0-9_$]*)\b")
+_FILE_FACTS: Dict[str, Tuple[Tuple[int, int], Dict[str, Any]]] = {}
+_FACTS_LOCK = threading.Lock()
+
+
+def _file_facts(f: Path) -> Optional[Dict[str, Any]]:
+    """What one source file declares and uses, remembered by size and mtime:
+    ``{vhdl, decl, names, benches, is_tb, inputs}``. None when unreadable."""
+    try:
+        st = f.stat()
+    except OSError:
+        return None
+    key, sig = str(f), (st.st_size, st.st_mtime_ns)
+    hit = _FILE_FACTS.get(key)
+    if hit and hit[0] == sig:
+        return hit[1]
+    try:
+        text = _strip_comments(f.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
+    names = {m.group(1) for m in _INST_RX.finditer(text)}
+    if f.suffix.lower() in _VHDL_EXTS:
+        decl = list(dict.fromkeys(m.group(1) for m in _VHDL_ENTITY_RX.finditer(text)))
+        facts: Dict[str, Any] = {"vhdl": True, "decl": decl, "names": names, "benches": set(), "is_tb": False,
+                                 "inputs": []}
+    else:
+        here = [m.group(1).lstrip("\\") for m in _MODULE_DECL_RX.finditer(text)]
+        benches = _testbench_modules(text, here)
+        facts = {"vhdl": False, "decl": list(dict.fromkeys(here)), "names": names, "benches": benches,
+                 "is_tb": bool(here) and all(m in benches for m in here),
+                 "inputs": [m.group(1) for m in _INPUT_RX.finditer(text)]}
+    with _FACTS_LOCK:
+        if len(_FILE_FACTS) > 20000:
+            _FILE_FACTS.clear()
+        _FILE_FACTS[key] = (sig, facts)
+    return facts
+
+
+def _clock_of(d: Path, top: str, declared_files: Dict[str, str], facts_by_rel: Dict[str, Dict[str, Any]],
+              files: List[Path]) -> Optional[str]:
+    """The top's most clock-like port (its header, in the file declaring it),
+    else the first clock-like name after an ``input`` in any file, as the
+    whole-text scan did."""
+    rel = declared_files.get(top)
+    if rel:
+        try:
+            text = _strip_comments((d / rel).read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            text = ""
+        ports = _ports_of(text, top)
+        for rx in _CLOCK_HINTS:
+            for p in ports:
+                if rx.match(p):
+                    return p
+    for rx in _CLOCK_HINTS:
+        for f in files:
+            for name in (facts_by_rel.get(str(f.relative_to(d))) or {}).get("inputs") or []:
+                if rx.match(name):
+                    return name
+    return None
+
+
 def _normalise_only(design_dir: Path, only_files: Optional[Sequence[str]]) -> Optional[set]:
     """Turn the GUI's *only_files* (abs or design-relative paths, the user's
     tick-marked sources) into a set of design-relative POSIX strings, or None
@@ -209,7 +280,6 @@ def scan_sources(
     instantiated: set = set()
     tb_modules: set = set()
     tb_files: set = set()
-    combined = ""
     errors: List[str] = []
     skip_dirs = SOURCE_SKIP_DIRS
 
@@ -235,54 +305,39 @@ def scan_sources(
     except Exception as ex:  # pragma: no cover - fs dependent
         errors.append(str(ex))
 
-    synth_text = ""  # corpus of NON-testbench files only (for instantiation)
-    for f in files:
+    # One pass per file, each file's findings remembered by its size and
+    # mtime: a 300-file project took ~6 s with a regex per module over all
+    # the text (and held the server's lock-step requests meanwhile); now the
+    # first scan reads each file once and a later one reads only what changed.
+    names_used: set = set()   # identifiers followed by an instance name and "(" (non-testbench files)
+    facts_by_rel: Dict[str, Dict[str, Any]] = {}
+    for i, f in enumerate(files):
         rel = str(f.relative_to(d))
-        try:
-            raw = f.read_text(encoding="utf-8", errors="replace")
-        except Exception:
+        facts = _file_facts(f)
+        if facts is None:
             continue
-        text = _strip_comments(raw)
-        combined += "\n" + text
-        if f.suffix.lower() in _VHDL_EXTS:
-            synth_text += "\n" + text
-            for m in _VHDL_ENTITY_RX.finditer(text):
-                nm = m.group(1)
-                if nm not in declared:
-                    declared.append(nm)
-                    declared_files[nm] = rel
-            continue
-        here: List[str] = []
-        for m in _MODULE_DECL_RX.finditer(text):
-            nm = m.group(1).lstrip("\\")
-            here.append(nm)
+        facts_by_rel[rel] = facts
+        if i % 8 == 7:
+            time.sleep(0)            # let other request threads have the GIL
+        for nm in facts["decl"]:
             if nm not in declared:
                 declared.append(nm)
                 declared_files[nm] = rel
+        if facts["vhdl"]:
+            names_used |= facts["names"]
+            continue
         # Flag testbench modules in this file (and the file itself when *every*
         # module it declares is a bench → pure simulation file, not RTL source).
-        benches = _testbench_modules(text, here)
-        tb_modules |= benches
-        if here and all(m in benches for m in here):
+        tb_modules |= facts["benches"]
+        if facts["is_tb"]:
             tb_files.add(rel)
         else:
-            synth_text += "\n" + text
+            names_used |= facts["names"]
 
-    # Instantiation detection over the SYNTHESISABLE corpus only: a testbench
+    # Instantiation detection over the SYNTHESISABLE files only: a testbench
     # instantiates the DUT, so counting its instantiations would (wrongly) mark
     # the real top as "instantiated" and drop it from the candidates (issue #1).
-    for nm in declared:
-        inst_rx = re.compile(
-            r"\b" + re.escape(nm) + r"\b\s*(#\s*\(.*?\))?\s+[A-Za-z_][A-Za-z0-9_$]*\s*\(",
-            re.S,
-        )
-        for m in inst_rx.finditer(synth_text):
-            # Exclude the declaration site (preceded by the `module` keyword).
-            pre = synth_text[max(0, m.start() - 12):m.start()]
-            if re.search(r"\bmodule\s*$", pre):
-                continue
-            instantiated.add(nm)
-            break
+    instantiated = {nm for nm in declared if nm in names_used}
 
     # Top candidate = declared, never instantiated, AND not a testbench. (A bench
     # is "never instantiated" by definition, so without this filter it would be
@@ -290,7 +345,7 @@ def scan_sources(
     top_candidates = [m for m in declared
                       if m not in instantiated and m not in tb_modules]
     top = _pick_top(top_candidates, declared, d.name, tb_modules)
-    clock_port = _detect_clock_port(combined, top) if top else None
+    clock_port = _clock_of(d, top, declared_files, facts_by_rel, files) if top else None
     # VERILOG_FILES must exclude pure-testbench files (synthesis can't take them).
     synth_verilog = [p for p in verilog if p not in tb_files]
     return {

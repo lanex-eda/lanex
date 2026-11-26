@@ -18,7 +18,9 @@
 // can be reached. Only the first use of a term on each page is underlined;
 // later ones keep the definition without the dotted line.
 
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+import { escapeHtml } from "./html.js";
+
+const esc = escapeHtml;
 
 // ---------------------------------------------------------------- the registry
 // Each entry: `sel` (inside `in`, the page section) and either `term` (every

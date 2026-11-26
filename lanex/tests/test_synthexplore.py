@@ -77,3 +77,18 @@ def test_the_runs_list_names_it_and_shows_no_final_numbers(tmp_path: Path) -> No
     assert row["flow"] == "SynthesisExploration"
     assert row["verdict"]["state"] == "passed" and row["verdict"]["exploration"] is True
     assert row["key_metrics"] == {}
+
+
+def test_verify_and_the_status_bar_say_what_the_runs_list_says(tmp_path: Path) -> None:
+    """The status bar's end-of-run words come from Verify's run verdict
+    (runend.js withVerdict), which read an exploration as "Stopped after
+    step 1" while Runs said "Explored 9 synthesis recipes"."""
+    from lanex.controller import verify
+    run = _explore(tmp_path)
+    row = history.list_runs(tmp_path)[0]
+    v = verify.run_verdict(run)
+    assert (v["state"], v["label"]) == (row["verdict"]["state"], row["verdict"]["label"])
+    assert v["exploration"] is True and "Stopped" not in v["label"]
+    assert verify.verify_report(run)["run_verdict"]["label"] == row["verdict"]["label"]
+    bad = _explore(tmp_path / "b", fail=True)
+    assert verify.run_verdict(bad)["state"] == "failed"

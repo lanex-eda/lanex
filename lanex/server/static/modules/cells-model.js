@@ -5,6 +5,7 @@
 // LibreLane wildcard semantics (fnmatch) used by the exclusion lists.
 
 import { localeNum } from "./intlcache.js";
+import { escapeHtml } from "./html.js";
 
 // ---------- Liberty function parser ------------------------------------------
 // Grammar (Liberty user guide): NOT is prefix ! or postfix ', AND is & or * or
@@ -469,8 +470,7 @@ export function fmtArea(a) {
 }
 
 export function esc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return escapeHtml(s);
 }
 
 // drive suffix sort: "0" < "1" < "2" < "4" < "16" < "lp" …

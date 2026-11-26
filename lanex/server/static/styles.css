@@ -320,14 +320,6 @@ code {
   overflow: hidden;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
-/* Plain cards do NOT react to hover — in grids (metric cards, report rows) a
-   hover shadow/lift shifts neighbours and makes dense engineering UI feel
-   unstable. Only cards that are themselves an action respond. */
-.card.card-clickable:hover {
-  border-color: var(--border-strong);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-  transform: translateY(-2px);
-}
 .card[open] { box-shadow: 0 8px 24px rgba(0,0,0,0.22); }
 .card summary {
   cursor: pointer;
@@ -344,8 +336,6 @@ code {
 .card summary strong { font-size: var(--t-lg); color: var(--text-strong); font-weight: 600; }
 .card summary .hint { color: var(--text-muted); font-size: var(--t-sm); }
 .card-body { padding: var(--s-4); }
-.help-prose p { margin: var(--s-2) 0; color: var(--text); font-size: var(--t-sm); }
-.help-prose strong { color: var(--text-strong); }
 .muted { color: var(--text-muted); }
 
 /* ---------- inputs (field look lives in shell.css) ---------- */
@@ -482,18 +472,6 @@ select {
 /* Runs: the filter is a normal-sized field; the cards fill the page. */
 #sec-runs .runs-filter { flex: 0 1 340px; width: 340px; min-width: 0; }
 #sec-runs #runs-status-filter { flex: 0 0 auto; width: auto; min-width: 140px; }
-.runs-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s-3); }
-.runs-list li {
-  padding: var(--s-3) var(--s-4);
-  border-radius: var(--r-md);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-.runs-list .row1 { display: flex; gap: var(--s-3); align-items: center; font-family: var(--mono); font-size: var(--t-md); flex-wrap: wrap; }
-.runs-list .row2 { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-muted); }
 
 .code {
   font-family: var(--mono);
@@ -510,56 +488,14 @@ select {
 
 /* ---------- tools grid ---------- */
 #tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--s-3); margin-bottom: var(--s-5); }
-.tool-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: var(--s-3) var(--s-4);
-  display: flex; flex-direction: column; gap: var(--s-2);
-}
-.tool-card .row1 { display: flex; justify-content: space-between; align-items: center; gap: var(--s-2); }
-.tool-card .row1 .name { font-weight: 600; color: var(--text-strong); font-family: var(--mono); font-size: var(--t-md); }
-.tool-card .what { color: var(--text-muted); font-size: var(--t-sm); line-height: 1.4; }
-.tool-card .meta { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-muted); }
-.tool-card .install-btn {
-  align-self: flex-start;
-  margin-top: var(--s-1);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 6px 12px;
-  border-radius: var(--r-md);
-  font-size: var(--t-sm);
-  cursor: pointer;
-}
-.tool-card .install-btn:hover { border-color: var(--accent); color: var(--accent); }
-/* Status as a 3px left edge (the app-wide convention), not a full perimeter. */
-.tool-card.installed-installed { border-left: 3px solid var(--pass); }
-.tool-card.installed-missing  { border-left: 3px solid var(--fail); }
 /* Tools tab: inline-style → class conversions (B13) + uninstall control. */
 .tools-pdk-card { margin-bottom: var(--s-4); }
 .tools-local-card { margin-top: var(--s-4); }
 .pdk-root-row { display: flex; gap: var(--s-2); margin-top: var(--s-1); }
-.tool-installed-row { display: flex; gap: var(--s-2); align-items: center; }
 .uninstall-btn { display: inline-flex; align-items: center; padding: 2px 6px;
   background: transparent; border: 1px solid var(--border); border-radius: var(--r-sm);
   color: var(--text-muted); cursor: pointer; }
 .uninstall-btn:hover { border-color: var(--fail); color: var(--fail); }
-
-.dot-installed {
-  display: inline-block;
-  width: 9px; height: 9px;
-  border-radius: 50%;
-  background: var(--pass);
-  box-shadow: 0 0 8px var(--pass-soft);
-}
-.dot-missing {
-  display: inline-block;
-  width: 9px; height: 9px;
-  border-radius: 50%;
-  background: var(--fail);
-  box-shadow: 0 0 8px var(--fail-soft);
-}
 
 /* keyframe kept for .splash-inner (styles.css:274); the onboard tour that also
    used it was removed in round 39 — the landing screen (§5) replaces it. */
@@ -612,13 +548,10 @@ select {
 h2 { font-size: var(--t-xl); font-weight: 600; color: var(--text-strong); margin: var(--s-5) 0 var(--s-3); }
 h3 { font-size: var(--t-md); font-weight: 600; color: var(--text-strong); margin: var(--s-4) 0 var(--s-2); }
 
-/* ---------- analytics ---------- */
-.glossary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--s-3); }
 #analytics-sections { display: grid; gap: var(--s-3); margin-top: var(--s-3); }
 #analytics-sections > .card { margin-bottom: 0; }
 #analytics-sections > .card summary { background: var(--surface-2); }
 #analytics-sections > .card summary strong { font-size: var(--t-lg); }
-.metric-group-header { font-family: var(--mono); font-size: var(--t-xs); font-weight: 500; color: var(--text-muted); letter-spacing: 0.14em; text-transform: uppercase; padding: var(--s-2) 0; margin: var(--s-2) 0 0; }
 
 /* ==========================================================================
    UI/UX overhaul — command palette, density, log toolbar, a11y, motion
@@ -696,12 +629,6 @@ h3 { font-size: var(--t-md); font-weight: 600; color: var(--text-strong); margin
 .cmdk-ico { width: 20px; text-align: center; opacity: 0.85; }
 .cmdk-title { flex: 1; color: var(--text); }
 .cmdk-item-sel .cmdk-title { color: var(--text-strong); }
-.cmdk-hint {
-  font-size: var(--t-xs);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
 .cmdk-empty { padding: var(--s-4); color: var(--text-muted); text-align: center; }
 .cmdk-foot {
   padding: var(--s-2) var(--s-4);
@@ -724,10 +651,8 @@ body.density-compact .hero { padding: var(--s-5) var(--s-5); margin-bottom: var(
 body.density-compact .hero h1 { font-size: var(--t-2xl); margin-bottom: var(--s-2); }
 body.density-compact .hero-sub { font-size: var(--t-md); margin-bottom: var(--s-4); }
 body.density-compact .card-body { padding: var(--s-3); }
-body.density-compact .pf-row { padding: 4px var(--s-3); }
 body.density-compact .side-tab { padding: 8px 6px; }
 body.density-compact .side-tab .ico { font-size: 18px; }
-body.density-compact .tool-card { padding: var(--s-3); }
 body.density-compact .steps-3 { margin-bottom: var(--s-4); }
 
 /* Modal shell (the auto-config preview, autoconfig.js). */
@@ -755,55 +680,14 @@ body.density-compact .steps-3 { margin-bottom: var(--s-4); }
 }
 .smodal-title { font-weight: 700; color: var(--text-strong); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .smodal-spacer { flex: 1; }
-.smodal-badge { font-size: var(--t-sm); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-muted); }
-.smodal-badge.ok { color: var(--pass); border-color: var(--pass); }
-.smodal-badge.bad { color: var(--fail); border-color: var(--fail); }
-.smodal-badge.warn { color: var(--warn); border-color: var(--warn); }
-.smodal-reports { padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--border); font-size: var(--t-sm); }
-.smodal-reports code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; margin-right: 4px; }
 .smodal-log {
   margin: 0; padding: var(--s-3); overflow: auto; flex: 1;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--t-sm);
   line-height: 1.45; color: var(--text); white-space: pre-wrap; word-break: break-word;
 }
 
-/* Runs list: per-run action buttons + files modal rows. */
-.run-actions { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
-.run-act { padding: 2px 10px; font-size: var(--t-sm); }
-.run-del:hover { color: var(--fail); border-color: var(--fail); }
 .files-row { padding: 2px 0; font-family: var(--mono); font-size: var(--t-sm); border-bottom: 1px solid var(--border); }
 .files-row a { word-break: break-all; }
-
-/* ---- Analytics: design summary hero strip ---- */
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: var(--s-2);
-  margin: var(--s-2) 0 var(--s-5);
-}
-.summary-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-md);
-  padding: var(--s-3);
-  min-width: 0;
-}
-.summary-card.pass { border-left-color: var(--pass); }
-.summary-card.fail { border-left-color: var(--fail); }
-.summary-card.warn { border-left-color: var(--warn); }
-.summary-val {
-  font-family: var(--mono);
-  font-size: var(--t-2xl, var(--t-xl));
-  font-weight: 700;
-  color: var(--text-strong);
-  overflow-wrap: anywhere;
-  line-height: 1.2;
-}
-.summary-card.pass .summary-val { color: var(--pass); }
-.summary-card.fail .summary-val { color: var(--fail); }
-.summary-val .unit { font-size: var(--t-xs); color: var(--text-muted); font-weight: 400; margin-left: 2px; }
-.summary-label { font-family: var(--mono); font-weight: 500; font-size: var(--t-xs); color: var(--text-muted); margin-top: var(--s-1); text-transform: uppercase; letter-spacing: 0.14em; }
 
 /* ---- Layout > Run files: synthesis diagrams ---- */
 .diagram-card {

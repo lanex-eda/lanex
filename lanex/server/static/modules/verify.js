@@ -27,7 +27,7 @@ import { toast } from "./toast.js";
 import * as AM from "./analytics-model.js";
 import * as V from "./verify-model.js";
 import { wireTips } from "./analytics-charts.js";
-import { problemsOf, problemForCheck, fixListHtml } from "./problems.js";
+import { problemsOf, onProblems, problemForCheck, fixListHtml } from "./problems.js";
 import { timingDiagHtml, drcDiagHtml } from "./verify-diag.js";
 import "./fixsheet.js";
 
@@ -41,6 +41,7 @@ let _diff = null;         // V.statusDiff(_rep, _base)
 let _filter = "all";      // all | problems | passed | unchecked
 let _open = new Set();    // expanded check ids
 let _token = 0;
+let _offPx = null;     // the onProblems subscription of the run in view
 let _px = null;           // this run's problems (problems.js): diagnosis and fixes
 let _dxSrc = "";          // the DRC checker the diagnosis shows
 
@@ -176,7 +177,12 @@ async function render() {
 
 // A link to one check (nav.js go("verify", { check })): open its row.
 export async function revealCheck(id) {
+  // Opened from another page (the palette, a failure card) the page may not
+  // have started reading its report yet: wait for it a moment, and if it
+  // still has none, the row opens when the report arrives.
+  for (let i = 0; i < 50 && !_rep && !_rendering; i++) await new Promise((r) => setTimeout(r, 100));
   if (_rendering) await _rendering;
+  if (!_rep) { _open.add(id); return; }
   jumpTo("vf-checks", id);
 }
 
@@ -259,11 +265,15 @@ async function selectRun(tag) {
   _rep = rep;
   if (_px && _px.tag !== tag) _px = null;
   // The diagnosis arrives after the checks: the rows and sections fill in.
-  problemsOf(tag).then((px) => {
+  const paintPx = (px) => {
     if (my !== _token || !px) return;
     _px = px;
     if (_rep) { renderChecks(); renderTiming(); renderDrc(); wireProvBtns(document.getElementById("vf-body")); }
-  });
+  };
+  problemsOf(tag).then(paintPx);
+  // A big DRC report's rules and places arrive in a later answer (pending).
+  _offPx?.();
+  _offPx = onProblems((t, px) => { if (t === tag) paintPx(px); });
   await loadBase();
   if (my !== _token) return;
   body.classList.remove("is-loading");

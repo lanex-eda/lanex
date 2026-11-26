@@ -5,9 +5,10 @@
 //   wireJump(container);   // the container's .section-jump
 //   wireJumpNav(nav);      // any nav whose buttons carry data-jump="<id>"
 
+import { escapeHtml } from "./html.js";
+
 export function jumpBarHtml(items, { label = "Jump to section" } = {}) {
-  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const esc = escapeHtml;
   return "<nav class='section-jump' aria-label='" + esc(label) + "'>" +
     (items || []).map((i) =>
       "<button class='chip chip-clickable' data-jump='" + esc(i.target) + "'>" + esc(i.label) + "</button>").join("") +

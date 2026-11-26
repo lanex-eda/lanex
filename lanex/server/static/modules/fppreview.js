@@ -13,7 +13,9 @@
 //   floorplanSvg(fp)                  pure: the drawing (tested)
 //   mountFloorplan(el, {values, inputs, compact})  draws it into el
 
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+import { escapeHtml } from "./html.js";
+
+const esc = escapeHtml;
 const num = (v) => { const n = typeof v === "number" ? v : parseFloat(v); return Number.isFinite(n) ? n : null; };
 const GRID = 0.005;   // the manufacturing grid LibreLane snaps the die to (sky130, gf180, IHP)
 const snap = (v) => Math.floor(v / GRID + 1e-6) * GRID;

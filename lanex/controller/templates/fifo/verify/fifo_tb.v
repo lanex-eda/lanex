@@ -4,6 +4,9 @@
 // in the same cycle. Every value and flag is checked; the run ends with PASS,
 // or with FAIL and a non-zero exit when something is wrong.
 module fifo_tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     reg        clk = 1'b0;
     reg        rst = 1'b1;
     reg        wr_en = 1'b0, rd_en = 1'b0;
@@ -23,7 +26,7 @@ module fifo_tb;
     task fail(input [8*64-1:0] what);
         begin
             errors = errors + 1;
-            $display("FAIL at %0t ns: %0s (dout = %h, full = %b, empty = %b)", $time, what, dout, full, empty);
+            $display("FAIL at %t: %0s (dout = %h, full = %b, empty = %b)", $realtime, what, dout, full, empty);
         end
     endtask
 

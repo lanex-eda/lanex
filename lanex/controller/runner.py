@@ -219,6 +219,19 @@ def new_container_name() -> str:
 CONTAINER_NAME_RX = r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}"
 
 
+def container_labels() -> str:
+    """The labels a run container carries, as ``key=value`` lines: the LanEx
+    home and server boot that started it, and the server's process id."""
+    from . import platform_env
+    from .events import BOOT_ID
+    try:
+        home = str(platform_env.home().expanduser().resolve())
+    except Exception:
+        home = os.environ.get("LANEX_HOME") or ""
+    labels = {"lanex.home": home, "lanex.boot": BOOT_ID, "lanex.pid": str(os.getpid())}
+    return "\n".join(f"{k}={v}" for k, v in labels.items() if v and "\n" not in v)
+
+
 def _install_subprocess_patch() -> None:
     """Record every process the in-process flow starts.
 
@@ -1271,6 +1284,10 @@ class FlowRunner:
         run_env = os.environ.copy()
         self._container_name = new_container_name()
         run_env["LANEX_CONTAINER_NAME"] = self._container_name
+        # Who started it (applied as --label by librelane_entry): another
+        # LanEx on the same container engine leaves this one's alone, and a
+        # restarted server knows which leftovers are its own (jobs.is_orphan).
+        run_env["LANEX_CONTAINER_LABELS"] = container_labels()
         self._container_engine = None
         self._container_sg = False
         try:

@@ -110,6 +110,7 @@ function describe(e) {
 // `link: false` for the rail, number keys and the palette: the user picked the
 // page itself, so there is no "Back to" chip (Back still works).
 export function go(tab, params = {}, { link = true } = {}) {
+  tab = tabOfAddress(tab);            // go("flow") is go("pipeline")
   // The Manual page became the Console drawer (console.js): it opens over
   // whatever page is showing, on its "Run a command" tab (or params.pane).
   if (tab === "manual" || tab === "console") {
@@ -125,13 +126,13 @@ export function go(tab, params = {}, { link = true } = {}) {
     // Same page: a new place on it replaces the entry (VS Code merges nearby
     // moves the same way), so Back never steps through every click.
     _cur = { ..._cur, params: { ...params } };
-    history.replaceState({ lx: _cur }, "", "#" + tab);
+    history.replaceState({ lx: _cur }, "", "#" + addressOf(tab));
     show(_cur, { fresh: true });
     return;
   }
   const via = link && from !== tab ? here() : null;
   _cur = { id: ++_seq, tab, params: { ...params }, via };
-  history.pushState({ lx: _cur }, "", "#" + tab);
+  history.pushState({ lx: _cur }, "", "#" + addressOf(tab));
   show(_cur, { fresh: true });
 }
 
@@ -149,13 +150,13 @@ function onPop(e) {
       // An old name: it replaces this entry (Back must not land on it again).
       if (_cur) {
         if (t === "dse") _cur = { ..._cur, tab: "runs" };
-        history.replaceState({ lx: _cur }, "", "#" + _cur.tab);
+        history.replaceState({ lx: _cur }, "", "#" + addressOf(_cur.tab));
       }
       go(t);
       return;
     }
     _cur = { id: ++_seq, tab: t || "setup", params: {}, via: null };
-    history.replaceState({ lx: _cur }, "", "#" + _cur.tab);
+    history.replaceState({ lx: _cur }, "", "#" + addressOf(_cur.tab));
     show(_cur, { fresh: true });
     return;
   }
@@ -315,10 +316,21 @@ export function setupNav() {
 // The page the address names (#ide, #verify…), or null: a tab with a page, or
 // an old page name go() still knows (dse, manual, console).
 export function hashTab(hash = location.hash) {
-  const t = String(hash || "").replace(/^#/, "").split(/[?&/]/)[0].trim();
+  const t = tabOfAddress(String(hash || "").replace(/^#/, "").split(/[?&/]/)[0].trim());
   if (!t || !/^[a-z0-9_-]+$/i.test(t)) return null;
   if (document.getElementById("sec-" + t) || ["dse", "manual", "console"].includes(t)) return t;
   return null;
+}
+
+// The address a page shows in the URL. The Flow page's own id is still
+// "pipeline" (its section, rail tab and every go("pipeline") call), but its
+// address reads #flow; #pipeline, from old links and saved windows, still
+// opens it (and turns into #flow). Pure (tested).
+const ADDRESS = { pipeline: "flow" };
+export function addressOf(tab) { return ADDRESS[tab] || tab; }
+export function tabOfAddress(name) {
+  const hit = Object.keys(ADDRESS).find((k) => ADDRESS[k] === name);
+  return hit || name || "";
 }
 
 // The first page as one history entry the rest build on: Setup for a bare
@@ -331,7 +343,7 @@ export function bootTab() {
 
 export function startAt(tab) {
   _cur = { id: ++_seq, tab, params: {}, via: null };
-  history.replaceState({ lx: _cur }, "", "#" + tab);
+  history.replaceState({ lx: _cur }, "", "#" + addressOf(tab));
   activate(tab);
   remember(_cur);
   // The first page renders like any page it is shown: a reload on #tools

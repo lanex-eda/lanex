@@ -151,7 +151,6 @@ body.theme-light .rn-viewing { color: var(--accent); border-color: color-mix(in 
 .rn-pin { color: var(--warn); display: inline-flex; }
 .rn-pin svg { fill: currentColor; }
 .rn-chip { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: var(--r-sm); padding: 1px 6px; }
-.rn-lineage { display: block; margin: -4px 0 6px 28px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap; }
 .rn-exp {
   width: 22px; height: 22px; display: inline-grid; place-items: center; padding: 0; border: 0; background: none;
   color: var(--text-muted); cursor: pointer; border-radius: var(--r-sm); flex: none;
@@ -565,21 +564,10 @@ body.theme-light .sw-best-k { color: var(--accent); }
 .sw-diff-from { font-family: var(--mono); color: var(--text-muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--fail) 60%, transparent); }
 .sw-diff-to { font-family: var(--mono); font-weight: 600; color: var(--pass); }
 .sw-add-out { min-height: 1.4em; margin: 8px 0 0; font-size: 13.5px; }
-.sw-plots { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; min-width: 0; max-width: 900px; }
 .sw-plot { max-width: 445px; margin: 0; padding: 10px 12px 6px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); min-width: 0; }
 .sw-plot figcaption { font-size: 13px; color: var(--text-muted); margin-bottom: 2px; }
 .sw-plot figcaption b { color: var(--text-strong); font-weight: 600; }
 .sw-plot svg { width: 100%; height: auto; display: block; }
-.sw-ax { stroke: var(--border-strong); }
-.sw-gridl { stroke: var(--border); stroke-dasharray: 2 4; }
-.sw-zero { stroke: var(--fail); stroke-dasharray: 3 3; opacity: 0.6; }
-.sw-line { fill: none; stroke: var(--met1); stroke-width: 1.6; }
-.sw-tk, .sw-axl { fill: var(--text-muted); font-size: 10.5px; font-family: var(--mono); }
-.sw-pt circle { fill: var(--met1); stroke: var(--surface); stroke-width: 1.5; }
-.sw-pt.is-best circle { fill: var(--pass); }
-.sw-pt.is-fail circle { fill: var(--fail); }
-.sw-pt.is-fail path { stroke: var(--fail); stroke-width: 1.8; fill: none; }
-.sw-pt text { fill: var(--text); font-size: 11px; font-family: var(--mono); }
 @container (max-width: 940px) { .sw-sum { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------- Compare with more than six runs (compare.js takes up to twelve) ---------- */

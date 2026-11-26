@@ -78,8 +78,3 @@ export function chartTheme() {
   };
 }
 
-// Notify charts to re-theme when the theme toggles. theme.js dispatches
-// `g:theme_changed`; chart modules listen and re-init with chartTheme().
-export function onThemeChange(cb) {
-  document.addEventListener("g:theme_changed", cb);
-}

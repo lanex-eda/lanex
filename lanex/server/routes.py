@@ -153,7 +153,10 @@ def h_health(handler: Any) -> None:
         probe = compat.probe_compat()
     except Exception:  # never let the probe break the health check
         probe = {"ok": True, "issues": []}
-    _respond(handler, {"service": "lanex", "alive": True,
+    from ..controller.events import BOOT_ID
+    # boot: a window that lost the server tells a blip (same boot) from a
+    # restart (a new one) when it reconnects (modules/connection.js).
+    _respond(handler, {"service": "lanex", "alive": True, "boot": BOOT_ID,
                        **current(), "compat": probe})
 
 
@@ -2113,12 +2116,6 @@ def h_manual_run(handler: Any) -> None:
 def h_manual_cancel(handler: Any) -> None:
     from ..controller import manualcmd
     _respond(handler, manualcmd.get_job().cancel())
-
-
-def h_manual_result(handler: Any) -> None:
-    from ..controller import manualcmd
-    job = manualcmd.get_job()
-    _respond(handler, {"running": job.running, "result": job.last_result})
 
 
 def h_run_cancel(handler: Any) -> None:
@@ -6755,7 +6752,6 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/cli-command", h_cli_command),
     ("/api/manual/run", h_manual_run),
     ("/api/manual/cancel", h_manual_cancel),
-    ("/api/manual/result", h_manual_result),
     ("/api/run/start", h_run_start),
     ("/api/run/cancel", h_run_cancel),
     ("/api/run/resume", h_run_resume),
@@ -6851,7 +6847,7 @@ _GET_ROUTES = {
     "/api/layout/commands", "/api/runs/", "/api/tools", "/api/metrics-catalog", "/api/run/status",
     "/api/reports/drc", "/api/reports/lvs", "/api/fs/roots", "/api/fs/list", "/api/walk-sources",
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
-    "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
+    "/api/design-dir", "/api/preflight", "/api/pdk-layers",
     "/api/runs-keys", "/api/compare-image", "/api/synth-explore",
     "/api/timing/paths", "/api/timing/path", "/api/warnings", "/api/verify/summary",
     # Layout (lane 3)
