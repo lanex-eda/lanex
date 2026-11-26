@@ -208,7 +208,7 @@ def storage_target() -> Dict[str, Any]:
     home = platform_env.home()
     probe = home if home.exists() else Path.home()
     use = disk_usage(probe) or {"free_gb": None, "total_gb": None}
-    return {"label": "the disk with " + _share_path(str(probe)), "path": str(probe),
+    return {"label": "the disk holding " + _share_path(str(probe)), "path": str(probe),
             "windows": False, **use}
 
 
@@ -435,7 +435,7 @@ def check_engine(ctx: Dict[str, Any]) -> Dict[str, Any]:
         if sys.platform == "darwin":
             nxt = "Tools > Container engine > Install (Podman or Docker Desktop)."
         else:
-            nxt = "Tools > Container engine > Install, or run: sudo apt install docker.io"
+            nxt = "Tools > Container engine > Install, or install docker.io (or Podman) from your system's packages."
         return result("engine", t, "fail", "No container engine (Docker or Podman), so container runs can't start.",
                       next_text=nxt, ui="#tools?item=engine", data=data)
     name = (engine or ("docker" if (c.get("docker") or {}).get("present") else "podman")).capitalize()
