@@ -10,6 +10,8 @@
 import { state } from "./state.js";
 import { UPLOAD_MAX_BYTES } from "./api.js";
 
+const UPLOAD = { path: "/api/upload", method: "POST" };
+
 export function uploadFile(file, designDir, { onProgress } = {}) {
   const xhr = new XMLHttpRequest();
   let cancelled = false;
@@ -20,7 +22,7 @@ export function uploadFile(file, designDir, { onProgress } = {}) {
       reject(err);
       return;
     }
-    xhr.open("POST", "/api/upload?filename=" + encodeURIComponent(file.name) + (designDir ? "&design_dir=" + encodeURIComponent(designDir) : ""));
+    xhr.open(UPLOAD.method, UPLOAD.path + "?filename=" + encodeURIComponent(file.name) + (designDir ? "&design_dir=" + encodeURIComponent(designDir) : ""));
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
     const shown = state.designMissing || state.designDir || "";
