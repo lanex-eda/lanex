@@ -201,7 +201,7 @@ function recentPlaceItems() {
 async function loadData() {
   const jobs = [];
   if (!_glossary) jobs.push(fetch("/static/glossary.json", { headers: { "X-Requested-With": "XMLHttpRequest" } })
-    .then((r) => r.json()).then((g) => { _glossary = g || {}; }).catch(() => { _glossary = {}; }));
+    .then((r) => r.json()).then((g) => import("./term.js").then((t) => { _glossary = t.flatGlossary(g); })).catch(() => { _glossary = {}; }));
   if (state.designDir && _filesFor !== state.designDir) jobs.push(api.projectFiles()
     .then((r) => { _files = ((r && r.files) || []).filter((f) => !/^runs\//.test(f.rel)); _filesFor = state.designDir; }).catch(() => { _files = []; }));
   if (!(state.variables || []).length) jobs.push(api.variables().then((v) => { if (Array.isArray(v) && !(state.variables || []).length) state.variables = v; }).catch(() => {}));

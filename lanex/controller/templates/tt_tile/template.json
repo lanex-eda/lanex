@@ -1,0 +1,33 @@
+{
+  "name": "tt_tile",
+  "title": "Tiny Tapeout tile",
+  "description": "A project with Tiny Tapeout's interface (tt_um_ and its eight ports) on a 1x1 tile's fixed die, 161 x 111.52 µm on sky130. To submit to a shuttle, move the Verilog into Tiny Tapeout's own template repository, which adds their exact pin positions.",
+  "teaches": "A fixed interface and die, pins on one edge (IO_PIN_ORDER_CFG), and a shuttle's conventions.",
+  "top": "tt_um_lanex_example",
+  "clock_port": "clk",
+  "clock_period": 20.0,
+  "sources": [
+    "src/project.v"
+  ],
+  "testbench": "verify/tb.v",
+  "order": 10,
+  "config": {
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [0, 0, 161.0, 111.52],
+    "TOP_MARGIN_MULT": 1,
+    "BOTTOM_MARGIN_MULT": 1,
+    "LEFT_MARGIN_MULT": 6,
+    "RIGHT_MARGIN_MULT": 6,
+    "PL_TARGET_DENSITY_PCT": 60,
+    "IO_PIN_ORDER_CFG": "dir::src/pin_order.cfg"
+  },
+  "pdk": {
+    "sky130*": {
+      "config": {
+        "RT_MAX_LAYER": "met4",
+        "PDN_MULTILAYER": false,
+        "PDN_VPITCH": 38.87
+      }
+    }
+  }
+}

@@ -32,7 +32,7 @@ import { LogView } from "./logview.js";
 import { fileActionsHtml, wireFileActions } from "./fileview.js";
 import { liveLines, liveRows, onLiveLog } from "./logs.js";
 import { reportCardHtml, verdictOf, fmtDur } from "./reportcard.js";
-import { fixListHtml, problemsOf } from "./problems.js";
+import { fixListHtml, problemsOf, termsRowHtml, codeChipHtml, notesHtml } from "./problems.js";
 import { loadingStart, pageSkeleton } from "./loading.js";
 import "./fixsheet.js";
 
@@ -596,7 +596,11 @@ function failHtml(rx, stages) {
     "<div class='fl-split-a'><div class='an-eyebrow'>" + word + " · " + esc(where) + "</div>" +
     "<h2 class='an-title'>" + esc(title) + "</h2>" + branchHtml() +
     "<p class='an-lede'>" + esc(plain) + "</p>" +
-    (ev ? "<div class='fl-ev'><pre>" + esc(ev) + "</pre>" + (c.code ? "<span class='fl-code'>" + esc(c.code) + "</span>" : "") + "</div>" : "") +
+    // The card's terms, the evidence with its code (a button to the error
+    // index), and the card's notes (problems.js).
+    termsRowHtml(c.learn) +
+    (ev ? "<div class='fl-ev'><pre>" + esc(ev) + "</pre>" + codeChipHtml(c.code, c.kb) + "</div>" : "") +
+    notesHtml(c.notes) +
     "</div>" +
     (fixes ? "<div class='fl-split-b'><div class='fl-fixes-h'>What to change</div>" + fixes +
       ((c.fixes || []).some((f) => f.kind === "setting")

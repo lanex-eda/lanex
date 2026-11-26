@@ -1,0 +1,25 @@
+{
+  "name": "traffic",
+  "title": "Traffic light (state machine)",
+  "description": "Green, yellow, red, with a walk button that cuts green short. A state machine with a timer, and a bench that checks it every cycle against a model.",
+  "teaches": "A state machine: a state register, next-state logic with defaults (no latches), and a self-checking bench.",
+  "top": "traffic",
+  "clock_port": "clk",
+  "clock_period": 10.0,
+  "sources": [
+    "src/traffic.v"
+  ],
+  "testbench": "verify/traffic_tb.v",
+  "order": 4,
+  "config": {
+    "FP_CORE_UTIL": 40,
+    "PL_TARGET_DENSITY_PCT": 55
+  },
+  "pdk": {
+    "sky130*": {
+      "config": {
+        "MAX_FANOUT_CONSTRAINT": 6
+      }
+    }
+  }
+}

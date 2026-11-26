@@ -5178,6 +5178,32 @@ def h_problems(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_kb_errors(handler: Any) -> None:
+    """The failure cards' index for Help (controller/problems.py kb_index),
+    with the runs of the open project that stopped on each."""
+    try:
+        from ..controller import problems
+        _respond(handler, problems.kb_index(_get_active_design_dir()))
+    except Exception as ex:
+        _log.exception("kb index failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_floorplan_estimate(handler: Any) -> None:
+    """What Setup's floorplan preview needs for the open project
+    (controller/fpestimate.py): the site, margins, power straps, pin tracks,
+    the latest synthesis's cell area and the top module's pin count."""
+    # With no project open (the new-project wizard): the PDK's numbers only.
+    design_dir = _get_active_design_dir() if _query_param(handler.path, "project", "1") != "0" else None
+    try:
+        from ..controller import fpestimate
+        _respond(handler, fpestimate.estimate_inputs(design_dir, _query_param(handler.path, "pdk"),
+                                                     _query_param(handler.path, "scl")))
+    except Exception as ex:
+        _log.exception("floorplan estimate failed")
+        _respond(handler, str(ex), 500)
+
+
 def _fix_plan(body: Dict[str, Any]) -> Tuple[Any, int]:
     from ..controller import branch, manualcmd
     design_dir = _get_active_design_dir()
@@ -5371,6 +5397,8 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/run-stages", h_run_stages),
     ("/api/run-explain", h_run_explain),
     ("/api/problems", h_problems),
+    ("/api/kb/errors", h_kb_errors),
+    ("/api/floorplan/estimate", h_floorplan_estimate),
     ("/api/fix/plan", h_fix_plan),
     ("/api/fix/apply", h_fix_apply),
     ("/api/config/undo", h_config_undo),
@@ -5553,7 +5581,7 @@ _BOTH_ROUTES = {
 }
 _GET_ROUTES = {
     "/api/templates", "/api/project/defaults", "/api/project/files", "/api/run-export",
-    "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems",
+    "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems", "/api/kb/errors", "/api/floorplan/estimate",
     "/api/timing-paths", "/api/dse/sweeps", "/api/dse/status", "/api/system-resources",
     "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/celllib/cell",
     "/api/celllib/layout", "/api/celllib", "/api/macros/catalog", "/api/macros/projects",

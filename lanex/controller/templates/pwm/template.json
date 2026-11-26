@@ -1,0 +1,33 @@
+{
+  "name": "pwm",
+  "title": "Two-channel PWM",
+  "description": "A design in two files that share a header: a top module with two copies of a PWM channel. The config lists the files by name and says where the header is.",
+  "teaches": "Hierarchy, `include headers, VERILOG_FILES as a list and VERILOG_INCLUDE_DIRS.",
+  "top": "pwm_top",
+  "clock_port": "clk",
+  "clock_period": 10.0,
+  "sources": [
+    "src/pwm_top.v",
+    "src/pwm_core.v"
+  ],
+  "verilog_files": [
+    "dir::src/pwm_top.v",
+    "dir::src/pwm_core.v"
+  ],
+  "testbench": "verify/pwm_tb.v",
+  "order": 5,
+  "config": {
+    "VERILOG_INCLUDE_DIRS": [
+      "dir::src/include"
+    ],
+    "FP_CORE_UTIL": 40,
+    "PL_TARGET_DENSITY_PCT": 55
+  },
+  "pdk": {
+    "sky130*": {
+      "config": {
+        "MAX_FANOUT_CONSTRAINT": 6
+      }
+    }
+  }
+}

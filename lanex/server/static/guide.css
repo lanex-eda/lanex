@@ -133,3 +133,106 @@ body.theme-light .gd-pop .gd-eyebrow, body.theme-light .gd-card .gd-eyebrow, bod
 .steps-3 li.is-next .step-text b::after { content: " · next"; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.08em; color: var(--met1); }
 body.theme-light .steps-3 li.is-done .step-text b::after { color: var(--pass); }
 body.theme-light .steps-3 li.is-next .step-text b::after { color: var(--accent); }
+
+/* ---------- the inline glossary (term.js) ----------
+ * A label with a definition. Only the first use on a page is underlined
+ * (.term-u): a dotted line in the muted ink, solid on hover and focus. */
+.has-term.term-u { text-decoration: underline dotted color-mix(in srgb, var(--text-muted) 70%, transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.has-term { cursor: help; }
+label.has-term { cursor: pointer; }
+.has-term:hover, .has-term:focus-visible { text-decoration-color: var(--met1); text-decoration-style: solid; }
+.has-term[data-term-tab]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+.term-pop {
+  position: fixed; z-index: var(--z-toast, 9500); width: min(360px, calc(100vw / var(--ll-zoom, 1) - 24px));
+  padding: 12px 14px 10px; font-family: var(--sans); color: var(--text);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface)); border: 1px solid var(--border-strong);
+  border-top: 1px solid color-mix(in srgb, var(--met1) 55%, var(--border-strong)); border-radius: var(--r-md);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(77, 163, 255, 0.05);
+}
+.term-pop[hidden] { display: none; }
+.term-pop.is-pinned { border-color: var(--met1); }
+.term-eyebrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font: 500 11px var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--met1); }
+.term-full { font: 400 12px var(--sans); letter-spacing: 0; text-transform: none; color: var(--text-muted); }
+.term-short { margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-strong); }
+.term-lanex { margin: 6px 0 0; padding-left: 9px; font-size: 13px; line-height: 1.45; color: var(--text); border-left: 2px solid color-mix(in srgb, var(--met1) 45%, transparent); }
+.term-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.term-see { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; flex: 1; min-width: 0; }
+.term-see-k { font: 500 10px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); margin-right: 2px; }
+.term-chip { padding: 1px 7px; font: 12px var(--sans); color: var(--text); cursor: pointer; background: var(--surface-3); border: 1px solid var(--border); border-radius: 3px; }
+.term-chip:hover { border-color: var(--met1); color: var(--text-strong); }
+.term-more { margin-left: auto; padding: 2px 0; font: 600 12.5px var(--sans); color: var(--met1); background: none; border: 0; cursor: pointer; white-space: nowrap; }
+.term-more:hover { text-decoration: underline; }
+.term-chip:focus-visible, .term-more:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+body.theme-light .term-pop { box-shadow: 0 12px 30px rgba(10, 20, 40, 0.18); }
+body.theme-light .term-eyebrow, body.theme-light .term-more { color: var(--accent); }
+
+/* Help, Learn: the glossary with longer names, and the error index. */
+#help-sheet .gloss-row { grid-template-columns: minmax(7.5em, 10em) minmax(0, 1fr); }
+.gloss-term small { display: block; margin-top: 2px; font: 400 11.5px var(--sans); color: var(--ink-2); }
+.gloss-lanex { display: block; margin-top: 4px; font-size: 13px; color: var(--ink-2); }
+.gloss-row.is-hit, .kb-row.is-hit { box-shadow: inset 2px 0 0 var(--met1); padding-left: 10px; background: var(--accent-soft); }
+.kb-lede { margin: 0 0 6px; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.kb-list { display: flex; flex-direction: column; }
+.kb-row { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--seal); }
+.kb-row:last-child { border-bottom: 0; }
+.kb-code { font: 600 12.5px/1.5 var(--mono); letter-spacing: 0.04em; color: var(--fail); }
+.kb-words { font: 500 10.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
+.kb-main b { display: block; font-size: 14px; font-weight: 500; line-height: 1.45; color: var(--ink-strong); }
+.kb-main small { display: block; margin-top: 2px; font: 11.5px var(--mono); color: var(--ink-2); }
+
+/* ---------- the clock helper (clockfield.js) ----------
+ * The unit next to a clock field is a switch: ns (a period) or MHz. */
+.ck-unit {
+  flex: none; padding: 3px 7px; min-width: 3.4em; cursor: pointer;
+  font: 600 11.5px var(--mono); letter-spacing: 0.06em; color: var(--text-muted);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.ck-unit:hover { color: var(--text-strong); border-color: var(--met1); }
+.ck-unit:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pd-period input.is-invalid, .wiz-clock input.is-invalid { border-color: var(--warn); }
+#pd-mhz { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.pd-clock-last { margin-top: var(--s-2); }
+.wiz-unit.wiz-clock { display: flex; align-items: center; gap: 8px; }
+.wiz-unit.wiz-clock input { padding-right: 10px; flex: 1; min-width: 0; }
+.wiz-unit.wiz-clock::after { content: none; }
+.wiz-clk-other { flex: none; font: 12.5px var(--mono); color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ---------- the learning ladder in the wizard ---------- */
+.wiz-tpl-n { margin-right: 8px; font: 600 12px var(--mono); letter-spacing: 0.08em; color: var(--met1); }
+body.theme-light .wiz-tpl-n { color: var(--accent); }
+
+/* ---------- the floorplan preview (fppreview.js) ----------
+ * The die and the core to scale in Setup's Chip size group (and the wizard,
+ * for a fixed-die template): the die in the strong border tone, the core in
+ * the raised surface with a metal-1 edge, faint row lines, and the checks as
+ * square vias with a word. An estimate is drawn dashed. */
+.fp-preview { margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px solid var(--border); }
+.fp-preview[hidden] { display: none; }
+.fp-head { margin-bottom: 8px; }
+.fp-body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; }
+@container ms-group (max-width: 380px) { .fp-body { grid-template-columns: 1fr; } }
+.fp-pic { width: 168px; height: 132px; display: grid; place-items: center; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 12px 12px; background-position: -1px -1px; }
+.fp-svg { width: 152px; height: 116px; overflow: visible; }
+.fp-die { fill: color-mix(in srgb, var(--surface) 85%, transparent); stroke: var(--border-strong); }
+.fp-core { fill: var(--surface-3); stroke: var(--met1); }
+.fp-svg.is-estimate .fp-die, .fp-svg.is-estimate .fp-core { stroke-dasharray: 3 2; }
+.fp-row { stroke: color-mix(in srgb, var(--met1) 22%, transparent); }
+.fp-pic-empty span { width: 70px; height: 70px; border: 1.5px dashed var(--border-strong); border-radius: 2px; }
+.fp-text { min-width: 0; }
+.fp-dims { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-variant-numeric: tabular-nums; }
+.fp-dims b { font: 600 14px var(--mono); color: var(--text-strong); }
+.fp-dims small { font-size: 12px; color: var(--text-muted); }
+.fp-sep { color: var(--text-disabled); margin: 0 2px; }
+.fp-checks { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.fp-checks li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 13px; line-height: 1.4; color: var(--text); }
+.fp-checks li .vf-mark { margin-top: 2px; }
+.fp-checks li.is-fail { color: var(--text-strong); }
+.fp-checks code { font: 11px var(--mono); color: var(--text-muted); }
+.fp-src { margin: 8px 0 0; max-width: 72ch; font-size: 12.5px; line-height: 1.45; color: var(--text-muted); }
+.fp-empty { margin: 0; font-size: 13px; color: var(--text-muted); }
+.wiz-fp { padding: 12px; background: var(--wafer-2); border: 1px solid var(--seal); border-radius: var(--r-sm); container: ms-group / inline-size; }
+.wiz-fp .fp-preview, .wiz-fp .fp-head { margin: 0 0 6px; padding: 0; border: 0; }
+.wiz-fp .fp-pic { width: 128px; height: 100px; }
+.wiz-fp .fp-svg { width: 116px; height: 88px; }

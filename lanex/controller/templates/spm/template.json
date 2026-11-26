@@ -1,7 +1,8 @@
 {
   "name": "spm",
-  "title": "Serial-parallel multiplier (SPM)",
-  "description": "LibreLane's reference example, with its own tuned settings for sky130 and gf180. The design the LibreLane docs walk through.",
+  "title": "Serial-parallel multiplier (SPM): own constraints and pin order",
+  "description": "LibreLane's reference design, with its own SDC files for implementation and sign-off, a pin order file and settings tuned for sky130 and gf180.",
+  "teaches": "Your own timing constraints (PNR_SDC_FILE and SIGNOFF_SDC_FILE) and pin order (IO_PIN_ORDER_CFG).",
   "top": "spm",
   "clock_port": "clk",
   "clock_period": 10.0,
@@ -10,5 +11,5 @@
   ],
   "testbench": "verify/spm_tb.v",
   "copy_from": "spm",
-  "order": 3
+  "order": 9
 }

@@ -347,6 +347,10 @@ export const api = {
   // The fix loop: a run's problems; what a fix would do; apply it as a run
   // resumed from that one; undo a config change.
   problems: (tag) => _fetch("/api/problems?tag=" + encodeURIComponent(tag), { timeout: 60000 }),
+  // The failure cards LanEx knows, for Help's error index (and which runs hit each).
+  kbErrors: () => _fetch("/api/kb/errors"),
+  // Setup's floorplan preview: the PDK's site, margins, straps and the last synthesis area.
+  floorplanEstimate: (pdk, scl, { project = true } = {}) => _fetch("/api/floorplan/estimate?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + (project ? "" : "&project=0")),
   fixPlan: (body) => _fetch("/api/fix/plan", { method: "POST", body: JSON.stringify(body), timeout: 60000 }),
   fixApply: (body) => _fetch("/api/fix/apply", { method: "POST", body: JSON.stringify(body), timeout: 60000 }),
   configUndo: (undo) => _fetch("/api/config/undo", { method: "POST", body: JSON.stringify(undo) }),

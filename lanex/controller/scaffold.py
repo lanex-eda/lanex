@@ -95,13 +95,26 @@ def list_templates() -> List[Dict[str, Any]]:
                 "name": doc["name"],
                 "title": doc.get("title") or doc["name"],
                 "description": doc.get("description") or "",
+                # What this rung of the ladder teaches, in one line.
+                "teaches": doc.get("teaches") or "",
                 "top": doc.get("top") or doc["name"],
-                "clock_port": doc.get("clock_port") or "clk",
+                # None: a design with no clock (pure logic).
+                "clock_port": _clock_port(doc),
                 "clock_period": doc.get("clock_period"),
+                # The template's own file names, so the guide and the wizard
+                # name the files the project really gets.
+                "sources": [s for s in (doc.get("sources") or []) if isinstance(s, str)],
+                "testbench": tb if isinstance(tb, str) else None,
                 # The clock each PDK family starts on ({glob: ns}), where the
                 # template's default is too fast for that process.
                 "pdk_clock": {g: v["clock_period"] for g, v in _pdk_tuning(doc).items()
                               if v.get("clock_period") is not None},
+                # The size settings the template ships (a fixed die, its
+                # margins), so the wizard can draw the floorplan before the
+                # project exists.
+                "size": {k: v for k, v in (doc.get("config") or {}).items()
+                         if k in ("FP_SIZING", "DIE_AREA", "CORE_AREA", "FP_CORE_UTIL", "LEFT_MARGIN_MULT",
+                                  "RIGHT_MARGIN_MULT", "TOP_MARGIN_MULT", "BOTTOM_MARGIN_MULT")},
                 "has_testbench": bool(tb),
                 "kind": doc.get("kind") or "example",
                 "fixed_config": bool(doc.get("copy_from")),
@@ -111,6 +124,14 @@ def list_templates() -> List[Dict[str, Any]]:
     # The blank project leads; examples follow in their curated order.
     out.sort(key=lambda d: (d["kind"] != "blank", d["order"], d["name"]))
     return out
+
+
+def _clock_port(manifest: Dict[str, Any]) -> Optional[str]:
+    """The template's clock input: ``clk`` unless it says otherwise, and None
+    for a design with no clock at all (``"clock_port": null``)."""
+    if "clock_port" in manifest and manifest["clock_port"] is None:
+        return None
+    return str(manifest.get("clock_port") or "clk")
 
 
 def _pdk_tuning(manifest: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -220,16 +241,19 @@ def _to_sv(dest: Path, top: str, written: List[str]) -> None:
 
 
 def _render_config(
-    *, top: str, pdk: str, scl: Optional[str], clock_port: str, clock_period: Optional[float],
-    sources: str = "dir::src/*.v",
+    *, top: str, pdk: str, scl: Optional[str], clock_port: Optional[str], clock_period: Optional[float],
+    sources: Any = "dir::src/*.v",
 ) -> Dict[str, Any]:
     cfg: Dict[str, Any] = {
         "DESIGN_NAME": top,
         # `dir::` resolves relative to the config file's directory, so any *.v
-        # (or *.sv) the user drops into src/ is picked up automatically.
-        "VERILOG_FILES": [sources],
-        "CLOCK_PORT": clock_port,
+        # (or *.sv) the user drops into src/ is picked up automatically. A
+        # template that lists its files in order (a SystemVerilog package
+        # first, a header kept out) passes the list.
+        "VERILOG_FILES": list(sources) if isinstance(sources, (list, tuple)) else [sources],
     }
+    if clock_port:
+        cfg["CLOCK_PORT"] = clock_port
     if clock_period is not None:
         cfg["CLOCK_PERIOD"] = float(clock_period)
     if pdk:
@@ -343,12 +367,15 @@ def create_project(
     sv = manifest.get("kind") == "blank" and language == "systemverilog"
     if sv:
         _to_sv(dest, top, written)
-    clock_port = manifest.get("clock_port") or "clk"
+    clock_port = _clock_port(manifest)
     explicit_clock = clock_period is not None
     if clock_period is None:
         clock_period = manifest.get("clock_period")
+    listed = manifest.get("verilog_files")
+    sources: Any = ([s for s in listed if isinstance(s, str)] if isinstance(listed, list) and listed
+                    else "dir::src/*.sv" if sv else "dir::src/*.v")
     cfg = _render_config(top=top, pdk=pdk, scl=scl, clock_port=clock_port, clock_period=clock_period,
-                         sources="dir::src/*.sv" if sv else "dir::src/*.v")
+                         sources=sources)
     # A template may add settings its design needs, such as a fixed die for a
     # design too small for a utilization-sized one (placement can't legalize
     # the clock buffers on a die a few dozen microns across).

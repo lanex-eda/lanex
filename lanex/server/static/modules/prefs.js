@@ -18,6 +18,12 @@ export const PREFS = [
     hint: "Automatic sizes the interface for this screen." },
   { id: "density", key: "ll.density", group: "Appearance", label: "Compact spacing", type: "bool", def: "comfortable", on: "compact", off: "comfortable",
     hint: "Tighter rows and controls, to fit more on screen." },
+  // The inline glossary (term.js) and the clock fields (clockfield.js).
+  { id: "termUnderline", key: "ll.termUnderline", group: "Appearance", label: "Underline glossary terms", type: "bool", def: "on", on: "on", off: "off",
+    hint: "A dotted line under the first label on a page that has a definition. Hover or focus still shows it when this is off." },
+  { id: "clockUnit", key: "ll.clockUnit", group: "Appearance", label: "Type the clock in", type: "choice", def: "ns",
+    options: [["ns", "Nanoseconds (period)"], ["mhz", "MHz (frequency)"]],
+    hint: "The config always stores the period in ns; this only changes how you type and read it." },
 
   // ---- Runs
   { id: "engine", key: "ll.runMode", group: "Runs", label: "Engine", type: "choice", def: "container",
