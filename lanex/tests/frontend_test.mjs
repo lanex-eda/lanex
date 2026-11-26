@@ -3274,7 +3274,8 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   });
   check("glossary: the popover's words are escaped and link to Help", () => {
     const h = TM.termHtml({ id: "x", term: "<b>X</b>", short: "a & b", lanex: "in LanEx", see: [] });
-    assert.ok(!h.includes("<b>X</b>") && h.includes("&#60;b&#62;X") && h.includes("a &#38; b"));
+    // (html.js's escaper: named entities)
+    assert.ok(!h.includes("<b>X</b>") && h.includes("&lt;b&gt;X") && h.includes("a &amp; b"));
     assert.match(h, /data-term-more='x'/);
     assert.match(h, /term-lanex/);
   });
@@ -3847,6 +3848,36 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.match(p, /tab\("tools", \{ item: k \}\)/);
     assert.match(p, /isDown\(\) \? probeNow\(\) : location\.reload\(\)/);
     assert.match(readFileSync(resolve(MOD, "runs.js"), "utf8"), /export async function runAction\(id, r\)/);
+  });
+  const HT = await import(toUrl(resolve(MOD, "html.js")));
+  check("html: one escaper and a tagged template that escapes every value", () => {
+    assert.equal(HT.escapeHtml(`<a href="x" title='y'>&</a>`), "&lt;a href=&quot;x&quot; title=&#39;y&#39;&gt;&amp;&lt;/a&gt;");
+    assert.equal(HT.escapeHtml(null), "");
+    assert.equal(HT.escapeText(`"q" <b>`), `"q" &lt;b&gt;`);
+    const name = "<img src=x onerror=alert(1)>";
+    const out = String(HT.html`<b title="${name}">${name}</b>${HT.raw("<i>ok</i>")}${[1, "<2>"]}${null}${HT.html`<u>${"&"}</u>`}`);
+    assert.equal(out, '<b title="&lt;img src=x onerror=alert(1)&gt;">&lt;img src=x onerror=alert(1)&gt;</b><i>ok</i>1&lt;2&gt;<u>&amp;</u>');
+    assert.equal(fmt.escape(0), "0");
+    assert.equal(fmt.escape("a<b"), HT.escapeHtml("a<b"));
+  });
+  check("html: no module builds its own HTML escaper (they use html.js)", () => {
+    const files = [];
+    const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const p = resolve(d, e.name); if (e.isDirectory()) walk(p); else if (/\.m?js$/.test(e.name)) files.push(p); } };
+    walk(MOD);
+    walk(resolve(MOD, ".."));   // static/*.js too (app.js); the vendor folder holds no .js at its top
+    const own = [];
+    for (const f of new Set(files)) {
+      if (/[\\/]vendor[\\/]/.test(f) || /[\\/]html\.js$/.test(f)) continue;
+      const t = readFileSync(f, "utf8");
+      // an entity map, or a replace over the characters an escaper escapes
+      if (/replace\(\/\[&<>/.test(t) || /"&":\s*"&amp;"/.test(t) || /fromCharCode\(38\)/.test(t)) own.push(f.split(/[\\/]/).slice(-2).join("/"));
+    }
+    assert.deepEqual(own, [], "escapers outside html.js: " + own.join(", "));
+  });
+  check("dialog: a title is text, never parsed as HTML", () => {
+    const d = readFileSync(resolve(MOD, "dialog.js"), "utf8");
+    assert.match(d, /\.dlg-head"\)\.textContent = title == null \? "" : String\(title\)/);
+    assert.doesNotMatch(d, /dlg-head[^\n]*innerHTML/);
   });
   const NV = await import(toUrl(resolve(MOD, "nav.js")));
   check("nav: the Flow page's address is #flow, and #pipeline still opens it", () => {

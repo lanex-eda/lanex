@@ -14,8 +14,10 @@
 // long, refused or not answering, after sleep, and whether LanEx.exe started
 // this server (it restarts it by itself). Research: research/LANE-Z1-research.md.
 //
-// Leaf module: no imports (api.js imports it). Pure parts are exported and
-// tested in frontend_test.mjs.
+// Almost a leaf: it imports only html.js (api.js imports it). Pure parts are
+// exported and tested in frontend_test.mjs.
+
+import { escapeHtml } from "./html.js";
 
 export const T = {
   chip: 2000,              // nothing before: a blip
@@ -251,8 +253,7 @@ function onKey(e) {
 }
 
 // ------------------------------------------------------------------ painting
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
-  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = escapeHtml;
 
 function view() {
   return connView({ down: S.down, since: S.since, now: Date.now(), kind: S.kind, launcher: S.launcher,

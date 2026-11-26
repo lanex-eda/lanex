@@ -8,6 +8,8 @@
 //   run:    Clean · Warnings · Failed · Stopped · Running · Incomplete
 //   check:  Passed · Warning · Failed · Info · Off
 
+import { escapeHtml } from "./html.js";
+
 const RUN = {
   passed:     { cls: "pass", word: "Clean" },
   warning:    { cls: "warn", word: "Warnings" },
@@ -26,8 +28,7 @@ const CHECK = {
   absent:  { cls: "none", word: "Not run" },
 };
 
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
-  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = escapeHtml;
 
 // { state, cls, word } for a verdict state ("passed", "failed", …).
 export function runVerdict(st) {

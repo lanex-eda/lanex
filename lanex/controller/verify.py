@@ -51,6 +51,12 @@ _SKIPPED, _NOT_RUN = "skipped", "not_run"
 # Kept for callers of the old API: "absent" meant "no data".
 _ABSENT = "absent"
 
+# The one run vocabulary (run_verdict_from's states), and the check statuses.
+# modules/verdict.js says the same words; test_verdict_parity.py holds them
+# together.
+RUN_STATES = ("passed", "warning", "failed", "stopped", "incomplete", "running")
+CHECK_STATUSES = (_PASS, _WARN, _FAIL, _INFO, _SKIPPED, _NOT_RUN, _ABSENT)
+
 # LibreLane 3 defaults for the switches a run's resolved.json may omit
 # (steps/checker.py and flows/classic.py).
 _DEFAULTS: Dict[str, Any] = {

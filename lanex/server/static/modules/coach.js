@@ -16,8 +16,9 @@
 // app's; a press on the canvas does not close it (a step may ask for one).
 
 import { openLayer, closeLayer } from "./overlay.js";
+import { escapeHtml } from "./html.js";
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = escapeHtml;
 
 export function startCoach({ host, eyebrow = "", steps = [], onEnd = null, label = "" } = {}) {
   if (!host || !steps.length) return null;

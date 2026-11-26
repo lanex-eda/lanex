@@ -6,9 +6,10 @@
 import { api, fmt } from "./api.js";
 import { toast } from "./toast.js";
 import { icon } from "./icons.js";
+import { escapeText } from "./html.js";
 
 function esc(s) {
-  return String(s).replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+  return escapeText(String(s));
 }
 
 // Download + Locate buttons for a run-relative file path. `tag` = run tag.

@@ -23,6 +23,7 @@ import { state, safeStorage } from "./state.js";
 import { contextRun, contextRuns, contextBaseline, contextDesign, setRun, loadRuns } from "./context.js";
 import { parseQuery, rank, oneLine, pushRecent, PREFIXES, whenLocal, keepSelection } from "./palettemodel.js";
 import { help as pageHelp } from "./help.js";
+import { escapeHtml } from "./html.js";
 
 const RECENT_KEY = "ll.paletteRecent";
 let _el = null;
@@ -40,7 +41,7 @@ let _stepLabel = null;  // flow.js stepLabel, once loaded
 let _loading = false;   // data still arriving: "Searching…", not "Nothing matches"
 let _page = null;       // a run's actions: { title, items, back: the query before }
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+const esc = escapeHtml;
 const click = (id) => document.getElementById(id)?.click();
 const tab = (name, params = {}) => go(name, params, { link: false });
 const guide = (action) => document.dispatchEvent(new CustomEvent("g:guide", { detail: { action } }));

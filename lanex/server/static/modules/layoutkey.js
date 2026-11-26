@@ -13,8 +13,9 @@
 // same colour, so a swatch draws the stipple too: that is what tells them apart.
 
 import { rampCss } from "./heatmap.js";
+import { escapeHtml } from "./html.js";
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = escapeHtml;
 
 const RX_VIA = /^(via\d*|v\d|topvia\d?|tv\d?|mcon|cont|contact|licon\d?)$/i;
 const RX_METAL = /^(?:met|metal|m)(\d)$/i;

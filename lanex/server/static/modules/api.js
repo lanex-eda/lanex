@@ -5,6 +5,7 @@
 
 import { state } from "./state.js";
 import { initConnection, noteTrouble, noteOk, keyLost as connKeyLost } from "./connection.js";
+import { escapeHtml } from "./html.js";
 
 const base = "";
 
@@ -750,28 +751,10 @@ function _broadcast(ev) {
 
 // ----------------------------- formatting -----------------------------------
 
-const _AMP = String.fromCharCode(38);
-const _LT = String.fromCharCode(60);
-const _GT = String.fromCharCode(62);
-const _QUOT = String.fromCharCode(34);
-const _APOS = String.fromCharCode(39);
-// Every HTML entity is `&<name>;` — the prefix is ALWAYS the ampersand
-// (`_AMP`), never the character being escaped. Using the char itself (e.g.
-// `_LT + "lt;"` → `<lt;`) left the raw `<`/`>`/`"`/`'` in the output, which is
-// both visible corruption (tool text like `spacing < 0.14um`) and an
-// HTML-injection hole. Built from char codes so no literal entity appears in
-// this source file.
-const _ESCAPE = {
-  [_AMP]: _AMP + "amp;",
-  [_LT]: _AMP + "lt;",
-  [_GT]: _AMP + "gt;",
-  [_QUOT]: _AMP + "quot;",
-  [_APOS]: _AMP + "#39;",
-};
-
 export const fmt = {
+  // The one escaper (html.js). String(s) first, as before: fmt.escape(0) is "0".
   escape(s) {
-    return String(s).replace(/[&<>"']/g, (c) => _ESCAPE[c] || c);
+    return escapeHtml(String(s));
   },
   metric(value) {
     if (value === null || value === undefined) return "—";

@@ -12,6 +12,7 @@
 //   await confirmTyped({ title, body, phrase })                 → boolean (must type phrase)
 
 import { openLayer, closeLayer } from "./overlay.js";
+import { escapeHtml } from "./html.js";
 
 let _seq = 0;
 
@@ -101,8 +102,7 @@ export function holdFocus(root, { onEscape = null } = {}) {
 }
 
 function _esc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return escapeHtml(s);
 }
 
 // Generic dialog for callers that render their own body (e.g. the provenance
