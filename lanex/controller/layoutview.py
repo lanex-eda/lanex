@@ -1090,12 +1090,18 @@ class _Session:
         hits = [n for n in names if qq in n.lower()] if qq else []
         hits.sort(key=lambda n: (n.lower() != qq, not n.lower().startswith(qq), len(n), n))
         out = []
-        for n in hits[:max(1, min(int(limit), _MAX_NET_HITS))]:
+        lim = max(1, min(int(limit), _MAX_NET_HITS))
+        for n in hits[:lim]:
             e = idx.get(n) or {}
             out.append({"name": n, "shapes": e.get("n", 0), "layers": sorted(e.get("layers", {}).keys()),
                         "bbox": e.get("bbox"), "length": round(e.get("length", 0.0), 2),
                         "pins": len(conn["nets"].get(n) or []), "use": conn["use"].get(n, "")})
-        return {"nets": out, "total": len(hits), "names": True}
+        # Placed instances by name (``_186_``, ``clkbuf_0_clk``), same rules.
+        ii = comp._inst_index()
+        ihits = [n for n in ii if qq in n.lower()] if qq else []
+        ihits.sort(key=lambda n: (n.lower() != qq, not n.lower().startswith(qq), len(n), n))
+        insts = [{"name": n, "cell": ii[n][0], "box": ii[n][1]} for n in ihits[:lim]]
+        return {"nets": out, "total": len(hits), "names": True, "insts": insts, "insts_total": len(ihits)}
 
     def net_geom(self, name: str) -> Dict[str, Any]:
         """One net's shapes, pins and box, for a highlight."""
@@ -1261,7 +1267,7 @@ def close_session(sid: str) -> bool:
     """Forget a session now (the page moved on). True when one was open."""
     if _WORKERS is not None:
         known = _SPECS.pop(sid, None) is not None
-        for role in ("view", "bg"):
+        for role in ("view", "bg"):     # the thumb worker keeps no sessions
             try:
                 _call(role, "close", {"sid": sid}, timeout=20, spawn=False)
             except Exception:
@@ -1369,8 +1375,10 @@ def thumbnail(run_dir: Path, source: str, w: int, h: int, bg: str) -> Optional[b
     if not available()["ok"]:
         return None
     if _WORKERS is not None:
-        png = _call("bg", "thumb", {"path": str(path), "kind": kind, "run_dir": str(run_dir),
-                                    "w": int(w), "h": int(h), "bg": bg}, timeout=300)
+        # Their own worker: a stage strip fills in while the view renders, a
+        # 3D model builds or an 8K picture is saved.
+        png = _call("thumb", "thumb", {"path": str(path), "kind": kind, "run_dir": str(run_dir),
+                                       "w": int(w), "h": int(h), "bg": bg}, timeout=300)
     else:
         png = _thumb_png(str(path), kind, str(run_dir), int(w), int(h), bg)
     if not png:
@@ -1803,7 +1811,9 @@ def enable_workers(on: bool = True) -> None:
         return
     if _WORKERS is None:
         from .layoutworker import Worker
-        _WORKERS = {"view": Worker("view"), "bg": Worker("bg")}
+        # view: what the user waits on; bg: the 3D model and 4K/8K saves;
+        # thumb: stage thumbnails (throwaway sessions, nothing kept).
+        _WORKERS = {"view": Worker("view"), "bg": Worker("bg"), "thumb": Worker("thumb")}
 
 
 def stop_workers() -> None:

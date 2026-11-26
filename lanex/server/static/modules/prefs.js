@@ -38,6 +38,13 @@ export const PREFS = [
     options: [["30", "30 s"], ["120", "2 min"], ["600", "10 min"], ["1800", "30 min"]],
     hint: "A testbench that never reaches $finish is stopped after this long. Its waveform so far still shows." },
 
+  // ---- Layout (modules/layout.js)
+  { id: "layoutKey", key: "ll.lx.key", group: "Layout", label: "Show the key on the layout", type: "bool", def: "1", on: "1", off: "0",
+    hint: "The card in the corner of the Layout view that says what each colour is. Its arrow folds it." },
+  { id: "layoutRamp", key: "ll.lx.ramp", group: "Layout", label: "Heat map colours", type: "choice", def: "lanex",
+    options: [["lanex", "LanEx (brighter is more)"], ["turbo", "OpenROAD (rainbow)"]],
+    hint: "LanEx's ramp reads in greyscale and with colour-blindness. OpenROAD's matches its own GUI." },
+
   // ---- Keyboard
   { id: "keys", key: "ll.keys", group: "Keyboard", label: "Single-key shortcuts", type: "bool", def: "1", on: "1", off: "0",
     hint: "Number keys for pages, r to run, t for the theme, ? for help. Ctrl shortcuts always work." },

@@ -94,9 +94,37 @@ export async function launchTool(tool, tag, { path } = {}) {
     }
     if (res && !res.ok && res.need === "display" && res.action) displayToast(res, label, retry);
     else if (!(res && res.ok)) toast.show((res && (res.error || res.need)) || ("Couldn't open " + label), "warn");
+    if (res && res.ok && res.launch) watchLaunch(res.launch, res.label || label);
   } catch (ex) {
     toast.show("Couldn't open " + label + ": " + (ex.message || ex), "error");
   }
+}
+
+// A viewer that dies at start (no display, a broken install, the image
+// refusing to run) used to leave "Opening…" and then nothing. Ask the server
+// how the launch went a moment later; if the process is gone, say so with
+// the last lines it printed and where its log is.
+export function launchVerdict(st) {
+  if (!st || st.state !== "exited") return null;
+  // A window closed by the user after a while is not a failure.
+  if (st.code === 0 && st.seconds > 6) return null;
+  const tail = (st.tail || []).filter((l) => !/^\s*$/.test(l)).slice(-3);
+  return (st.label || "The viewer") + " closed right after it started" + (st.code != null ? " (exit code " + st.code + ")" : "") + "." +
+    (tail.length ? " Last lines: " + tail.join(" · ").replace(/[.\s]+$/, "") + "." : " It printed nothing.") + " The full log is " + st.log + ".";
+}
+
+function watchLaunch(id, label) {
+  const check = async (left) => {
+    let st;
+    try { st = await api.viewerStatus(id); } catch (_e) { return; }
+    const msg = launchVerdict({ ...st, label: st.label || label });
+    if (msg) {
+      toast.show(msg, "warn", 0, { label: "Copy log path", run: () => navigator.clipboard?.writeText(st.log).catch(() => {}) });
+      return;
+    }
+    if (st.state === "running" && left.length) setTimeout(() => check(left.slice(1)), left[0]);
+  };
+  setTimeout(() => check([4000, 6000]), 2500);
 }
 
 // Open one run in one viewer from anywhere (e.g. Verify's "Open in KLayout").

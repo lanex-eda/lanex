@@ -1630,6 +1630,151 @@ check("layout: rulers and the scale bar speak in the natural unit", () => {
   assert.equal(LC.niceLength(180), 100);
 });
 
+// ---------- Layout pro analysis (heatmap.js, layoutkey.js, layoutoverlays.js) ------
+const HM = await import(toUrl(resolve(MOD, "heatmap.js")));
+const LK = await import(toUrl(resolve(MOD, "layoutkey.js")));
+const LO = await import(toUrl(resolve(MOD, "layoutoverlays.js")));
+
+check("heatmap: the LanEx ramp brightens with the value; the light canvas runs it the other way", () => {
+  const lum = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const steps = [0, 0.25, 0.5, 0.75, 1].map((t) => lum(HM.rampColor("lanex", t)));
+  for (let i = 1; i < steps.length; i++) assert.ok(steps[i] > steps[i - 1], "lightness must rise: " + steps.join(","));
+  assert.ok(lum(HM.rampColor("lanex", 1, true)) < lum(HM.rampColor("lanex", 0, true)), "on white, more is darker");
+  // It never ends in the DRC markers' red.
+  const [r, g] = HM.rampColor("lanex", 1);
+  assert.ok(g > 200 && r > 200, "the top of the ramp is pale yellow, not red");
+  assert.deepEqual(HM.rampColor("turbo", 0).length, 3);
+  assert.ok(HM.rampGradient("lanex").startsWith("linear-gradient(90deg,rgb("));
+});
+
+check("heatmap: the tile under a point, a histogram and the scale's top", () => {
+  const map = { xs: [0, 6.9, 13.8], ys: [0, 6.9, 10], nx: 2, ny: 2, v: [32, 95.65, 101, null], unit: "%", max: 101 };
+  assert.deepEqual(HM.heatValueAt(map, 7, 1), { v: 95.65, box: [6.9, 0, 13.8, 6.9] });
+  assert.equal(HM.heatValueAt(map, 8, 8), null, "no tile there");
+  assert.equal(HM.heatValueAt(map, 20, 1), null, "outside the map");
+  assert.deepEqual(HM.histogram([0, 49, 50, 99, 100, 150, null], 2, 0, 100), [2, 4]);
+  assert.equal(HM.scaleTop(map), 100);
+  assert.equal(HM.scaleTop({ unit: "μW", max: 7 }), 7);
+});
+
+check("layout key: rows by meaning, top of the stack first, words for the stage", () => {
+  const L = (id, name, purpose, group, z, extra = {}) => ({ id, name, purpose, group, z, label: name + "." + purpose, src: id + "/20", fill: "#123456", frame: "#123456", ...extra });
+  const layers = [L(1, "met1", "drawing", "metal", 12), L(2, "met2", "drawing", "metal", 14), L(3, "via", "drawing", "metal", 13),
+    L(4, "met5", "drawing", "metal", 20), L(5, "prBoundary", "boundary", "misc", 0), L(6, "met1", "pin", "pin", 12.5), L(7, "li1", "drawing", "local", 8)];
+  const vis = new Set([1, 2, 3, 4, 5, 7]);
+  const rows = LK.keyRows({ layers, vis, stage: "routing", kind: "def", pdn: { rail: "met1", vertical: "met4", horizontal: "met5" } });
+  assert.deepEqual(rows.map((r) => r.key), ["m5", "m2", "m1", "via", "local", "outline"]);
+  assert.match(rows.find((r) => r.key === "m1").words, /Short hops/);
+  assert.match(rows.find((r) => r.key === "m5").words, /power straps/);
+  assert.equal(rows.find((r) => r.key === "outline").words, "The die, and each standard cell's box");
+  // A hidden layer has no row; the pin twin is not a row of its own unless shown.
+  assert.ok(!rows.some((r) => r.key === "pin"));
+  // Before routing, metal 1 is the cells' pins and the rails.
+  const pre = LK.keyRows({ layers, vis, stage: "placement", kind: "def" });
+  assert.match(pre.find((r) => r.key === "m1").words, /Cell pins and the power rails/);
+  // The power grid stage (and the Power preset) name the straps and rails.
+  const pdn = LK.keyRows({ layers, vis, stage: "", kind: "def", pdn: { rail: "met1", vertical: "met4", horizontal: "met5" }, preset: "power" });
+  assert.equal(pdn.find((r) => r.key === "m1").words, "The power rails along each row");
+  assert.equal(pdn.find((r) => r.key === "m5").words, "Power straps, across");
+  assert.match(LK.keyRowsHtml(rows), /data-key-row='m5'/);
+});
+
+check("layout key: buckets across sky130, gf180 and IHP names", () => {
+  const b = (name, group, purpose = "drawing") => LK.bucketOf({ name, group, purpose });
+  assert.equal(b("met3", "metal"), "m3");
+  assert.equal(b("Metal4", "metal"), "m4");
+  assert.equal(b("TopMetal1", "metal"), "top");
+  assert.equal(b("via2", "metal"), "via");
+  assert.equal(b("mcon", "local"), "via");
+  assert.equal(b("li1", "local"), "local");
+  assert.equal(b("prBoundary", "misc", "boundary"), "outline");
+  assert.equal(b("met1", "pin", "pin"), "pin");
+});
+
+check("layout path contract: names, points and pins become one clean path", () => {
+  // As lane 4 sends it: names only, DEF escapes, pins in order.
+  const h = LO.normaliseHighlight({ kind: "path", label: "Worst setup", insts: ["input34", "_278_"], nets: ["dsa\\[0\\].x"],
+    pins: ["x", "input34/A", "input34/X", "_278_/D"], slack: "5.836", corner: "nom_tt_025C_1v80" });
+  assert.equal(h.kind, "path");
+  assert.deepEqual(h.nets, ["dsa[0].x"]);
+  assert.deepEqual(h.insts, ["input34", "_278_"]);
+  assert.equal(h.points.length, 4);
+  assert.equal(h.points[0].inst, "", "a top-level port has no instance");
+  assert.equal(h.startpoint, "x");
+  assert.equal(h.endpoint, "_278_/D");
+  assert.equal(h.slack, 5.836);
+  assert.equal(h.delay_type, "max");
+  // With points (straight from report_checks -format json).
+  const p = LO.normaliseHighlight({ points: [["input34/X", 9.63, 41.2, 2.25], ["_278_/D", 50, 77, 3.5]], delay_type: "min" });
+  assert.deepEqual(p.insts, ["input34", "_278_"]);
+  assert.equal(p.points[1].arrival, 3.5);
+  assert.equal(p.delay_type, "min");
+  assert.equal(LO.normaliseHighlight({ kind: "bogus" }).kind, "path");
+});
+
+check("layout path: places from the cells or the pin labels, increments per stage", () => {
+  const pts = [{ pin: "x", inst: "", x: null, y: null, arrival: 2.0 }, { pin: "u1/A", inst: "u1", x: null, y: null, arrival: 2.25 },
+    { pin: "u1/X", inst: "u1", x: 5, y: 6, arrival: 2.5 }];
+  const placed = LO.placePoints(pts, { u1: { cell: "lib__buf_1", box: [0, 0, 2, 4] } }, [{ text: "x", x: -1, y: 3 }]);
+  assert.deepEqual([placed[0].x, placed[0].y], [-1, 3]);
+  assert.deepEqual([placed[1].x, placed[1].y], [1, 2]);
+  assert.deepEqual([placed[2].x, placed[2].y], [5, 6], "the export's own position wins");
+  assert.equal(placed[0].incr, null);
+  assert.equal(Math.round(placed[1].incr * 1000), 250);
+  assert.equal(placed[1].cell, "lib__buf_1");
+});
+
+check("layout markers: next and previous wrap, and by category", () => {
+  const it = (cat, n) => ({ cat, n });
+  const items = [it("a", 1), it("a", 2), it("b", 3), it("b", 4), it("c", 5)];
+  const m = { sources: [{ label: "DRC", categories: [{ name: "a" }, { name: "b" }, { name: "c" }], items }] };
+  const list = LO.flattenMarkers(m);
+  assert.equal(list.length, 5);
+  assert.deepEqual(LO.stepMarker(list, null, 1), { i: 0, wrapped: false });
+  assert.deepEqual(LO.stepMarker(list, items[4], 1), { i: 0, wrapped: true });
+  assert.deepEqual(LO.stepMarker(list, items[0], -1), { i: 4, wrapped: true });
+  assert.equal(LO.stepMarker(list, items[0], 1, { byCat: true }).i, 2, "next category starts at its first");
+  assert.equal(LO.stepMarker(list, items[3], -1, { byCat: true }).i, 0, "previous category starts at its first");
+  // A hidden or unreadable report is not stepped through.
+  assert.equal(LO.flattenMarkers({ sources: [{ hidden: true, categories: [{ name: "a" }], items }] }).length, 0);
+  assert.equal(LO.flattenMarkers({ sources: [{ ok: false, categories: [{ name: "a" }], items }] }).length, 0);
+});
+
+check("layout overlays: nets, a path and the clock tree draw on any 2D context", () => {
+  const calls = [];
+  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => { calls.push(k); return { addColorStop() {} }; }), set: (t, k, v) => { t[k] = v; return true; } });
+  const v = { W: 400, H: 300, box: [0, 0, 100, 75], w2s: (x, y) => [x * 4, 300 - y * 4] };
+  LO.drawNets(ctx, v, [{ name: "n", color: "#38d6c8", g: { found: true, boxes: [["68/20", 10, 10, 20, 11]], pins: [{ x: 10, y: 10 }, { x: 20, y: 11 }] } },
+    { name: "pre", color: "#E69F00", g: { found: true, boxes: [], pins: [{ x: 1, y: 1 }, { x: 5, y: 5 }, { x: 9, y: 2 }] } }]);
+  assert.ok(calls.includes("fillRect") && calls.includes("lineTo"), "wires as rectangles, flight lines before routing");
+  calls.length = 0;
+  LO.drawPath(ctx, v, { cells: { u1: { box: [10, 10, 12, 14] } }, netGeom: {}, placed: [{ x: 5, y: 5, i: 0 }, { x: 11, y: 12, i: 1 }, { x: 30, y: 40, i: 2 }] });
+  assert.ok(calls.includes("strokeRect") && calls.includes("arc"), "cells outlined, start and stage dots");
+  calls.length = 0;
+  LO.drawClock(ctx, v, { summary: { arrival_min: 0.3, arrival_max: 0.4 }, nets: [{ name: "c", driver: { box: [1, 1, 3, 3] },
+    sinks: [{ box: [20, 20, 22, 22], ff: true, arrival: 0.35 }] }] });
+  assert.ok(calls.includes("moveTo") && calls.includes("arc"), "a star from the driver, a dot per flip-flop");
+});
+
+await checkAsync("layout: a viewer that dies at start is reported with its last lines and log", async () => {
+  const src = readFileSync(resolve(MOD, "layouttools.js"), "utf8");
+  assert.ok(src.includes("watchLaunch(res.launch"), "every launch is watched");
+  const LT = await import(toUrl(resolve(MOD, "layouttools.js")));
+  const msg = LT.launchVerdict({ state: "exited", code: 1, seconds: 1.2, label: "KLayout", tail: ["", "cannot connect to X server :0"], log: "/h/.lanex/logs/viewers/klayout-1.log" });
+  assert.match(msg, /^KLayout closed right after it started \(exit code 1\)\. Last lines: cannot connect to X server :0\. The full log is \/h\/\.lanex/);
+  assert.equal(LT.launchVerdict({ state: "running" }), null);
+  assert.equal(LT.launchVerdict({ state: "exited", code: 0, seconds: 120 }), null, "closed by the user after a while is not a failure");
+});
+
+check("layout: the highlight contract is wired from nav.js to layout.js", () => {
+  const nav = readFileSync(resolve(MOD, "nav.js"), "utf8");
+  assert.ok(/p\.highlight[\s\S]{0,200}revealHighlight\(p\.highlight, p\.run\)/.test(nav), "nav.js hands highlight + run to layout.js");
+  assert.equal(typeof LX.revealHighlight, "function");
+  const html = readFileSync(resolve(HERE, "..", "server", "static", "index.html"), "utf8");
+  assert.ok(html.includes('title="Pin names (L)"'), "the Labels button promises pin names only");
+  for (const id of ["lx-key", "lx-ovl", "lx-ovl-menu", "lx-stepper", "lx-focus", "lx-netchips"]) assert.ok(html.includes('id="' + id + '"'), id + " missing");
+});
+
 // ---------- Layout 3D (layout3d.js): pure helpers ---------------------------------
 const L3 = await import(toUrl(resolve(MOD, "layout3d.js")));
 

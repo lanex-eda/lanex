@@ -197,6 +197,26 @@ export const api = {
     _fetch("/api/layout/instances?sid=" + encodeURIComponent(sid) + "&cell=" + encodeURIComponent(cell)),
   layoutMarkers: (tag) => _fetch("/api/layout/markers?tag=" + encodeURIComponent(tag)),
   layoutCommands: (tag) => _fetch("/api/layout/commands?tag=" + encodeURIComponent(tag)),
+  // Layout pro analysis (lane 3): nets, a path's cells, the OpenROAD export.
+  layoutNets: (sid, q, limit = 60) =>
+    _fetch("/api/layout/nets?sid=" + encodeURIComponent(sid) + "&q=" + encodeURIComponent(q || "") + "&limit=" + limit, { timeout: 120000 }),
+  layoutNet: (sid, name) =>
+    _fetch("/api/layout/net?sid=" + encodeURIComponent(sid) + "&name=" + encodeURIComponent(name), { timeout: 120000 }),
+  layoutLocate: (sid, insts, nets) => _fetch("/api/layout/locate", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, insts, nets }), timeout: 120000,
+  }),
+  layoutAnalysis: (tag, source, data = true) =>
+    _fetch("/api/layout/analysis?tag=" + encodeURIComponent(tag) + "&source=" + encodeURIComponent(source || "final") + (data ? "" : "&data=0")),
+  layoutAnalysisStart: (tag, source, force = false) => _fetch("/api/layout/analysis/start", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag, source, force }),
+  }),
+  layoutAnalysisCancel: (tag, source) => _fetch("/api/layout/analysis/cancel", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag, source }),
+  }),
+  layoutMeshCancel: (sid) => _fetch("/api/layout/mesh/cancel", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid }),
+  }),
+  viewerStatus: (id) => _fetch("/api/layout/viewer-status?id=" + encodeURIComponent(id)),
   runFileUrl: (tag, path) =>
     "/api/run-file?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path),
   deleteRun: (tag, force) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag, force: !!force }) }),

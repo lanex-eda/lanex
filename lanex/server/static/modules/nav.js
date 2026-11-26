@@ -52,6 +52,13 @@ const FOCUS = {
     await m.revealInFlow(p);
   },
   layout: async (p) => {
+    // A highlight from another page (Verify's "Show on layout": a timing
+    // path's cells and nets; see layout.js revealHighlight for the contract).
+    if (p.highlight) {
+      const m = await import("./layout.js");
+      await m.revealHighlight(p.highlight, p.run);
+      return;
+    }
     if (!p.source && !p.box) return;
     const m = await import("./layout.js");
     if (p.box) await m.revealBox(p.box);
@@ -171,7 +178,7 @@ function show(entry, { fresh }) {
   // row): that is held in view like a section while the page fills in.
   if (fresh && (p.section || p.setting)) {
     done.then((id) => revealSection(entry.tab, p.section || id));
-  } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage || p.box || p.filter || p.item))) {
+  } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage || p.box || p.filter || p.item || p.highlight))) {
     restoreScroll(!fresh && _entryScroll[entry.id] != null ? _entryScroll[entry.id] : (_scroll[entry.tab] || 0));
   }
 }
