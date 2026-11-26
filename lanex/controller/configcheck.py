@@ -719,9 +719,19 @@ def check(*, design_dir: str, config_files: Sequence[str], pdk: Optional[str], s
             res["checked"] = True
             errs = [" ".join(str(e).split()) for e in (probe.get("errors") or []) if str(e).strip()]
             shown = "; ".join(errs[:4]) + (f" (and {len(errs) - 4} more)" if len(errs) > 4 else "")
+            # The knowledge base's plain words for the first one (a wrong
+            # type, a missing PDK, a missing file), after LibreLane's own.
+            plain = ""
+            try:
+                from . import problems
+                card = problems.explain_error(errs[0], {}) if errs else {}
+                if card.get("title") and card.get("kb") in ("config-value", "config-required", "pdk-missing", "path-missing"):
+                    plain = " " + str(card.get("plain") or "").replace(", so LibreLane stopped before the first step", "")
+            except Exception:
+                plain = ""
             res["problems"].append({
                 "code": "config",
-                "message": f"LibreLane can't load {cfg_name}: {shown or 'it gave no reason'}",
+                "message": f"LibreLane can't load {cfg_name}: {shown or 'it gave no reason'}.{plain}".replace("..", "."),
                 "fix": (f"Correct {'that setting' if len(errs) == 1 else 'these settings'} in {cfg_name}"
                         + (" or in the one-off settings next to Run" if overrides else "") + ", then run again."),
                 "hard": True, "errors": errs})

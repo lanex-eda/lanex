@@ -193,6 +193,8 @@ def test_broken_config_blocks_with_librelanes_words(tmp_path: Path, monkeypatch)
     assert r["problems"][0]["code"] == "config"
     assert "LibreLane can't load config.json" in r["problems"][0]["message"]
     assert "FP_CORE_UTIL" in r["problems"][0]["message"] and "one-off settings" in r["problems"][0]["fix"]
+    # LibreLane's words, then the failure card's plain ones.
+    assert r["problems"][0]["message"].endswith("FP_CORE_UTIL is a number, and the config gives it 'abc'.")
     # The run's own -c values reach the loader.
     assert "FP_CORE_UTIL=abc" in probe.calls[0]["overrides"]
 
