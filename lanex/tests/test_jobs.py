@@ -966,6 +966,29 @@ def test_continue_refuses_a_folder_of_another_job(rf_env, tmp_path):
     assert s.resume_info(j2)["can_continue"] is True
 
 
+def test_a_step_by_step_run_continues_from_its_next_step(rf_env, tmp_path):
+    # Each step of a step-by-step run is its own LibreLane call, which ends
+    # flow.log with "Flow complete.": that is not the whole flow done.
+    s = rf_env["s"]
+    d = _proj(tmp_path)
+    rd = _cut_run(d, "steps", [("1-verilator-lint", True)], job_id="j-cut")
+    (rd / "flow.log").write_text("Starting...\nFlow complete.\n")
+    t = time.time() - 300
+    os.utime(rd / "flow.log", (t, t))
+    j = _interrupted(s, d, "steps", rd, {"mode": "semi"})
+    info = s.resume_info(j)
+    assert info["can_continue"] and info["from_step"] == _RF_STEPS[1]
+    assert info["state"].endswith("1-verilator-lint/state_out.json")
+    out = s.recover(j["id"], "continue")
+    sp = s.job(out["job"]["id"])["spec"]
+    assert sp["mode"] == "semi" and sp["frm"] == _RF_STEPS[1]
+    # Its last step done: complete.
+    rd2 = _cut_run(d, "steps2", [(f"{i + 1}-{jobs.slug(x)}", True) for i, x in enumerate(_RF_STEPS)], job_id="j-all")
+    (rd2 / "flow.log").write_text("Flow complete.\n")
+    j2 = _interrupted(s, d, "steps2", rd2, {"mode": "semi"}, jid="j-all")
+    assert s.resume_info(j2).get("complete")
+
+
 def test_continue_waits_while_the_run_may_still_be_going(rf_env, tmp_path, monkeypatch):
     s = rf_env["s"]
     d = _proj(tmp_path)
@@ -1035,6 +1058,7 @@ def test_a_step_run_waiting_survives_a_restart_as_interrupted(rf_env, tmp_path, 
     s2.tick()
     j = s2.job(jid)
     assert j["state"] == "interrupted"            # never started over from the first step
+    assert not j.get("resume_pending")
     assert len(rf_env["launched"]) == n
 
 

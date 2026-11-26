@@ -1706,6 +1706,7 @@ class Scheduler:
     def _mark_interrupted(self, j: Dict[str, Any]) -> None:
         info = self.resume_info(j)
         with self._lock:
+            j.pop("resume_pending", None)
             j["state"] = "interrupted"
             j["ended_at"] = j.get("ended_at") or now_iso()
             j["resume"] = info
@@ -1727,7 +1728,11 @@ class Scheduler:
             return out
         prog = run_progress(rd)
         out["done_steps"] = [d[2] for d in prog["done"]]
-        if prog["complete"]:
+        spec = j.get("spec") or {}
+        # Step by step, each step is its own LibreLane invocation, which ends
+        # its log with "Flow complete.": the steps say how far it got.
+        stepwise = spec.get("mode") == "semi"
+        if prog["complete"] and not stepwise:
             out["reason"] = "It had finished: its log ends with Flow complete."
             out["complete"] = True
             return out
@@ -1735,7 +1740,6 @@ class Scheduler:
         # The folder must be this job's own (a queue file can name any folder).
         owners = {meta.get("job_id")} | {a.get("job_id") for a in (meta.get("attempts") or [])
                                          if isinstance(a, dict)}
-        spec = j.get("spec") or {}
         if j.get("id") not in owners and not (spec.get("_continue_of") and spec["_continue_of"] in owners):
             out["reason"] = ("Its run folder isn't this run's own (another run, or one LanEx didn't start, "
                              "wrote it), so LanEx won't continue in it.")
@@ -1762,6 +1766,10 @@ class Scheduler:
             state = prog["state_out"]
         out["from_step"] = nxt
         out["state"] = state
+        if stepwise and last is not None and nxt is None and steps:
+            out["reason"] = "It had finished its last step."
+            out["complete"] = True
+            return out
         if spec.get("to") and nxt and steps and spec["to"] in steps and nxt in steps \
                 and steps.index(nxt) > steps.index(spec["to"]):
             out["reason"] = "It had reached the stage it was asked to stop at."
