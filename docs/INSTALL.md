@@ -133,6 +133,9 @@ that needs a restart. LanEx-specific selection flags are:
   or conflicting variants fail before WSL is changed.
 - `/ALLOWWSLUPDATE=1` explicitly permits a required machine-wide WSL runtime
   update. Without it, silent setup stops with recovery guidance.
+- `/WSLMEMORY=<GB>` writes `memory=<GB>GB` into the `[wsl2]` section of the
+  user's `.wslconfig` (backup first; applies the next time WSL starts). Left out,
+  Setup writes nothing and WSL gives Linux half of the PC's memory.
 - `/DESKTOPSHORTCUT=0` leaves out the desktop shortcut (a silent install makes
   one by default, like the ticked box on the wizard's last page).
 
@@ -735,6 +738,46 @@ On macOS, `podman machine rm` deletes podman's Linux VM before
 removed from **Applications** or via its own **Troubleshoot → Uninstall**.
 
 ### Troubleshooting
+
+**Start with `lanex doctor`.** It checks LanEx, your LanEx folder, the computer,
+memory, disk space (on Windows, the drive that holds LanEx's Linux disk), the
+container engine, the tool image, the PDKs, the extra tools, the server, the
+network and updates, and prints a `Next:` step under every problem:
+
+```
+lanex doctor              # the report; exit code 0 = no problems, 1 = a problem, 2 = doctor crashed
+lanex doctor --offline    # skip the network check
+lanex doctor --json       # the same report as JSON (same exit codes)
+lanex doctor --share      # user name and proxy address left out, for a bug report
+lanex doctor --strict     # warnings count as problems (exit 1)
+```
+
+On Windows, run it from **Open LanEx shell** in the tray menu, or use the tray's
+**Copy diagnostics** (works even when LanEx will not start). The Tools page's
+**Copy diagnostics** button gives the same report from inside the app. Every run
+also saves the share form to `~/.lanex/logs/doctor-<date>.txt`.
+
+**Company or university network (Windows).** Setup asks Windows for its proxy
+(set by hand, by an automatic setup script, or found automatically) and for the
+root certificate your network's HTTPS inspection uses, and gives both to LanEx's
+own Linux: apt, Docker and pip use them, and nothing else on the PC changes.
+LanEx.exe checks again at every start; Tools > Network > **Check again** does it
+on demand. LanEx never stores a password: a proxy that asks for a sign-in
+(NTLM, Kerberos or a user name and password) cannot be used by these Linux
+tools. Ask IT to let `snapshot.ubuntu.com`, `pypi.org`, `files.pythonhosted.org`,
+`ghcr.io` and `github.com` through without a sign-in, or run a sign-in helper
+such as px on Windows and use it as the proxy.
+
+**Memory for Linux (Windows).** WSL gives Linux half of the PC's memory. The
+Configure page and Tools > Memory for Linux can set `memory=` in the `[wsl2]`
+section of your `%UserProfile%\.wslconfig` (one line changed, a backup saved
+next to it). It applies the next time WSL starts; LanEx never restarts WSL for
+you, because that would also stop your other Linux distributions.
+
+**No sudo (Linux).** `LANEX_NO_SUDO=1 bash install.sh` installs LanEx into your
+home folder only. Without a terminal to type a sudo password in, the installer
+does this by itself instead of waiting on a hidden prompt. An administrator then
+installs `docker.io` (or Podman); `lanex doctor` says what is still missing.
 
 <details>
 <summary><b><code>error: externally-managed-environment</code> when running <code>pip install</code></b></summary>

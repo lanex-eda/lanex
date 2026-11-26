@@ -697,7 +697,7 @@ def test_setup_outcomes_distinguish_ready_failure_cancel_and_restart(tmp_path: P
 
 def test_inno_m5_wizard_progress_cancel_and_silent_contract() -> None:
     body = INNO.read_text()
-    assert "Recommended" in body and "Docker, all supported tools" in body
+    assert "Recommended" in body and "Technology: SkyWater 130 nm (sky130A) starter libraries" in body
     assert "Minimal" in body and "LanEx application only" in body
     assert "gf180mcuD" in body and "ihp-sg13g2" in body
     assert "Advanced PDK libraries" in body and "sky130_fd_pr_reram" in body

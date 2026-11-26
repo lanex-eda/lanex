@@ -3732,6 +3732,72 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   });
 }
 
+// ---- Tools: LanEx and this computer (toolsys.js, audit plan 5a/5c/5e) ----
+{
+  const sys = await import(toUrl(resolve(MOD, "toolsys.js")));
+  check("toolsys: sizes are 1000-based like Docker and the disk", () => {
+    assert.equal(sys.fmtBytes(7_524_000_000), "7.5 GB");
+    assert.equal(sys.fmtBytes(512_000_000), "512 MB");
+    assert.equal(sys.fmtBytes(1.2e9, { approx: true }), "about 1.2 GB");
+    assert.equal(sys.fmtBytes(null), "");
+  });
+  check("toolsys: the storage bar names every part in words and numbers, and warns when the disk is low", () => {
+    const ok = sys.storageBarHtml({ drive: "C:", total: 476e9, free: 88.4e9,
+      parts: [{ key: "image", label: "Tool image", bytes: 7.5e9 }, { key: "pdks", label: "PDKs", bytes: 9.6e9 }, { key: "runs", label: "Runs", bytes: 0 }] });
+    assert.match(ok, /88\.4 GB<\/b> free on C:/);
+    assert.match(ok, /LanEx uses <b>17\.1 GB<\/b>/);
+    assert.match(ok, /Tool image <b>7\.5 GB<\/b>/);
+    assert.ok(!/is-runs/.test(ok), "an empty part is left out");
+    assert.match(ok, /role='img' aria-label='C:: 88\.4 GB free of 476 GB; LanEx uses 17\.1 GB'/);
+    assert.ok(!/is-low|is-critical/.test(ok));
+    const low = sys.storageBarHtml({ drive: "C:", total: 256e9, free: 9e9, parts: [] });
+    assert.match(low, /tl-store is-low/);
+    assert.match(low, /needs about 10 GB/);
+    const crit = sys.storageBarHtml({ drive: "C:", total: 256e9, free: 3e9, parts: [] });
+    assert.match(crit, /tl-store is-critical/);
+    assert.match(crit, /data-status='broken'/);
+  });
+  check("toolsys: a status tile is a tl-tile with a word for its state, never colour alone", () => {
+    const h = sys.sysTileHtml({ id: "tl-sys-x", eyebrow: "Network", status: "update", stateText: "Docker not using it",
+      big: "Company proxy", rows: [["Proxy", "<span>p:8080</span>"]], actions: "<button>Check again</button>" });
+    assert.match(h, /class='tl-tile tl-sys-tile is-update'/);
+    assert.match(h, /tl-state is-update'><i><\/i>Docker not using it/);
+    assert.match(h, /<dt>Proxy<\/dt><dd><span>p:8080<\/span><\/dd>/);
+  });
+  check("toolsys: clean-up rows say what goes and how much it frees; an image in use can't be removed", () => {
+    const h = sys.cleanupRowsHtml([
+      { kind: "image", name: "LibreLane 3.0.3 image", ref: "ghcr.io/librelane/librelane:3.0.3", bytes: 1.2e9, in_use: false },
+      { kind: "image", name: "Untagged LibreLane image (abc)", ref: "x", bytes: 2e9, in_use: true },
+      { kind: "pdk-version", name: "Old sky130 version 0fe599b", variants: ["sky130A", "sky130B"], bytes: null }]);
+    assert.match(h, /LibreLane 3\.0\.3 image/);
+    assert.match(h, /1\.2 GB<span class='muted'> of its own/);
+    assert.match(h, /data-clean='1' disabled/);
+    assert.match(h, /sky130A, sky130B/);
+    assert.match(h, /measuring…/);
+  });
+  check("toolsys: the doctor's disk, memory and network problems reach the verdict band", () => {
+    assert.deepEqual(sys.sysAttention(), []);
+    const src = readFileSync(resolve(MOD, "toolsys.js"), "utf8");
+    assert.match(src, /disk: "tl-sys-storage", memory: "tl-sys-memory", network: "tl-sys-network"/);
+    const tools = readFileSync(resolve(MOD, "tools.js"), "utf8");
+    assert.match(tools, /\}\)\.concat\(sysAttention\(\)\);/);
+    assert.match(tools, /!el\.closest\("#tools-system"\)/);
+  });
+  const ub = await import(toUrl(resolve(MOD, "updatebanner.js")));
+  check("update: a version skipped on Tools keeps the banner quiet; a newer one shows", () => {
+    const s = { newer: true, skipped: true, latest: { version: "1.1.0" } };
+    assert.equal(ub.shouldShow(s, ""), false);
+    assert.equal(ub.shouldShow({ ...s, skipped: false }, ""), true);
+    assert.equal(ub.shouldShow({ ...s, skipped: false }, "1.1.0"), false);
+  });
+  check("tools: one PDK variant can be removed on its own, the family as a whole stays one item", () => {
+    const tools = readFileSync(resolve(MOD, "tools.js"), "utf8");
+    assert.match(tools, /"Remove " \+ key \+ " only…", "pdk-remove-variant-btn"/);
+    assert.match(tools, /api\.removePdkVariant\(pdk\)/);
+    assert.ok(!/can only be removed together/.test(tools));
+  });
+}
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

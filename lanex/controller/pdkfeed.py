@@ -49,6 +49,21 @@ def pins_path() -> Path:
     return platform_env.home() / "pdk-assets.json"
 
 
+def downloads_manifest() -> Dict[str, Any]:
+    """``lanex/data/downloads.json``: every download the app makes, pinned."""
+    try:
+        p = Path(__file__).resolve().parent.parent / "data" / "downloads.json"
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def packaged_pins() -> Optional[Dict[str, Any]]:
+    doc = downloads_manifest().get("pdkAssets")
+    return doc if isinstance(doc, dict) and doc.get("families") else None
+
+
 def load_pins(family: str, version: str,
               pins: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """The pinned asset list for *family* at *version*, or ``None``."""
@@ -57,7 +72,11 @@ def load_pins(family: str, version: str,
         try:
             doc = json.loads(pins_path().read_text(encoding="utf-8"))
         except Exception:
-            return None
+            # Linux and macOS installs (no Windows Setup to copy the file):
+            # the same pins ship inside LanEx (lanex/data/downloads.json).
+            doc = packaged_pins()
+            if doc is None:
+                return None
     fam = (doc.get("families") or {}).get(family) if isinstance(doc, dict) else None
     if not isinstance(fam, dict) or fam.get("version") != version:
         return None
