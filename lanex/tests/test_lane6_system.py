@@ -373,7 +373,28 @@ def test_proxy_env_parse_and_load_never_overrides(tmp_path):
     env = {"HTTPS_PROXY": "http://mine:3128/"}
     added = netsettings.load_proxy_env(f, env)
     assert env["HTTPS_PROXY"] == "http://mine:3128/" and "HTTPS_PROXY" not in added
-    assert env["NO_PROXY"] == "localhost,127.0.0.1"
+    assert env["NO_PROXY"] == "localhost,127.0.0.1,::1"
+
+
+def test_wsl_autoproxy_bypass_list_never_sends_loopback_to_the_proxy(tmp_path):
+    # WSL's autoProxy: the Windows proxy with Windows' own bypass list, untranslated.
+    env = {"http_proxy": "http://172.28.255.94:3128", "no_proxy": "<local>", "NO_PROXY": "<local>;*.corp"}
+    netsettings.load_proxy_env(tmp_path / "missing.env", env)
+    assert env["no_proxy"] == "localhost,127.0.0.1,::1"
+    assert env["NO_PROXY"] == "*.corp,localhost,127.0.0.1,::1"
+    import urllib.request
+    import os as _os
+    saved = dict(_os.environ)
+    try:
+        _os.environ.clear()
+        _os.environ.update(env)
+        assert urllib.request.proxy_bypass("127.0.0.1")
+    finally:
+        _os.environ.clear()
+        _os.environ.update(saved)
+    plain = {}
+    netsettings.load_proxy_env(tmp_path / "missing.env", plain)
+    assert plain == {}                    # no proxy: nothing is added
 
 
 # ---------------------------------------------------------------- routes

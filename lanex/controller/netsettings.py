@@ -79,18 +79,42 @@ def load_proxy_env(path: Path = PROXY_ENV, environ: Optional[Dict[str, str]] = N
 
     A variable the person set themselves wins (it is already in the environment)."""
     env = os.environ if environ is None else environ
+    added: Dict[str, str] = {}
     try:
         values = parse_env_file(path.read_text(encoding="utf-8"))
     except Exception:
-        return {}
-    added = {}
+        values = {}
     for k, v in values.items():
         if k not in env:
             env[k] = v
             added[k] = v
             if environ is None:
                 _ours.add(k)
+    ensure_loopback_bypass(env)
     return added
+
+
+_LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+def ensure_loopback_bypass(env: Dict[str, str]) -> None:
+    """Never send LanEx's own loopback traffic (its server, the local PDK feed)
+    to a proxy.
+
+    WSL's autoProxy hands every process started through wsl.exe the Windows
+    proxy with Windows' bypass list as it is ("<local>", which no Linux tool
+    understands), so 127.0.0.1 went to the proxy: a company proxy then answers
+    for LanEx's own server (seen on the VM: the doctor's health check got the
+    proxy's error). Only when a proxy is set; "<local>" is dropped."""
+    if not any(env.get(k) for k in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")):
+        return
+    for key in ("NO_PROXY", "no_proxy"):
+        items = [x.strip() for x in str(env.get(key) or "").replace(";", ",").split(",")]
+        items = [x for x in items if x and x.lower() != "<local>"]
+        for lb in _LOOPBACK:
+            if lb not in items:
+                items.append(lb)
+        env[key] = ",".join(items)
 
 
 def _redact(url: str) -> str:
