@@ -1108,6 +1108,48 @@ check("Z2 numbers: one formatter for slack, skew, sizes, durations, dates and cl
   assert.doesNotMatch(src("layout.js"), /\.toLocaleString\(\)/, "a bare toLocaleString() groups by the PC's locale");
 });
 
+check("Z2 menus: every menu, card and drawer is on the overlay stack", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["layout.js", "ide/main.js", "ide/waves.js", "guide.js", "console.js", "term.js"]) {
+    assert.match(src(f), /from "\.\.?\/overlay\.js"/, f + " opens its layers on the stack");
+  }
+  // Layout's menus are the app's: overlay.js wireMenu and the .menu look with icons.
+  assert.doesNotMatch(src("layout.js"), /^function wireMenu/m);
+  assert.match(src("layout.js"), /class='menu-item'/);
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  for (const id of ["lx-open-menu", "lx-save-menu", "lx-cmd-menu", "lx-ovl-menu"]) assert.match(html, new RegExp("class=\"menu lx-menu[^\"]*\" id=\"" + id + "\""), id);
+  // No menu keeps its own outside-press or Esc handler beside the stack.
+  assert.doesNotMatch(src("ide/main.js"), /document\.addEventListener\("pointerdown", \(e\) => \{ if \(!menu\.hidden/);
+  assert.doesNotMatch(src("ide/waves.js"), /if \(!el\.menu\.hidden && !el\.menu\.contains/);
+  assert.doesNotMatch(src("guide.js"), /function startKey|removeEventListener\("keydown", onKey/);
+  // wireMenu fills a menu before it opens and hands the picked item over.
+  assert.match(src("overlay.js"), /export function wireMenu\(btn, menu, \{ onOpen = null, onPick = null \}/);
+  // A search box with text keeps its Esc (it clears first).
+  assert.match(src("overlay.js"), /input\[type=search\]"\) && tg\.value\) return/);
+});
+const MRw = await import(toUrl(resolve(MOD, "metricrows.js")));
+check("Z2 every metric: Analytics and Compare draw one row and one filter", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["analytics.js", "compare.js"]) assert.match(src(f), /from "\.\/metricrows\.js"/, f);
+  // The row: plain name, the key in mono with its corners, unit and direction.
+  const h = MRw.nameHtml({ key: "timing__setup__ws", count: MRw.countWords(["timing__setup__ws__corner:a", "timing__setup__ws__corner:b"]), unit: "ns", dir: 1 });
+  assert.match(h, /<span class='an-mlabel'>Worst setup slack<\/span>.*<small class='mr-u'[^>]*>ns ↑<\/small><code>timing__setup__ws<span class='an-mcount'> · 2 corners<\/span><\/code>/);
+  assert.match(MRw.nameHtml({ key: "timing__setup__ws__corner:max_ss_100C_1v60", kid: true }), /corner:max_ss_100C_1v60/);
+  // One reading of a problem.
+  assert.equal(MRw.statusOf("route__drc_errors", 3), "fail");
+  assert.equal(MRw.statusOf("design__max_slew_violation__count", 2), "warn");
+  assert.equal(MRw.statusOf("design__max_slew_violation__count", 2, () => true), "fail", "critical fails");
+  assert.equal(MRw.statusOf("timing__setup__ws", -0.1), "fail");
+  assert.equal(MRw.statusOf("design__die__area", 9000), "");
+  // The filter: four with counts; Changed and Worse need a run to compare with.
+  const f = MRw.filterHtml({ all: 94, problems: 1, changed: 39, worse: 14 }, "changed");
+  assert.match(f, /class='rn-seg mr-filter'/);
+  assert.match(f, /All <span class='rn-n'>94<\/span>.*Problems <span class='rn-n'>1<\/span>.*is-on' data-mf='changed' aria-pressed='true'.*Changed <span class='rn-n'>39/);
+  assert.match(MRw.filterHtml({ all: 3 }, "all", { noRef: true }), /data-mf='worse' aria-pressed='false' disabled/);
+  // The table precision, and a search on the plain name.
+  assert.equal(MRw.valueShown("design__die__area", 8769.48).text, "8,769");
+  assert.equal(MRw.matches("design__instance__area__stdcell", "std-cell"), true);
+});
 const EM = await import(toUrl(resolve(MOD, "empty.js")));
 check("Z2 empty states: one block and one word table on every page", () => {
   const np = EM.pageEmpty("noProject", { icon: "chart", body: { noProject: "Analytics shows it.", noRuns: "Run it." } });

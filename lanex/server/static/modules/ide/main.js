@@ -16,6 +16,7 @@ import { applyZoom, currentZoom, isAutoZoom } from "../zoom.js";
 import { getPref } from "../prefs.js";
 import { when as MFwhen } from "../metricfmt.js";
 import { emptyHtml, EMPTY_WORDS } from "../empty.js";
+import { openLayer, closeLayer, isLayerOpen } from "../overlay.js";
 import { refreshAction, conflictKind, lineDiff, isConfigFile } from "./filesync.js";
 import { addProjectFiles } from "../addfiles.js";
 import { initNav, noteRecent, declHover, refreshIndexStatus, quickOpen, pushHere } from "./nav.js";
@@ -813,8 +814,7 @@ function fileMenu(rel, anchor, ev) {
     menu.className = "ide-sim-menu ide-file-menu";
     menu.setAttribute("role", "menu");
     document.querySelector(".ide-side")?.appendChild(menu);
-    menu.addEventListener("keydown", (e) => { if (e.key === "Escape") { menu.hidden = true; } });
-    document.addEventListener("pointerdown", (e) => { if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true; });
+    // Esc, arrows, an outside press and focus return: the overlay stack's (overlay.js).
   }
   const mods = Object.entries(state.moduleFiles || {}).filter(([, abs]) => abs === f.abspath).map(([m]) => m);
   const hdl = /\.s?v$/i.test(rel);
@@ -835,7 +835,7 @@ function fileMenu(rel, anchor, ev) {
   items.push(["delete", "Delete", "Del"]);
   menu.innerHTML = "<div class='ism-h'>" + fmt.escape(rel) + "</div>" +
     items.map(([k, label, key]) => (k === "rename" ? "<div class='ism-sep'></div>" : "") +
-      "<button data-fm='" + fmt.escape(k) + "'" + (k === "delete" ? " class='is-danger'" : "") + (k === "-" ? " disabled" : "") + ">" + fmt.escape(label) +
+      "<button role='menuitem' data-fm='" + fmt.escape(k) + "'" + (k === "delete" ? " class='is-danger'" : "") + (k === "-" ? " disabled" : "") + ">" + fmt.escape(label) +
       (key ? "<span class='ism-key'>" + key + "</span>" : "") + "</button>").join("");
   menu.hidden = false;
   const side = menu.parentElement.getBoundingClientRect();
@@ -845,11 +845,13 @@ function fileMenu(rel, anchor, ev) {
   menu.style.left = "8px";
   menu.style.right = "8px";
   menu.style.top = Math.min(y + 2, menu.parentElement.clientHeight - menu.offsetHeight - 8) + "px";
-  menu.querySelector("button")?.focus();
+  if (isLayerOpen(menu)) closeLayer(menu, "replaced");
+  menu.hidden = false;
+  openLayer(menu, { kind: "menu", owner: anchor, onClose: () => { menu.hidden = true; } });
   menu.onclick = async (e) => {
     const b = e.target.closest("[data-fm]");
     if (!b || b.disabled) return;
-    menu.hidden = true;
+    closeLayer(menu);
     const k = b.dataset.fm;
     if (k.startsWith("top:")) await makeTop(k.slice(4));
     else if (k === "in" || k === "out") await setBuilt(f, k === "in");
@@ -1914,10 +1916,10 @@ function wireSimPick() {
   const pick = document.getElementById("ide-sim-pick");
   const menu = document.getElementById("ide-sim-menu");
   if (!pick || !menu) return;
-  const close = () => { menu.hidden = true; pick.setAttribute("aria-expanded", "false"); };
+  const close = () => { menu.hidden = true; };
   pick.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (!menu.hidden) { close(); return; }
+    if (isLayerOpen(menu)) { closeLayer(menu); return; }
     const sel = document.getElementById("ide-tb");
     const tbs = state.testbenches || [];
     const eng = document.getElementById("ide-sim-engine");
@@ -1925,24 +1927,22 @@ function wireSimPick() {
       (tbs.length ? tbs.map((t) => "<button role='menuitemradio' aria-checked='" + (sel && sel.value === t) + "' data-tb='" + fmt.escape(t) + "'>" + fmt.escape(t) + "</button>").join("")
         : "<p class='ism-none'>No testbench yet.</p>") +
       "<div class='ism-sep'></div>" +
-      "<button data-ism='new'>New testbench…</button>" +
-      "<button data-ism='settings'>Simulator: " + fmt.escape(eng ? eng.options[eng.selectedIndex].text.replace(/ \(.*\)$/, "") : "Auto") + "…</button>";
+      "<button role='menuitem' data-ism='new'>New testbench…</button>" +
+      "<button role='menuitem' data-ism='settings'>Simulator: " + fmt.escape(eng ? eng.options[eng.selectedIndex].text.replace(/ \(.*\)$/, "") : "Auto") + "…</button>";
     menu.hidden = false;
-    pick.setAttribute("aria-expanded", "true");
-    menu.querySelector("button")?.focus();
+    // On the overlay stack: Esc, arrows, an outside press, focus back on the button.
+    openLayer(menu, { kind: "menu", owner: pick, onClose: close });
   });
   menu.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b) return;
-    close();
+    closeLayer(menu);
     if (b.dataset.tb) {
       byId("ide-tb", (sel) => { sel.value = b.dataset.tb; byId("ide-top", (x) => { x.value = ""; }); deriveTopFromTb(); });
       paintSimPick();
     } else if (b.dataset.ism === "new") newFile("tb_v");
     else if (b.dataset.ism === "settings") { setPanel("sim"); document.getElementById("ide-sim-engine")?.focus(); }
   });
-  menu.addEventListener("keydown", (e) => { if (e.key === "Escape") { close(); pick.focus(); } });
-  document.addEventListener("pointerdown", (e) => { if (!menu.hidden && !menu.contains(e.target) && e.target !== pick && !pick.contains(e.target)) close(); });
 }
 
 // Toggle the Simulate / Stop buttons. While a sim runs Simulate is disabled so

@@ -244,8 +244,8 @@ body.theme-light #theme-btn .ico-moon { display: none; }
   flex: 0 0 auto; width: 14px; height: 14px; margin-top: 3px;
   border: 1.5px solid var(--ink-3); border-radius: 1px; display: grid; place-items: center;
 }
-.menu-radio.mode-btn-active .radio, .menu-radio.engine-btn-active .radio { border-color: var(--met1); }
-.menu-radio.mode-btn-active .radio::after, .menu-radio.engine-btn-active .radio::after {
+.menu-radio.mode-btn-active .radio, .menu-radio.engine-btn-active .radio, .menu-radio[aria-checked="true"] .radio { border-color: var(--met1); }
+.menu-radio.mode-btn-active .radio::after, .menu-radio.engine-btn-active .radio::after, .menu-radio[aria-checked="true"] .radio::after {
   content: ""; width: 6px; height: 6px; background: var(--met1);
 }
 .project-recents { display: flex; flex-direction: column; max-height: 280px; overflow-y: auto; }

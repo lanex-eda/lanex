@@ -19,6 +19,7 @@
 // later ones keep the definition without the dotted line.
 
 import { escapeHtml } from "./html.js";
+import { openLayer, closeLayer, isLayerOpen } from "./overlay.js";
 
 const esc = escapeHtml;
 
@@ -253,10 +254,24 @@ function show(target, id, { pinned = false } = {}) {
   el.hidden = false;
   target.setAttribute("aria-describedby", "term-pop");
   place(target);
+  // A pinned card is a popover on the overlay stack (Esc order, outside press,
+  // focus back on its term); a hover card is a tooltip and belongs to none.
+  if (pinned && !isLayerOpen(el)) {
+    openLayer(el, { kind: "popover", owner: target, focus: false, onClose: (reason) => {
+      const back = reason === "esc" ? P.target : null;
+      if (reason === "esc") P.quiet = P.target;
+      hideNow();
+      back?.focus?.({ preventScroll: true });
+    } });
+  } else if (!pinned && isLayerOpen(el)) closeLayer(el, "replaced");
   if (pinned) requestAnimationFrame(() => el.querySelector(".term-chip, .term-more")?.focus({ preventScroll: true }));
 }
 
 function hide() {
+  if (P.el && isLayerOpen(P.el)) { closeLayer(P.el, "api"); return; }   // its onClose hides it
+  hideNow();
+}
+function hideNow() {
   clearTimeout(P.timer);
   clearTimeout(P.hideTimer);
   if (!P.el || P.el.hidden) return;

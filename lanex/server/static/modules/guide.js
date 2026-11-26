@@ -12,6 +12,7 @@ import { api, fmt } from "./api.js";
 import { state, safeStorage } from "./state.js";
 import { toast } from "./toast.js";
 import { go } from "./nav.js";
+import { openLayer, closeLayer } from "./overlay.js";
 import { BEATS, GUIDE_TEMPLATE, advance, simOk, pillText, normState, counter, TOUR, chipFacts,
   onGuideProject, isGuideProject, freeName, guideFiles } from "./guide-steps.js";
 
@@ -567,9 +568,10 @@ async function finishCard() {
     "<button type='button' class='gd-close' aria-label='Close'>Close</button>" +
     "</div>";
   document.body.appendChild(ov);
-  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey, true); };
-  const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
-  document.addEventListener("keydown", onKey, true);
+  // A dialog on the overlay stack: focus kept inside, Esc closes it, focus goes back.
+  const card = ov.querySelector(".gd-card");
+  openLayer(card, { kind: "dialog", labelledBy: "gd-fin-t", focus: () => ov.querySelector("[data-g='own']"), onClose: () => ov.remove() });
+  const close = () => closeLayer(card);
   ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
   ov.querySelector(".gd-close").addEventListener("click", close);
   ov.querySelector("[data-g='verilog']").addEventListener("click", () => { close(); go("ide", { rel: files().source }); });
@@ -685,10 +687,11 @@ export async function startTour() {
 // ------------------------------------------------------------ Press Start
 let _start = null;
 function hideStart() {
-  if (_start) { _start.remove(); _start = null; document.removeEventListener("keydown", startKey, true); }
-}
-function startKey(e) {
-  if (e.key === "Escape" && _start) { e.stopPropagation(); safeStorage.set(SEEN, "1"); hideStart(); }
+  if (!_start) return;
+  const ov = _start;
+  _start = null;
+  closeLayer(ov.querySelector(".gd-card"));
+  ov.remove();
 }
 const reticle = () => "<span class='gd-tick tl' aria-hidden='true'></span><span class='gd-tick tr' aria-hidden='true'></span>" +
   "<span class='gd-tick bl' aria-hidden='true'></span><span class='gd-tick br' aria-hidden='true'></span>";
@@ -713,19 +716,12 @@ export function showStart() {
     "</div>";
   document.body.appendChild(ov);
   _start = ov;
-  document.addEventListener("keydown", startKey, true);
+  // A dialog on the overlay stack: Tab stays inside, Esc skips it (and remembers).
+  openLayer(ov.querySelector(".gd-card"), { kind: "dialog", labelledBy: "gd-start-t", focus: () => ov.querySelector("[data-g='first-chip']"),
+    onClose: (reason) => { if (reason === "esc") { safeStorage.set(SEEN, "1"); if (_start === ov) { _start = null; ov.remove(); } } } });
   ov.querySelector("[data-g='first-chip']").addEventListener("click", startFirstChip);
   ov.querySelector("[data-g='tour']").addEventListener("click", startTour);
   ov.querySelector("[data-g='skip']").addEventListener("click", () => { safeStorage.set(SEEN, "1"); hideStart(); });
-  // Keep Tab inside the card.
-  ov.addEventListener("keydown", (e) => {
-    if (e.key !== "Tab") return;
-    const f = [...ov.querySelectorAll("button")];
-    const i = f.indexOf(document.activeElement);
-    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
-    else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
-  });
-  ov.querySelector("[data-g='first-chip']").focus();
 }
 
 // Closed mid-guide: ask once, on the next launch, whether to carry on.

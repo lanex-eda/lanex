@@ -23,7 +23,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
-import { openLayer, closeLayer } from "./overlay.js";
+import { openLayer, closeLayer, wireMenu } from "./overlay.js";
 import { icon } from "./icons.js";
 import * as ctx from "./context.js";
 import { mountRunBar } from "./runbar.js";
@@ -1692,9 +1692,9 @@ function fillOvlMenu() {
   if (!menu) return;
   const item = (k) => {
     const meta = OVL[k], why = ovlReason(k);
-    return "<button role='menuitemradio' aria-checked='" + (S.ovl === k) + "' data-ovl-pick='" + k + "'" + (why ? " disabled" : "") + ">" +
-      "<span class='lx-ovl-mi'><i class='lx-ovl-dot" + (S.ovl === k ? " is-on" : "") + "'></i>" + esc(meta.label) + "</span>" +
-      "<span>" + esc(why || meta.unit) + "</span></button>";
+    // A radio item with the square via (the Run menu's mode picker), not a round dot.
+    return "<button class='menu-item menu-radio' role='menuitemradio' aria-checked='" + (S.ovl === k) + "' data-ovl-pick='" + k + "'" + (why ? " disabled" : "") + ">" +
+      "<span class='radio' aria-hidden='true'></span><span class='mi-text'><b>" + esc(meta.label) + "</b><small>" + esc(why || meta.unit) + "</small></span></button>";
   };
   const an = S.an && S.an.key === anKey() ? S.an : null;
   const foot = !an || an.state === "none" ? "Measured by OpenROAD the first time you pick one (about a second), then kept with the run."
@@ -1702,8 +1702,8 @@ function fillOvlMenu() {
     : an.state === "running" ? "Measuring with OpenROAD…" : an.state === "failed" ? "The last measurement failed; pick one to try again." : "";
   menu.innerHTML = "<div class='lx-menu-h'>Overlays <span>from OpenROAD</span></div>" +
     ["Routing", "Placement", "RUDY", "clock", "paths"].map(item).join("") +
-    (S.ovl ? "<button role='menuitem' data-ovl-pick=''><span class='lx-ovl-mi'>Hide the overlay</span><span>V shows it again</span></button>" : "") +
-    "<p class='lx-menu-foot'>" + esc(foot) + "</p>";
+    (S.ovl ? "<div class='menu-sep'></div>" + menuItemHtml({ ic: "eye", title: "Hide the overlay", sub: "V shows it again", attrs: "data-ovl-pick=''" }) : "") +
+    "<p class='menu-note'>" + esc(foot) + "</p>";
 }
 
 function paintOvlButton() {
@@ -2483,10 +2483,11 @@ function paintOpenMain() {
   const main = $("lx-open-main");
   if (main && S.info) main.title = "Open " + openWhat(t.key) + " in " + t.name;
   const menu = $("lx-open-menu");
+  const ICON = { klayout: "layers", openroad: "cpu", magic: "beaker", gds3d: "cube" };
   if (menu) menu.innerHTML = DESK.map((d) => {
     const r = (_routes || {})[d.key] || { where: "install" };
-    return "<button role='menuitem' data-open='" + d.key + "'>" + d.name + "<span>" + d.for +
-      (r.where === "install" ? " · not installed" : r.where === "nodisplay" ? " · no display" : " · opens " + esc(openWhat(d.key))) + "</span></button>";
+    return menuItemHtml({ ic: ICON[d.key] || "popout", title: d.name, attrs: "data-open='" + d.key + "'",
+      sub: d.for + (r.where === "install" ? " · not installed" : r.where === "nodisplay" ? " · no display" : " · opens " + openWhat(d.key)) });
   }).join("");
 }
 
@@ -2532,22 +2533,14 @@ async function openTool(tool) {
 }
 
 // ------------------------------------------------------------------ menus
-function wireMenu(btnId, menuId, onPick, onOpen) {
-  const btn = $(btnId), menu = $(menuId);
-  if (!btn || !menu) return;
-  // A menu on the overlay stack (overlay.js): Esc, arrows, an outside press
-  // and focus return are the same as every menu in the app.
-  const hide = () => { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); };
-  btn.setAttribute("aria-expanded", "false");
-  btn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    if (!menu.hidden) { closeLayer(menu); return; }
-    if (onOpen) await onOpen(menu);
-    menu.hidden = false;
-    openLayer(menu, { kind: "menu", owner: btn, onClose: hide });
-  });
-  menu.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { closeLayer(menu); onPick(b); } });
+// Layout's menus are the app's (overlay.js wireMenu, the .menu look of
+// Verify's Export): an icon, a bold line and a muted line per item.
+function lxMenu(btnId, menuId, onPick, onOpen) {
+  wireMenu($(btnId), $(menuId), { onPick, onOpen: onOpen ? (m) => onOpen(m) : null });
 }
+const menuItemHtml = ({ ic = "", title, sub = "", attrs = "", code = "" }) =>
+  "<button class='menu-item' role='menuitem' " + attrs + ">" + (ic ? icon(ic, { size: 16 }) : "") +
+  "<span class='mi-text'><b>" + esc(title) + "</b>" + (sub ? "<small>" + esc(sub) + "</small>" : "") + (code ? "<code class='lx-mi-code'>" + esc(code) + "</code>" : "") + "</span></button>";
 
 async function fillCommands(menu) {
   if (!S.commands && S.tag) {
@@ -2560,8 +2553,8 @@ async function fillCommands(menu) {
     ["klayout", "KLayout directly", "The final GDS with the PDK's technology and layer colours"],
   ].filter(([k]) => c[k]);
   menu.innerHTML = rows.length
-    ? rows.map(([k, t, s]) => "<button role='menuitem' data-copy='" + esc(c[k]) + "'>" + esc(t) + "<span>" + esc(s) + "</span><code>" + esc(c[k]) + "</code></button>").join("")
-    : "<p class='muted lx-pad'>No commands for this run.</p>";
+    ? rows.map(([k, t, s]) => menuItemHtml({ ic: "command", title: t, sub: s, code: c[k], attrs: "data-copy='" + esc(c[k]) + "'" })).join("")
+    : "<p class='menu-note'>No commands for this run.</p>";
 }
 
 async function copy(text) { return copyText(text, "Command copied"); }
@@ -2753,7 +2746,7 @@ function wireOnce() {
     if (b.dataset.step === "x") clearSelection();
     else stepMarkers(+b.dataset.step);
   });
-  wireMenu("lx-ovl", "lx-ovl-menu", (b) => { if (b.matches("[data-ovl-pick]") && !b.disabled) pickOverlay(b.dataset.ovlPick); }, () => fillOvlMenu());
+  lxMenu("lx-ovl", "lx-ovl-menu", (b) => { if (b.matches("[data-ovl-pick]") && !b.disabled) pickOverlay(b.dataset.ovlPick); }, () => fillOvlMenu());
   document.addEventListener("g:pref", (e) => {
     const id = e.detail && e.detail.id;
     if (id === "layoutRamp") { S.heat = null; paintKey(); S.canvas && S.canvas.paintOverlay(); }
@@ -2772,9 +2765,9 @@ function wireOnce() {
   // desktop viewers
   $("lx-desk").addEventListener("click", (e) => { const b = e.target.closest("[data-desk]"); if (b) openTool(b.dataset.desk); });
   $("lx-open-main").addEventListener("click", () => openTool(pref("tool", "klayout")));
-  wireMenu("lx-open-pick", "lx-open-menu", (b) => openTool(b.dataset.open), () => paintOpenMain());
-  wireMenu("lx-save", "lx-save-menu", (b) => saveImage(b.dataset.save));
-  wireMenu("lx-cmd", "lx-cmd-menu", (b) => { if (b.dataset.copy) copy(b.dataset.copy); }, fillCommands);
+  lxMenu("lx-open-pick", "lx-open-menu", (b) => openTool(b.dataset.open), () => paintOpenMain());
+  lxMenu("lx-save", "lx-save-menu", (b) => saveImage(b.dataset.save));
+  lxMenu("lx-cmd", "lx-cmd-menu", (b) => { if (b.dataset.copy) copy(b.dataset.copy); }, fillCommands);
   document.addEventListener("fullscreenchange", () => $("lx-ws").classList.toggle("is-full", document.fullscreenElement === $("lx-ws")));
 }
 

@@ -54,25 +54,16 @@
   color: var(--on-accent); border-color: var(--accent); background: var(--accent);
 }
 
-/* menus (open-in, save, command) */
-.lx-menu {
-  position: absolute; right: 0; top: calc(100% + 6px); z-index: var(--z-drawer);
-  min-width: 250px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
-  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg);
-  box-shadow: var(--sh-2);
-}
-.lx-menu-wide { width: min(620px, calc(80vw / var(--ll-zoom, 1))); }
-.lx-menu button {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
-  padding: 8px 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-strong);
-  font: 600 14px/1.3 var(--sans); cursor: pointer;
-}
-.lx-menu button span { font-weight: 400; font-size: 12.5px; color: var(--text-muted); }
-.lx-menu button code {
+/* menus (open-in, save, command, overlays): the app's .menu (shell.css), placed here */
+.lx-menu { right: 0; left: auto; }
+.lx-menu-wide { width: min(620px, calc(80vw / var(--ll-zoom, 1))); max-width: none; }
+.lx-menu .menu-item { align-items: flex-start; }
+.lx-menu .menu-item > svg { margin-top: 2px; }
+.lx-menu .mi-text { flex: 1; }
+.lx-mi-code {
   display: block; width: 100%; margin-top: 4px; padding: 6px 8px; border-radius: var(--r-sm);
   background: var(--bg); color: var(--syntax-str); font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-all;
 }
-.lx-menu button:hover, .lx-menu button:focus-visible { background: var(--hover); outline: none; }
 
 /* ---------- stage strip: a filmstrip of the flow ---------- */
 .lx-stages {
@@ -546,17 +537,11 @@ body.theme-light .lx-dfor { color: var(--accent); }
 .lx-ovl-menu { left: 0; right: auto; top: calc(100% + 8px); width: 330px; }
 .lx-menu-h {
   display: flex; align-items: baseline; justify-content: space-between; padding: 6px 10px 6px;
-  font: 600 11.5px/1 var(--cond); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted);
+  font: 500 11px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted);
 }
 .lx-menu-h span { font: 500 10.5px/1 var(--mono); letter-spacing: 0.06em; text-transform: none; color: var(--text-disabled); }
-.lx-menu button:disabled { cursor: default; color: var(--text-muted); }
-.lx-menu button:disabled:hover { background: transparent; }
-.lx-ovl-mi { display: inline-flex; align-items: center; gap: 9px; font-weight: 600; font-size: 14px; color: inherit; }
-.lx-menu button .lx-ovl-mi { font-size: 14px; color: inherit; }
-.lx-ovl-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-strong); }
-.lx-ovl-dot.is-on { background: var(--met1); box-shadow: 0 0 0 3px color-mix(in srgb, var(--met1) 25%, transparent); }
-.lx-menu button[aria-checked] > span:last-child { padding-left: 18px; }
-.lx-menu-foot { margin: 4px 0 0; padding: 8px 10px 4px; border-top: 1px solid var(--border); font-size: 12px; line-height: 1.45; color: var(--text-muted); }
+/* (disabled items: shell.css .menu-item:disabled) */
+.lx-menu .menu-note { margin: 4px 0 0; padding: 8px 10px 4px; border-top: 1px solid var(--border); font-size: 12px; line-height: 1.45; color: var(--text-muted); }
 
 /* the key: in the corner card under the badge */
 .lx-corner .lx-key, .lx-badge .lx-key-fold, .lx-badge .lx-badge-act { pointer-events: auto; }

@@ -21,6 +21,7 @@
 // search into each signal's changes, so a long dump stays smooth.
 import { formatValue, formatTime, indexAt, valueAt, vcdToCSV } from "./vcd.js";
 import { escapeHtml } from "../html.js";
+import { openLayer, closeLayer, isLayerOpen } from "../overlay.js";
 
 const RH = 24;                 // row height (CSS px), names and plot alike
 const VALS_W = 104;            // value column
@@ -465,10 +466,7 @@ export class WaveView {
     });
     // Keyboard, when the viewer has focus
     this.host.addEventListener("keydown", (e) => this._onKey(e));
-    // Menu dismissal
-    document.addEventListener("pointerdown", (e) => {
-      if (!el.menu.hidden && !el.menu.contains(e.target)) this._closeMenu();
-    });
+    // The menu is on the overlay stack (_openMenu): an outside press and Esc close it there.
     // Size and theme
     if ("ResizeObserver" in window) {
       let raf = 0;
@@ -858,10 +856,10 @@ export class WaveView {
       "<div class='wv-mg'>Colour</div><div class='wv-swatches'>" + COLORS.map((c, ci) =>
         "<button class='wv-swb" + ((r.color || COLORS[0]) === c ? " is-on" : "") + "' data-mcolor='" + c + "' aria-label='Colour " + (ci + 1) + "' style='background:var(" + c + ")'></button>").join("") + "</div>" +
       "<div class='wv-msep'></div>" +
-      (!many ? "<button data-mact='goto'>Go to declaration</button>" : "") +
-      "<button data-mact='marker'>Put the marker at the cursor</button>" +
-      "<button data-mact='remove'>Remove" + (many ? " " + this.sel.size + " signals" : "") + "</button>" +
-      "<button data-mact='clear'>Remove all signals</button>";
+      (!many ? "<button role='menuitem' data-mact='goto'>Go to declaration</button>" : "") +
+      "<button role='menuitem' data-mact='marker'>Put the marker at the cursor</button>" +
+      "<button role='menuitem' data-mact='remove'>Remove" + (many ? " " + this.sel.size + " signals" : "") + "</button>" +
+      "<button role='menuitem' data-mact='clear'>Remove all signals</button>";
     m.hidden = false;
     const hr = this.host.getBoundingClientRect(), z = this._zoomOf(this.host);
     let x = (e.clientX - hr.left) / z, y = (e.clientY - hr.top) / z;
@@ -882,9 +880,11 @@ export class WaveView {
       else if (b.dataset.mact === "clear") this._remove(this.rows.map((x2) => x2.path));
       this._closeMenu();
     };
-    m.querySelector("button")?.focus();
+    if (isLayerOpen(m)) closeLayer(m, "replaced");
+    m.hidden = false;
+    openLayer(m, { kind: "menu", owner: this.host, onClose: () => { m.hidden = true; } });
   }
-  _closeMenu() { this.el.menu.hidden = true; }
+  _closeMenu() { if (isLayerOpen(this.el.menu)) closeLayer(this.el.menu); else this.el.menu.hidden = true; }
 
   // ------------------------------------------------------------ geometry
 
@@ -1133,18 +1133,9 @@ export class WaveView {
   _onKey(e) {
     if (!this.vcd || e.target.closest("input, select, textarea")) return;
     const k = e.key;
-    // An open menu takes the keys: arrows walk its items, Esc closes it.
+    // An open menu takes the keys (overlay.js: arrows, Esc); Tab leaves it.
     if (!this.el.menu.hidden && this.el.menu.contains(e.target)) {
-      if (k === "ArrowDown" || k === "ArrowUp") {
-        const items = [...this.el.menu.querySelectorAll("button")];
-        const i = items.indexOf(document.activeElement);
-        items[(i + (k === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
-        e.preventDefault();
-      } else if (k === "Escape" || k === "Tab") {
-        this._closeMenu();
-        this.host.focus({ preventScroll: true });
-        e.preventDefault();
-      }
+      if (k === "Tab") { this._closeMenu(); this.host.focus({ preventScroll: true }); e.preventDefault(); }
       return;
     }
     let done = true;
