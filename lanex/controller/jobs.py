@@ -1683,7 +1683,7 @@ class Scheduler:
         from .events import BOOT_ID
         design_dirs = list(design_dirs or [])
         conts = None
-        found = {"reattached": 0, "interrupted": 0}
+        found = {"reattached": 0, "interrupted": 0, "finished": 0}
         for d in design_dirs:
             try:
                 if not Path(str(d)).is_dir():
@@ -1707,8 +1707,15 @@ class Scheduler:
                         and not j.get("resume_pending"):
                     self._reattach(j)
                     found["reattached"] += 1
+                    continue
+                info = self.resume_info(j)
+                if info.get("complete"):
+                    # It finished while LanEx was down: it ended, with its own
+                    # verdict, never "interrupted (it had finished)".
+                    self._mark_finished(j, info)
+                    found["finished"] += 1
                 else:
-                    self._mark_interrupted(j)
+                    self._mark_interrupted(j, info)
                     found["interrupted"] += 1
             with self._lock:
                 q["paused"] = True if any(j.get("state") == "interrupted" for j in q["jobs"]) else q["paused"]
@@ -1773,8 +1780,30 @@ class Scheduler:
             self._cv.notify_all()
         del f
 
-    def _mark_interrupted(self, j: Dict[str, Any]) -> None:
-        info = self.resume_info(j)
+    def _mark_finished(self, j: Dict[str, Any], info: Dict[str, Any]) -> None:
+        """A run whose folder says it finished (its log ends with Flow
+        complete, or its last asked-for step is done) while LanEx was closed:
+        it ends like a run that finished with LanEx up. The service loop's
+        _finalize reads how it went from the folder (the verdict, the stage
+        it failed at), records its peak and calls the end hooks (a sweep
+        point is written into its sweep)."""
+        with self._lock:
+            j.pop("resume_pending", None)
+            j.pop("resume", None)          # nothing to continue
+            j["state"] = "done"
+            j["ended_at"] = j.get("ended_at") or now_iso()
+            if not j.get("run_dir") and info.get("run_dir"):
+                j["run_dir"] = info["run_dir"]
+            j["outcome"] = {**(j.get("outcome") or {}), "result": "ok", "how": "finished while LanEx was closed"}
+            j["reason"] = "Finished while LanEx was closed"
+            j["remaining_s"] = 0
+            j["_finalize"] = True
+            self._save(j["design_dir"])
+            self._changed(j)
+            self._cv.notify_all()
+
+    def _mark_interrupted(self, j: Dict[str, Any], info: Optional[Dict[str, Any]] = None) -> None:
+        info = info if info is not None else self.resume_info(j)
         with self._lock:
             j.pop("resume_pending", None)
             j["state"] = "interrupted"
