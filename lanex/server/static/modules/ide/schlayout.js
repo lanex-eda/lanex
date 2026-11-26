@@ -115,6 +115,10 @@ export function layoutGraph(graph) {
     cols[layer].push(d);
     return d.id;
   };
+  // One dummy per net and column for forward edges: a bus that fans out to
+  // cells in many columns runs as one trunk (and one slot in each column),
+  // instead of a ribbon of parallel wires pushing the cells apart.
+  const shared = new Map();
   for (const e of edges) {
     const a = nodes.get(e.from[0]), b = nodes.get(e.to[0]);
     const chain = [a.id];
@@ -123,7 +127,11 @@ export function layoutGraph(graph) {
       // through every column from the source's to the target's
       for (let l = a.layer; l >= b.layer; l--) chain.push(mkDummy(l, e));
     } else {
-      for (let l = a.layer + 1; l < b.layer; l++) chain.push(mkDummy(l, e));
+      for (let l = a.layer + 1; l < b.layer; l++) {
+        const k = e.net + "\u0001" + l;
+        if (!shared.has(k)) shared.set(k, mkDummy(l, e));
+        chain.push(shared.get(k));
+      }
     }
     chain.push(b.id);
     chains.set(e.id, chain);
@@ -220,7 +228,11 @@ export function layoutGraph(graph) {
   const pull = (col, side) => {
     // wanted centre y per node
     const want = col.map((n) => {
-      const nb = side === "up" ? up.get(n.id) : side === "down" ? down.get(n.id) : up.get(n.id).concat(down.get(n.id));
+      let nb = side === "up" ? up.get(n.id) : side === "down" ? down.get(n.id) : up.get(n.id).concat(down.get(n.id));
+      // A module port feeds many cells; it must not drag them all to its
+      // row when they have other neighbours (a chain stays straight).
+      const inner = nb.filter(([m]) => { const k = nodes.get(m).kind; return k !== "in" && k !== "out"; });
+      if (inner.length) nb = inner;
       if (!nb.length) return null;
       const ys = nb.map(([m, mp, np]) => anchorY(m, mp) - (n.dummy ? 0 : (np !== null && np !== undefined && portPos.get(n.id)[np] !== undefined ? portPos.get(n.id)[np] : n.h / 2)));
       ys.sort((a, b) => a - b);

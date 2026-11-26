@@ -1719,7 +1719,7 @@ async function applyLint(diags, ev) {
       return;
     }
     state.lintFailed = null;
-    state.diags = diags;
+    state.diags = implicitIsError(diags);
     state.lintChecked = true;
     state.lintAt = Date.now();
     applyMarkers();
@@ -1731,6 +1731,15 @@ async function applyLint(diags, ev) {
     renderProblems();
     recordRtlStatus();
   } catch (_e) {}
+}
+
+// Verilator only warns about an implicitly declared wire, but Yosys stops
+// synthesis on it ("Identifier ... is implicitly declared"), so in a file
+// the run builds it is an error here, said in those words. (A testbench may
+// keep one: it only simulates.)
+export function implicitIsError(diags, inRun = (d) => inFlow(d)) {
+  return (diags || []).map((d) => d.code === "IMPLICIT" && d.severity === "warning" && inRun(d)
+    ? { ...d, severity: "error", msg: d.msg + " (synthesis stops on this: declare the wire)" } : d);
 }
 
 function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }

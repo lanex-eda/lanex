@@ -2941,6 +2941,12 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.match(sx, /api\.fileWrite\(x\.rel, x\.before, \{ base_hash: x\.hash \}\)/, "Undo never overwrites a newer file");
     assert.match(sx, /danger: true/, "Replace asks with Cancel focused");
   });
+  check("ide lint: an implicit wire in a built file is an error (Yosys stops synthesis on it)", () => {
+    const ide = readFileSync(resolve(MOD, "ide", "main.js"), "utf8");
+    assert.match(ide, /state\.diags = implicitIsError\(diags\)/);
+    assert.match(ide, /d\.code === "IMPLICIT" && d\.severity === "warning" && inRun\(d\)/);
+    assert.match(readFileSync(resolve(MOD, "ide", "lintinfo.js"), "utf8"), /IMPLICIT: "[^"]*Yosys stops synthesis/);
+  });
 }
 
 console.log(`\nfrontend_test: ${passed} checks passed` +
