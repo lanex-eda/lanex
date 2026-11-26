@@ -14,9 +14,10 @@ Design notes (why a ring buffer + a global sequence):
   (e.g. the main cockpit and the ``/ide`` pop-out, or two browser tabs) each keep
   their own cursor and all see every event — reading no longer consumes the
   queue, so clients can't starve each other.
-* **Bounded** (a ``deque`` with ``maxlen``) so a long run can't grow memory
-  without bound; very old events fall off the back once every client has long
-  since read past them.
+* **Bounded** by count and by size, so a long run (or many parallel runs of a
+  big design) can't grow memory without bound; very old events fall off the
+  back once every client has long since read past them, and a client that
+  resumes from before the oldest one gets a ``gap`` and resyncs.
 """
 from __future__ import annotations
 
@@ -78,12 +79,42 @@ def next_seq() -> int:
         return _seq
 
 
-class EventBus:
-    """A bounded, broadcast, non-destructive event ring."""
+def _approx_size(value: Any, depth: int = 0) -> int:
+    """A cheap estimate of an event's memory, in characters: strings count
+    their length, containers their items (two levels deep), the rest a few
+    bytes. Log batches carry lists of up to a few hundred lines, so this is
+    what keeps one big design's logs from filling the ring by size."""
+    if isinstance(value, str):
+        return len(value)
+    if depth >= 3:
+        return 16
+    if isinstance(value, dict):
+        return 16 + sum(len(str(k)) + _approx_size(v, depth + 1) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return 16 + sum(_approx_size(v, depth + 1) for v in value)
+    return 16
 
-    def __init__(self, maxlen: int = 20000) -> None:
-        self._buf: Deque[Dict[str, Any]] = deque(maxlen=maxlen)
+
+class EventBus:
+    """A bounded, broadcast, non-destructive event ring.
+
+    Bounded twice: by count (``maxlen`` events) and by size (``max_chars``,
+    an estimate of the text the events hold). The count alone let a big
+    design's log batches hold hundreds of MB in a 20,000-event ring."""
+
+    def __init__(self, maxlen: int = 20000, max_chars: int = 48_000_000) -> None:
+        self._maxlen = max(1, int(maxlen))
+        self._max_chars = max(1, int(max_chars))
+        self._buf: Deque[Dict[str, Any]] = deque()
+        self._sizes: Deque[int] = deque()
+        self._chars = 0
         self._cond = threading.Condition(threading.RLock())
+
+    def _trim(self) -> None:
+        # Called with the lock held. Always keep the newest event.
+        while len(self._buf) > 1 and (len(self._buf) > self._maxlen or self._chars > self._max_chars):
+            self._buf.popleft()
+            self._chars -= self._sizes.popleft()
 
     def emit(self, type_: str, payload: Optional[Dict[str, Any]] = None) -> None:
         """Append an event. If *payload* already carries an int ``seq`` (the
@@ -97,8 +128,12 @@ class EventBus:
         evt["type"] = type_
         evt["seq"] = seq
         evt.setdefault("ts", time.time())
+        size = _approx_size(evt)
         with self._cond:
             self._buf.append(evt)
+            self._sizes.append(size)
+            self._chars += size
+            self._trim()
             self._cond.notify_all()
 
     def events_since(self, cursor: int, *, block: bool = False, timeout: float = 0.4) -> List[Dict[str, Any]]:
