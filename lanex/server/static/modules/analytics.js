@@ -928,8 +928,76 @@ function renderHistory() {
       C.chartHost((w) => C.sparkline(vals, { sel, bad, w, h: 56, tips, runTags: tags }), "an-hist-plot") +
       "<div class='an-hist-range'>" + esc(range) + "</div></div>";
   }).join("");
-  el.innerHTML = "<p class='an-foot an-hist-legend'><i class='an-key dot sel'></i> this run <i class='an-key dot bad'></i> failed run <span class='sep'>·</span> oldest on the left, " + runs.length + " runs <span class='sep'>·</span> click a point to open that run</p>" +
-    "<div class='an-hists'>" + tiles + "</div>";
+  el.innerHTML = "<div class='an-histx' id='an-histx'></div>" +
+    "<div id='an-hist-tiles'><p class='an-foot an-hist-legend'><i class='an-key dot sel'></i> this run <i class='an-key dot bad'></i> failed run <span class='sep'>·</span> oldest on the left, " + runs.length + " runs <span class='sep'>·</span> click a point to open that run</p>" +
+    "<div class='an-hists'>" + tiles + "</div></div><div id='an-hist-by' hidden></div>";
+  historyByValue(el, t, runs);
+}
+
+// History by a setting instead of run order: a setting that differs across
+// these runs on the x axis makes the history the sweep chart (audit 4.8), the
+// same chart a study draws (studycharts.byValueOption): failed runs as
+// crosses on the axis, slack's 0 line, ns and MHz for the clock.
+const HIST_X = ["CLOCK_PERIOD", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT", "FP_ASPECT_RATIO", "MAX_FANOUT_CONSTRAINT",
+  "GRT_ADJUSTMENT", "PL_RESIZER_HOLD_SLACK_MARGIN", "DIODE_PADDING", "GPL_CELL_PADDING"];
+let _histX = "", _histM = "timing__setup__ws", _histChart = null;
+async function historyByValue(el, t, runs) {
+  const bar = el.querySelector("#an-histx");
+  const dir = String(_ctx.designDir || "").replace(/[\\/]+$/, "");
+  if (!bar || !dir) return;
+  let vals = {};
+  try { vals = (await api.runsValues(runs.map((r) => dir + "/runs/" + r.tag), HIST_X.map((k) => "s:" + k))).values || {}; } catch (_e) { return; }
+  if (!bar.isConnected) return;
+  const xOf = (r, k) => { const v = (vals[dir + "/runs/" + r.tag] || {})["s:" + k]; const n = Number(v); return v == null || v === "" || !Number.isFinite(n) ? null : n; };
+  const vars = HIST_X.filter((k) => new Set(runs.map((r) => xOf(r, k)).filter((x) => x != null)).size > 1);
+  if (!vars.length) { bar.hidden = true; return; }
+  if (_histX && !vars.includes(_histX)) _histX = "";
+  const seg = (items, cur, attr) => "<div class='seg' role='group'>" + items.map(([v, l]) =>
+    "<button class='seg-btn" + (v === cur ? " is-active" : "") + "' data-" + attr + "='" + esc(v) + "' aria-pressed='" + (v === cur) + "'>" + esc(l) + "</button>").join("") + "</div>";
+  const paint = () => {
+    bar.innerHTML = "<span class='an-histx-l'>X axis</span>" + seg([["", "Run order"], ...vars.map((k) => [k, k])], _histX, "hx") +
+      (_histX ? "<span class='an-histx-l'>Shows</span>" + seg(HISTORY.filter(([k]) => t.series && t.series[k]).map(([k, l]) => [k, l]), _histM, "hm") : "");
+    el.querySelector("#an-hist-tiles").hidden = !!_histX;
+    const by = el.querySelector("#an-hist-by");
+    by.hidden = !_histX;
+    if (_histChart) { try { _histChart.dispose(); } catch (_e) { /* gone */ } _histChart = null; }
+    if (_histX) drawHistoryBy(by, t, runs, xOf);
+  };
+  bar.onclick = (e) => {
+    const b = e.target.closest("[data-hx], [data-hm]");
+    if (!b) return;
+    if (b.dataset.hx != null) _histX = b.dataset.hx; else _histM = b.dataset.hm;
+    paint();
+  };
+  paint();
+}
+async function drawHistoryBy(by, t, runs, xOf) {
+  const label = (HISTORY.find(([k]) => k === _histM) || [_histM, _histM])[1];
+  const series = (t.series || {})[_histM] || [];
+  const unitK = F.unitOf(F.parseKey(_histM).base);
+  const scale = unitK === "W" ? F.scaleOf(_histM, series.map(num0)) : null;
+  const k = scale ? 1 / scale.div : unitK === "ratio" ? 100 : 1;
+  const unit = scale ? scale.unit : unitK === "ratio" ? "%" : F.show(_histM, 1).unit;
+  by.innerHTML = "<p class='an-foot'>" + esc(label) + " of these " + runs.length + " runs by <code>" + esc(_histX) + "</code>, from each run's own settings (resolved.json). A cross on the axis is a run that failed.</p>" +
+    "<div class='an-histby-chart' role='img' aria-label='" + esc(label + " by " + _histX) + "' style='height:280px'></div>";
+  if (typeof window.echarts === "undefined") await import("./loading.js").then((m) => m.loadECharts()).catch(() => null);
+  const SC = await import("./studycharts.js");
+  const host = by.querySelector(".an-histby-chart");
+  if (!host || !host.isConnected || typeof window.echarts === "undefined") return;
+  const pts = runs.map((r, j) => {
+    const y = num0(series[j]);
+    // A run that isn't clean but has the number (it finished and missed
+    // timing, or has warnings) is plotted; one with no number is a cross.
+    const key = r.success ? "clean" : y == null ? "failed" : unitK === "ns" && y < 0 ? "missed" : "warnings";
+    return { x: xOf(r, _histX), y: y == null ? null : y * k, key, tag: r.tag,
+      word: key === "clean" ? "Clean" : key === "failed" ? "Failed or stopped" : key === "missed" ? "Timing missed" : "Not clean" };
+  }).filter((p) => p.x != null);
+  const opt = SC.byValueOption({ xvar: _histX, xunit: _histX === "CLOCK_PERIOD" ? "ns" : "", clock: _histX === "CLOCK_PERIOD",
+    metric: { key: _histM, label, unit, dir: M.directionOf(_meta, _histM) }, points: pts, line: false });
+  if (!opt) { host.innerHTML = notReached("No run has both a value of " + _histX + " and of " + label + "."); return; }
+  _histChart = window.echarts.init(host, null, { renderer: "canvas" });
+  _histChart.setOption(opt);
+  _histChart.on("click", (e) => { const p = e.data && e.data.p; if (p && p.tag) ctx.setRun(p.tag); });
 }
 
 // ---------- 8. All metrics -----------------------------------------------------------------

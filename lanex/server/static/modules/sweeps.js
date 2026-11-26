@@ -731,7 +731,8 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
     Object.entries(counts).filter(([k]) => k !== "clean").map(([k, n]) => " · " + n + " " + SM.POINT[k].word.toLowerCase()).join("");
   const same = sw.active ? SM.sameFailure(live.filter((p) => !p.missing).map((p) => ({ ...p, fp: p.key === "failed" ? SM.fingerprint((failCode && failCode(p.r)) || "", (verdictOf(p.r) || {}).stage || "") : "" }))) : null;
   const queued = SQ.queueAvailable() && ordered.some((p) => p.key === "queued" || p.key === "running");
-  el.innerHTML = "<div class='sw-pts'>" + SM.stripHtml(ordered, esc) + "<span class='sw-pts-t'>" + esc(progress) + "</span>" +
+  el.innerHTML = startedFromHtml(sw, runs, verdictOf, failCode) +
+    "<div class='sw-pts'>" + SM.stripHtml(ordered, esc) + "<span class='sw-pts-t'>" + esc(progress) + "</span>" +
     (queued ? "<span class='rn-spacer'></span><button class='btn btn-ghost btn-sm' data-qstop='after' title='The points waiting are skipped; the ones running finish'>" + icon("stop", { size: 13 }) + " Stop after the running points</button>" +
       "<button class='btn btn-ghost btn-sm' data-qstop='now'>" + icon("stop", { size: 13 }) + " Stop now</button>" : "") + "</div>" +
     (same ? "<p class='sw-why'>" + icon("alert", { size: 14 }) + " Two of the first points failed the same way (" + esc(same.fingerprint.split("|").filter(Boolean).join(", ")) +
@@ -791,7 +792,43 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
       toast.show(now ? "Stopped. Finished points are kept." : "The waiting points are skipped; the running ones finish.", "success", 4000);
     } catch (ex) { toast.show("Couldn't stop the sweep: " + (ex.message || ex), "error"); }
   }));
+  el.querySelector("[data-from]")?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const ctx = await import("./context.js");
+    await ctx.setRun(e.currentTarget.dataset.from, state.designDir);
+    import("./nav.js").then((m) => m.go("verify"));
+  });
   drawCharts(el, sw, pts, scale);
+}
+
+// The run the study started from, pinned above it, with what a sweep can and
+// can't do about its cause: a sweep is a tool, not a substitute for the cause
+// (audit 6.2). The run before the sweep was created, that isn't one of its
+// points (this design's runs only).
+function startedFromHtml(sw, runs, verdictOf, failCode) {
+  const t0 = sw.created_at ? Date.parse(sw.created_at) : NaN;
+  if (!Number.isFinite(t0)) return "";
+  const mine = new Set((sw.tags || []).concat(runs.map((r) => r.tag)));
+  const before = (state.runs || []).filter((r) => !mine.has(r.tag) && r.started_at && Date.parse(r.started_at) < t0 && !(r.origin && r.origin.kind === "sweep"))
+    .sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))[0];
+  if (!before) return "";
+  const v = verdictOf(before);
+  const m = before.key_metrics || {};
+  const ws = m.timing__setup__ws, hs = m.timing__hold__ws;
+  const fin = (x) => typeof x === "number" && Number.isFinite(x) && Math.abs(x) < 1e20;
+  const code = v.state === "failed" && failCode ? failCode(before) : "";
+  let cause = "", hint = "";
+  if (fin(ws) && ws < 0) { cause = "Setup slack " + F.showText("timing__setup__ws", ws) + "."; hint = "A study finds the fastest clock that works; it doesn't shorten the path that misses."; }
+  else if (fin(hs) && hs < 0) { cause = "Hold slack " + F.showText("timing__hold__ws", hs) + "."; hint = "A hold miss is fixed by buffering, not by a slower clock."; }
+  else if (/GRT/.test(code)) { cause = "Routing was too congested (" + code + ")."; hint = "A study can try a lower utilisation; if every value fails, the design needs fewer cells or more metal layers."; }
+  else if (/DPL|GPL/.test(code)) { cause = "Placement failed (" + code + ")."; hint = "A bigger die or a lower utilisation often fixes this; if not, look at the macro placement."; }
+  else if (v.state === "failed") { cause = (v.label || "It failed") + (code && !String(v.label || "").includes(code) ? " (" + code + ")" : "") + "."; hint = "Fix the cause first: a study can't fix a design that doesn't build."; }
+  const tone = { passed: "pass", warning: "warn", failed: "fail" }[v.state] || "warn";
+  return "<div class='sw-from is-" + tone + "'><span class='sw-from-k'>Started from</span><code>" + esc(before.tag) + "</code>" +
+    "<span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(v.label || v.state) + "</span>" +
+    (cause ? "<span class='sw-from-c'>" + esc(cause) + "</span>" : fin(ws) ? "<span class='sw-from-c'>" + esc(F.showText("timing__setup__ws", ws)) + " setup slack</span>" : "") +
+    (hint ? "<span class='sw-from-h'>" + esc(hint) + "</span>" : "") +
+    (cause ? "<button class='btn btn-ghost btn-sm' data-from='" + esc(before.tag) + "'>" + icon("check", { size: 13 }) + " Open it in Verify</button>" : "") + "</div>";
 }
 
 // Which runs "Compare" sends: all of them up to twelve; past that the best by

@@ -242,6 +242,17 @@ body.theme-light .rn-viewing { color: var(--accent); border-color: color-mix(in 
 .sw-pts .sv-pt { width: 11px; height: 11px; }
 .sw-pts-t { color: var(--text-muted); }
 .sw-chart-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* The run a study started from, pinned above it (its verdict, the cause, what a sweep can do). */
+.sw-from { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 var(--s-3); padding: 9px 12px; font-size: 13.5px;
+  border: 1px solid var(--border); border-left: 2px solid var(--text-muted); border-radius: var(--r-md); background: var(--surface); }
+.sw-from.is-fail { border-left-color: var(--fail); background: color-mix(in srgb, var(--fail) 6%, var(--surface)); }
+.sw-from.is-warn { border-left-color: var(--warn); }
+.sw-from.is-pass { border-left-color: var(--pass); }
+.sw-from-k { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+.sw-from code { font-size: 13px; color: var(--text-strong); background: none; padding: 0; }
+.sw-from-c { color: var(--text-strong); }
+.sw-from-h { color: var(--text-muted); flex: 1 1 260px; }
+.sw-from .btn { margin-left: auto; }
 .sw-plot.sw-echart { max-width: none; padding: 10px 12px 8px; }
 .sw-chart { width: 100%; min-height: 220px; }
 .sw-chart-note { margin: 4px 0 0; font-size: 12.5px; }

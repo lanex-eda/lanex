@@ -37,7 +37,9 @@ export function paretoFront(points, dirX, dirY) {
 }
 
 // One metric by one swept setting.
-export function byValueOption({ xvar, xunit = "", metric, points, clock = false }) {
+// `line`: join the points (a study, one point per value); off for a history
+// of runs, where several runs can share a value.
+export function byValueOption({ xvar, xunit = "", metric, points, clock = false, line = true }) {
   const k = chartInk(), th = chartTheme();
   const ok = points.filter((p) => fin(p.x) && fin(p.y) && (p.key === "clean" || p.key === "warnings" || p.key === "missed"));
   const failed = points.filter((p) => fin(p.x) && (p.key === "failed" || p.key === "stopped" || p.key === "pruned" || p.key === "interrupted"));
@@ -58,7 +60,7 @@ export function byValueOption({ xvar, xunit = "", metric, points, clock = false 
     axisLabel: { ...xAxisBase.axisLabel, formatter: (v) => mhz(v).replace(" MHz", "") } });
   const ys = ok.map((p) => p.y);
   const series = [{
-    type: "line", name: metric.label, data: ok.slice().sort((a, b) => a.x - b.x).map((p) => ({ value: [p.x, p.y], p })),
+    type: line ? "line" : "scatter", name: metric.label, data: ok.slice().sort((a, b) => a.x - b.x).map((p) => ({ value: [p.x, p.y], p })),
     connectNulls: false, showSymbol: true, symbol: "circle", symbolSize: 8, z: 3,
     lineStyle: { color: k.accent, width: 2 }, itemStyle: { color: k.accent, borderColor: k.surface, borderWidth: 1.5 },
     markLine: slack ? { silent: true, symbol: "none", data: [{ yAxis: 0 }], lineStyle: { color: k.text, type: "dashed", width: 1 },
