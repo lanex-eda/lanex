@@ -2897,6 +2897,13 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.equal(cp.title, "Timing was never checked");
     assert.match(cp.sub, /CLOCK_PORT/);
   });
+  await checkAsync("report card: Flow links to Verify's warnings instead of a second full list; other callers keep theirs", async () => {
+    const RC = await import(toUrl(resolve(MOD, "reportcard.js")));
+    const w = { total: 33, by_code: [{ code: "STA-1140", count: 18, sample: "x" }], other: 0 };
+    assert.match(RC.warningsHtml(w, { verifyLink: true }), /data-go='verify' data-go-section='vf-warnings'/);
+    assert.doesNotMatch(RC.warningsHtml(w, { verifyLink: true }), /Every warning code/);
+    assert.match(RC.warningsHtml(w), /Every warning code/);
+  });
   check("share card: the numbers students post, Fmax per process corner, never a hidden failing verdict", () => {
     const sum = { identity: { design: "spm", pdk: "sky130A", scl: "sky130_fd_sc_hd", run: "baseline", librelane: "3.0.4", finished: "2026-09-17T00:07:30" },
       area: { die_w: 96.6, die_h: 107.32, util: 0.630246, logic_cells: 324, flipflops: 64 },

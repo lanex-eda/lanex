@@ -632,6 +632,20 @@ def index_report(report: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+_OTHERS_MAX_BYTES = 12_000_000   # ~0.3 s to index; bigger ones wait until opened
+
+
+def _indexed(report: Path) -> bool:
+    """True when *report*'s index is cached and current."""
+    try:
+        st = report.stat()
+    except OSError:
+        return False
+    with _IDX_LOCK:
+        hit = _IDX_CACHE.get(str(report))
+    return bool(hit and hit[0] == (st.st_mtime_ns, st.st_size))
+
+
 def _real(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [r for r in rows if r.get("slack") is not None and abs(r["slack"]) < _SENTINEL]
 
@@ -1078,6 +1092,11 @@ def path_detail(run_dir: str | Path, *, kind: str = "setup", corner: Optional[st
     key = _endpoint_key(row)
     others = []
     for c, f in files:
+        # A very big report not indexed yet is left for when its corner is
+        # opened: indexing several of them would hold this request for seconds.
+        if f != report and not _indexed(f) and f.stat().st_size > _OTHERS_MAX_BYTES:
+            others.append({"corner": c, "slack": None, "i": None, "unread": True})
+            continue
         try:
             hit = next((r for r in _real(index_report(f)) if _endpoint_key(r) == key), None)
         except OSError:

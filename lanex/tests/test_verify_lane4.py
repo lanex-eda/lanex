@@ -99,6 +99,22 @@ def test_list_search_kind_filter_and_baseline(sta_run: Path, tmp_path: Path) -> 
     assert rows[0]["base"] == pytest.approx(rows[0]["slack"])
 
 
+def test_big_reports_in_other_corners_wait_until_opened(sta_run: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Indexing several very big reports would hold the request for seconds.
+    monkeypatch.setattr(timing, "_OTHERS_MAX_BYTES", 10)
+    with timing._IDX_LOCK:
+        timing._IDX_CACHE.clear()
+    sta = sta_run / "55-openroad-stapostpnr"
+    shutil.copytree(sta / "max_ss_100C_1v60", sta / "max_tt_025C_1v80")
+    p = timing.path_detail(sta_run, kind="setup", corner="max_ss_100C_1v60", i=0)
+    by = {o["corner"]: o for o in p["others"]}
+    assert by["max_ss_100C_1v60"]["slack"] == pytest.approx(4.10026)
+    assert by["max_tt_025C_1v80"].get("unread") is True and by["max_tt_025C_1v80"]["slack"] is None
+    timing.path_list(sta_run, kind="setup", corner="max_tt_025C_1v80")   # opening it reads it
+    p = timing.path_detail(sta_run, kind="setup", corner="max_ss_100C_1v60", i=0)
+    assert {o["corner"]: o for o in p["others"]}["max_tt_025C_1v80"]["slack"] == pytest.approx(4.10026)
+
+
 def test_histogram_bins_sit_on_zero() -> None:
     h = timing.histogram0([-0.53, -0.2, 0.05, 0.4, 1.2])
     assert 0.0 in h["edges"]

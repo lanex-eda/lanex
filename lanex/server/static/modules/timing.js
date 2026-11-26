@@ -428,8 +428,9 @@ export function pathDetailHtml(p) {
   const sl = p.met
     ? "<span class='tx-slack is-ok'>" + esc(fmtSlack(p.slack)) + " " + U + "</span><span class='vf-pill is-pass'>Met</span>"
     : "<span class='tx-slack is-bad'>Missed by " + esc(Math.abs(p.slack).toFixed(3)) + " " + U + "</span><span class='vf-pill is-fail'>Violated</span>";
-  const others = (p.others || []).filter((o) => isNum(o.slack));
-  const worstO = others.length ? Math.min(...others.map((o) => o.slack)) : null;
+  // A corner whose (very big) report isn't read yet shows "open": a click reads it.
+  const others = (p.others || []).filter((o) => isNum(o.slack) || o.unread);
+  const worstO = others.some((o) => isNum(o.slack)) ? Math.min(...others.filter((o) => isNum(o.slack)).map((o) => o.slack)) : null;
   const scale = isNum(p.period) && p.period > 0 ? p.period : Math.max(0.05, p.arrival || 0);
   const base = p.base && isNum(p.base.slack) ? "<span class='tx-base' title='Same endpoint and corner in the baseline run'>In " + esc(p.base.tag) + ": <b>" + esc(fmtSlack(p.base.slack)) + "</b> " + U + " (Δ " +
     esc(fmtSlack(p.slack - p.base.slack)) + ")</span>" : p.base ? "<span class='tx-base'>Not in " + esc(p.base.tag) + "</span>" : "";
@@ -451,7 +452,7 @@ export function pathDetailHtml(p) {
     (others.length > 1 ? "<div class='tx-others'><span class='vf-k'>Same endpoint in other corners</span><div class='tx-ochips'>" +
       others.map((o) => "<button class='tx-ochip" + (o.corner === p.corner ? " is-sel" : "") + (o.slack < 0 ? " is-bad" : "") + (o.slack === worstO ? " is-worst" : "") +
         "' data-tx-corner='" + esc(o.corner) + "' data-tx-ci='" + o.i + "' data-an-tip='" + esc(o.corner + " — " + cornerWords(o.corner)) + "'>" +
-        "<span>" + esc(o.corner) + "</span><b>" + esc(fmtSlack(o.slack)) + "</b></button>").join("") + "</div></div>" : "");
+        "<span>" + esc(o.corner) + "</span><b>" + esc(o.unread ? "open" : fmtSlack(o.slack)) + "</b></button>").join("") + "</div></div>" : "");
 }
 
 // ---------------------------------------------------------------- events
@@ -486,11 +487,11 @@ function wire(host) {
     const fold = t.closest("[data-tx-fold]");
     if (fold) { S.open[fold.dataset.txFold] = !S.open[fold.dataset.txFold]; if (S.detail) document.getElementById("tx-detail").innerHTML = pathDetailHtml(S.detail); return; }
     const oc = t.closest("[data-tx-corner]");
-    if (oc && oc.dataset.txCi !== "null") {
+    if (oc) {
       if (oc.dataset.txCorner === S.corner) return;
       S.corner = oc.dataset.txCorner; S.bin = null;
-      const want = Number(oc.dataset.txCi);
-      loadList().then(() => select(want));
+      const want = oc.dataset.txCi === "null" || oc.dataset.txCi === "undefined" ? null : Number(oc.dataset.txCi);
+      loadList().then(() => { if (want != null) select(want); });
       return;
     }
     const act = t.closest("[data-tx-act]");

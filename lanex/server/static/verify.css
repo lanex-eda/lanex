@@ -599,3 +599,5 @@ body.theme-light .sc-status.is-warn { color: var(--warn); }
 
 /* the re-run dialog: what a named setting takes */
 .vf-rr-hint { margin: 3px 0 6px; font-size: 12px; line-height: 1.4; }
+/* Flow report card: the link to every warning in Verify (reportcard.js) */
+.fl-warns .fl-w-go { margin-top: 6px; width: max-content; }
