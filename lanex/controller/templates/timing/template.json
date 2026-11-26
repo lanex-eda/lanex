@@ -1,0 +1,25 @@
+{
+  "name": "timing",
+  "title": "Timing exercise (12-bit multiplier)",
+  "description": "A multiplier between two rows of registers, set to a 5 ns clock it can't meet: the run fails setup timing on purpose. Read the failure card, then find the clock it passes at. At 10 ns LibreLane passes it: the typical corner meets with time to spare, and the slow corner (ss: slow transistors, hot, low voltage) still misses by under a nanosecond, which LibreLane reports as a warning.",
+  "teaches": "Slack, WNS and TNS, logic depth, the clock period and corners: it fails at 5 ns and passes at 10.",
+  "top": "mult12",
+  "clock_port": "clk",
+  "clock_period": 5.0,
+  "sources": [
+    "src/mult12.v"
+  ],
+  "testbench": "verify/mult12_tb.v",
+  "order": 8,
+  "config": {
+    "FP_CORE_UTIL": 40,
+    "PL_TARGET_DENSITY_PCT": 55
+  },
+  "pdk": {
+    "sky130*": {
+      "config": {
+        "MAX_FANOUT_CONSTRAINT": 6
+      }
+    }
+  }
+}

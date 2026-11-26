@@ -20,6 +20,7 @@ import pytest
 from lanex.controller import lint, scaffold, simulate
 
 TEMPLATES = [t["name"] for t in scaffold.list_templates() if t.get("has_testbench")]
+BENCH = {t["name"]: t["testbench"] for t in scaffold.list_templates() if t.get("testbench")}
 
 
 def _have(*tools: str) -> bool:
@@ -52,14 +53,20 @@ def _simulate(d: Path, tb: str, engine: str):
 
 
 def test_every_example_has_a_bench():
-    assert set(TEMPLATES) >= {"blinky", "counter", "fifo", "multiplier", "spm"}
+    # The learning ladder (audit section 7, item 6): every rung has a bench.
+    assert set(TEMPLATES) >= {"blinky", "counter", "fifo", "multiplier", "spm", "seg7", "traffic", "pwm",
+                              "uart_tx", "timing", "tt_tile"}
+    for t in scaffold.list_templates():
+        if t["kind"] != "blank":
+            assert t["has_testbench"] and t["teaches"], t["name"]
 
 
 @pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("name", TEMPLATES)
 def test_template_bench_passes(tmp_path: Path, name: str, engine: str):
     d = _make(tmp_path, name)
-    tb = next(iter(sorted(p.relative_to(d).as_posix() for p in (d / "verify").glob("*_tb.v"))))
+    tb = BENCH[name]
+    assert (d / tb).is_file(), tb
     rc, out = _simulate(d, tb, engine)
     assert rc == 0, out[-3000:]
     assert re.search(r"^PASS\b", out, re.M), out[-3000:]
@@ -74,6 +81,13 @@ BREAK = {
     "multiplier": ("src/mult.v", "p <= a * b;", "p <= a * b + 1'b1;"),
     "fifo": ("src/fifo.v", "dout <= mem[rptr];", "dout <= ~mem[rptr];"),
     "blinky": ("src/blinky.v", "assign led = ctr[WIDTH-1];", "assign led = ctr[0];"),
+    "seg7": ("src/seg7.v", "4'h7: seg = 7'b0000111;", "4'h7: seg = 7'b0000110;"),
+    "traffic": ("src/traffic.v", "S_YELLOW: if (timer == YELLOW_T - 1) next = S_RED;",
+                "S_YELLOW: if (timer == YELLOW_T) next = S_RED;"),
+    "pwm": ("src/pwm_core.v", "out   <= (count < duty);", "out   <= (count <= duty);"),
+    "uart_tx": ("src/uart_tx.sv", "? shreg[0] : 1'b1;", "? shreg[7] : 1'b1;"),
+    "timing": ("src/mult12.v", "p  <= ra * rb;", "p  <= ra * rb + 1'b1;"),
+    "tt_tile": ("src/project.v", "assign uio_oe  = 8'b1111_0000;", "assign uio_oe  = 8'b1111_1111;"),
 }
 
 
@@ -85,7 +99,7 @@ def test_template_bench_catches_a_wrong_design(tmp_path: Path, name: str, engine
     src = (d / rel).read_text()
     assert old in src
     (d / rel).write_text(src.replace(old, new))
-    tb = next(iter(sorted(p.relative_to(d).as_posix() for p in (d / "verify").glob("*_tb.v"))))
+    tb = BENCH[name]
     rc, out = _simulate(d, tb, engine)
     assert rc != 0, out[-3000:]
     assert re.search(r"\bFAIL\b", out), out[-3000:]
@@ -96,9 +110,36 @@ def test_benches_drive_inputs_away_from_the_sampling_edge():
     """The races the audit found: inputs set with blocking assignments right
     after @(posedge clk). The benches now change inputs on the falling edge."""
     root = Path(scaffold.__file__).resolve().parent / "templates"
-    for tb in root.glob("*/verify/*_tb.v"):
+    for tb in [p for p in root.glob("*/verify/*") if p.suffix in (".v", ".sv")]:
         text = tb.read_text()
         assert not re.search(r"@\(posedge clk\);\s*\w+\s*=", text), tb
+
+
+def test_benches_fail_with_fatal_not_error():
+    """Icarus exits 0 after $error, so a bench that reports with $error alone
+    looks like a pass to anything that reads the exit code. Every bench ends
+    in $fatal on a failure and prints PASS otherwise."""
+    root = Path(scaffold.__file__).resolve().parent / "templates"
+    for name, tb in BENCH.items():
+        text = (root / name / tb).read_text()
+        assert "$fatal(1," in text and re.search(r'\$display\("PASS: ', text), (name, tb)
+        assert "$error" not in text, (name, tb)
+
+
+def test_new_rungs_render_the_config_they_teach(tmp_path: Path):
+    import json
+    seg = json.loads((_make(tmp_path, "seg7") / "config.json").read_text())
+    assert "CLOCK_PORT" not in seg and seg["FP_SIZING"] == "absolute"
+    pwm = json.loads((_make(tmp_path, "pwm") / "config.json").read_text())
+    assert pwm["VERILOG_FILES"] == ["dir::src/pwm_top.v", "dir::src/pwm_core.v"]
+    assert pwm["VERILOG_INCLUDE_DIRS"] == ["dir::src/include"]
+    sv = json.loads((_make(tmp_path, "uart_tx") / "config.json").read_text())
+    assert sv["VERILOG_FILES"][0] == "dir::src/uart_pkg.sv", "the package is read first"
+    tt = json.loads((_make(tmp_path, "tt_tile") / "config.json").read_text())
+    assert tt["DIE_AREA"] == [0, 0, 161.0, 111.52] and tt["RT_MAX_LAYER"] == "met4"
+    assert (tmp_path / "tt_tile" / "src" / "pin_order.cfg").is_file()
+    t = json.loads((_make(tmp_path, "timing") / "config.json").read_text())
+    assert t["CLOCK_PERIOD"] == 5.0
 
 
 def test_spm_project_gets_the_self_checking_bench(tmp_path: Path):
