@@ -98,7 +98,7 @@ export function configCheckRow(chk, configName = "") {
   if (probs.length) {
     const p = probs[0];
     const more = probs.length > 1 ? " (and " + (probs.length - 1) + " more)" : "";
-    return { state: "bad", detail: esc(p.message) + (p.fix ? " " + esc(p.fix) : "") + more, action: p.code === "flow" || p.code === "config" || p.code === "top" || p.code === "clock" ? open : "" };
+    return { state: "bad", detail: esc(p.message) + (p.fix ? " " + esc(p.fix) : "") + more, action: ["flow", "config", "top", "clock", "unknown-key"].includes(p.code) ? open : "" };
   }
   if (!chk.checked) {
     if (/PDK is installed/.test(chk.note || "")) return null;

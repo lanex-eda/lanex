@@ -69,7 +69,163 @@ def test_every_case_in_the_fixture_is_covered():
     assert set(FIX) == {"verilator_syntax", "yosys_syntax", "verilator_top", "yosys_top", "clock_port", "no_clock",
                         "core_negative", "core_outside", "core_bigger", "pins", "pdn_small_die", "gpl_util", "dpl_cts",
                         "route_drc", "cts_buffer", "rsz_no_buffers", "oom_openroad", "oom_container", "disk_full",
-                        "lvs_crash"}
+                        "lvs_crash",
+                        # forced 2026-11-26 with scripts/failure_goldens.py
+                        "latch", "modmissing", "modmissing_yosys", "include_missing", "implicit_wire", "dup_module",
+                        "dup_module_lint", "sv_import", "bad_type", "pdk_missing", "unknown_key", "margin_negative",
+                        "pdn_pitch", "pin_order", "rsz_slew", "corner_wildcard"}
+
+
+# ---------------------------------------------------------------- forced 2026-11-26
+# Each on a scratch copy of the Blinky template or LibreLane's spm, LibreLane
+# 3.0.4 in its image (scripts/failure_goldens.py makes them again).
+
+def test_a_latch_names_the_signal_and_the_line(tmp_path):
+    rx, c = _card(tmp_path, "latch")
+    assert c["kb"] == "latch" and c["title"] == "A latch was inferred for q"
+    assert "src/blinky.v line 17" in c["plain"] and "LINTER_ERROR_ON_LATCH" in c["plain"]
+    assert c["fixes"][0]["go"] == {"tab": "ide", "rel": "src/blinky.v", "line": 17}
+    assert rx["at"]["step"] == "Verilator.Lint"
+
+
+@pytest.mark.parametrize("case", ["modmissing", "modmissing_yosys"])
+def test_a_module_nobody_declares(tmp_path, case):
+    _rx, c = _card(tmp_path, case)
+    assert c["kb"] in ("module-missing", "module-missing-yosys")
+    assert c["title"] == "No file defines module blink_sub"
+    assert any(f.get("go", {}).get("section") == "setup-sources" for f in c["fixes"])
+
+
+def test_a_module_in_an_unticked_file_says_which(tmp_path):
+    d = tmp_path / "proj"
+    (d / "src").mkdir(parents=True)
+    (d / "src" / "blink_sub.v").write_text("module blink_sub(input clk, output q);\nendmodule\n")
+    c = problems.explain_error("1 Lint errors found.", {"DESIGN_DIR": str(d), "VERILOG_FILES": [str(d / "src" / "blinky.v")]},
+                               log="%Error-MODMISSING: src/blinky.v:17:5: Cannot find file containing module: 'blink_sub'")
+    assert "src/blink_sub.v declares it but isn't one of the design's files" in c["plain"]
+
+
+def test_a_missing_include(tmp_path):
+    _rx, c = _card(tmp_path, "include_missing")
+    assert c["kb"] == "include-missing" and c["title"] == "blink_defs.vh can't be found"
+    assert "VERILOG_INCLUDE_DIRS" in c["plain"]
+
+
+def test_an_undeclared_wire_passes_lint_and_stops_synthesis(tmp_path):
+    rx, c = _card(tmp_path, "implicit_wire")
+    assert rx["step"]["dir"] == "05-yosys-jsonheader"
+    assert c["kb"] == "implicit-wire" and c["title"] == "tmp is used but never declared"
+    assert "-noautowire" in c["plain"]
+    assert c["fixes"][0]["go"]["line"] == 16
+
+
+@pytest.mark.parametrize("case", ["dup_module", "dup_module_lint"])
+def test_a_module_defined_twice(tmp_path, case):
+    _rx, c = _card(tmp_path, case)
+    assert c["kb"] == "module-twice" and c["title"] == "Module blinky is defined twice"
+    assert "src/blinky_old.v" in c["plain"]
+
+
+def test_systemverilog_import_offers_the_slang_reader(tmp_path):
+    _rx, c = _card(tmp_path, "sv_import")
+    assert c["kb"] == "sv-frontend" and "import" in c["title"]
+    f = _sets(c)["USE_SLANG"]
+    assert (f["from"], f["to"], f["sure"]) == ("false", "true", "likely")
+
+
+def test_config_load_errors_have_cards():
+    # No run folder: LibreLane stopped while loading the config, and printed these.
+    assert FIX["bad_type"]["steps"] == [] and FIX["bad_type"]["exit_code"] == 1
+    said = " ".join(" ".join(FIX["bad_type"]["console"]).split())
+    # (the console wraps the line around the logger's source column)
+    assert "Value provided for variable 'FP_CORE_UTIL'" in said and "of type Decimal is invalid: 'abc'" in said
+    c = problems.explain_error("Value provided for variable 'FP_CORE_UTIL' of type Decimal is invalid: 'abc'", {})
+    assert c["kb"] == "config-value" and c["title"] == "FP_CORE_UTIL has a value LibreLane can't read"
+    assert "is a number" in c["plain"]
+    p = problems.explain_error("The PDK sky130C was not found.", {})
+    assert p["kb"] == "pdk-missing" and p["title"] == "The PDK sky130C isn't installed"
+    assert "The PDK sky130C was not found." in " ".join(FIX["pdk_missing"]["console"])
+
+
+def test_an_unknown_key_is_only_a_warning_so_the_note_names_the_nearest(monkeypatch):
+    # LibreLane 3.0.4 runs on: the forced run finished, the setting did nothing.
+    rec = FIX["unknown_key"]
+    assert rec["final"] and rec["exit_code"] == 0
+    assert any("An unknown key 'FP_CORE_UTL' was provided." in ln for ln in rec["console_head"])
+    from lanex.controller import introspect
+    monkeypatch.setattr(introspect, "known_var_names", lambda: {"FP_CORE_UTIL", "FP_SIZING", "DIE_AREA"})
+    n = problems.unknown_key_note("FP_CORE_UTL", "config.json")
+    assert n["near"] == ["FP_CORE_UTIL"] and not n["hard"]
+    assert "ignored" in n["message"] and "FP_CORE_UTIL" in n["fix"]
+
+
+def test_a_negative_margin_goes_back_to_the_default(tmp_path):
+    _rx, c = _card(tmp_path, "margin_negative")
+    assert c["code"] == "IFP-0013" and c["title"] == "A core margin is negative"
+    f = _sets(c)["LEFT_MARGIN_MULT"]
+    assert (f["from"], f["to"], f["sure"]) == ("-1", "12", "fixes")
+
+
+def test_pdn_0175_widens_the_pitch_it_names(tmp_path, monkeypatch):
+    monkeypatch.setattr(problems, "_pdk_default", lambda cfg, var: None)
+    _rx, c = _card(tmp_path, "pdn_pitch")
+    assert c["code"] == "PDN-0175" and c["title"] == "The power straps don't fit in their pitch"
+    assert "PDN_VPITCH is 3 µm" in c["plain"] and "7.4 µm" in c["plain"]
+    f = _sets(c)["PDN_VPITCH"]
+    assert (f["to"], f["sure"]) == ("8", "fixes")
+
+
+def test_a_pin_the_pin_order_file_leaves_out(tmp_path):
+    rx, c = _card(tmp_path, "pin_order")
+    assert rx["step"]["dir"] == "26-odb-customioplacement"
+    assert c["kb"] == "pin-order" and c["title"] == "pin_order.cfg doesn't place clk"
+    assert c["fixes"][0]["go"]["rel"] == "pin_order.cfg"
+    assert _sets(c)["ERRORS_ON_UNMATCHED_IO"]["to"] == "none"
+
+
+def test_rsz_0090_goes_back_to_the_pdks_slew_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(problems, "_pdk_default", lambda cfg, var: 0.75 if var == "MAX_TRANSITION_CONSTRAINT" else None)
+    _rx, c = _card(tmp_path, "rsz_slew")
+    assert c["code"] == "RSZ-0090" and "0.01 ns" in c["plain"] and "0.033 ns" in c["plain"]
+    f = _sets(c)["MAX_TRANSITION_CONSTRAINT"]
+    assert (f["from"], f["to"]) == ("0.01", "0.75")
+
+
+def test_a_corner_pattern_that_matches_nothing():
+    c = problems.explain_error("One or more wildcards specified in SETUP_VIOLATION_CORNERS did not match any corners:", {})
+    assert c["kb"] == "corner-wildcard" and "SETUP_VIOLATION_CORNERS" in c["title"]
+    assert FIX["corner_wildcard"]["final"], "the run reaches final/ and fails at the end"
+
+
+def test_codes_that_share_a_card():
+    for code in ("CTS-0126", "CTS-0074"):
+        c = problems.explain_error("[%s] No physical master cell found for buffer sky130_fd_sc_hd__x_4." % code, {})
+        assert c["kb"] == "cts-0127", code
+    for code in ("GRT-0228", "GRT-0229"):
+        assert problems.explain_error("[%s] Horizontal edge usage exceeds the maximum allowed." % code, {})["kb"] == "grt-0116"
+
+
+def test_the_pdn_and_routing_codes_only_known_from_source():
+    unplaced = problems.explain_error("[PDN-0235] Design has unplaced macros.", {},
+                                      log="[WARNING PDN-0234] u_sram has not been placed and fixed.")
+    assert unplaced["title"] == "u_sram has no position"
+    empty = problems.explain_error("[PDN-0233] Failed to generate full power grid.", {},
+                                   log='[WARNING PDN-0232] The grid "macro_grid" (Core) does not contain any shapes or vias.')
+    assert "macro_grid" in empty["title"]
+    ring = problems.explain_error("[PDN-0351] PDN rings do not fit inside the die area by 5.4 um in X and 5.4 um in Y.",
+                                  {"PDN_CORE_RING": True})
+    assert _sets(ring)["PDN_CORE_RING"]["to"] == "false"
+    acc = problems.explain_error("[DRT-0073] No access point for _123_/A (sky130_fd_sc_hd__nand2_1).", {})
+    assert acc["title"] == "The router can't reach pin _123_/A"
+
+
+def test_every_kb_entry_has_its_index_line():
+    for rule in problems.KB:
+        assert rule.get("about") and rule.get("stage") and rule.get("source"), rule["id"]
+    ids = [r["id"] for r in problems.KB]
+    assert len(ids) == len(set(ids))
+    # The coded Verilator and Yosys rules come before the general one.
+    assert ids.index("latch") < ids.index("verilog-error") and ids.index("implicit-wire") < ids.index("verilog-error")
 
 
 def test_a_syntax_error_names_the_file_and_line_from_verilator(tmp_path):

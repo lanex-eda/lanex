@@ -57,8 +57,16 @@ def fmt(v: Any) -> str:
     return "" if v is None else str(v)
 
 
-def _setting(var: str, frm: Any, to: Any, why: str, label: str = "") -> Dict[str, Any]:
-    return {"kind": "setting", "var": var, "from": fmt(frm), "to": fmt(to), "why": why, "label": label}
+def _setting(var: str, frm: Any, to: Any, why: str, label: str = "", sure: Optional[str] = None) -> Dict[str, Any]:
+    """A setting to change. *sure* says how certain LanEx is that it fixes
+    this failure (rustc's applicability levels, in words): ``fixes`` when the
+    tool's own message gives the number that makes the error go away,
+    ``likely`` when it removes the usual cause, ``try`` when it is a lever
+    that helps in many cases. None when not stated."""
+    out = {"kind": "setting", "var": var, "from": fmt(frm), "to": fmt(to), "why": why, "label": label}
+    if sure:
+        out["sure"] = sure
+    return out
 
 
 def _open(label: str, go: Dict[str, Any], why: str = "") -> Dict[str, Any]:
@@ -94,21 +102,21 @@ def _gpl_0301(msg: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
                   "counts as area." % fmt(pad))
         fixes.append(_setting("GPL_CELL_PADDING", pad, 0,
                               "No padding at all. Padding gives the router room, so add some back if routing "
-                              "struggles.", "Stop padding the cells"))
+                              "struggles.", "Stop padding the cells", sure="likely"))
     if sizing == "absolute":
         die = cfg.get("DIE_AREA")
         dims = [_num(x) for x in (die if isinstance(die, (list, tuple)) else str(die or "").split())]
         plain += " The die is fixed by DIE_AREA (%s µm), so LibreLane can't make room." % fmt(die)
         fixes.append(_setting("FP_SIZING", "absolute", "relative",
                               "LibreLane sizes the die from the cells' area and FP_CORE_UTIL (%s %%)."
-                              % fmt(cfg.get("FP_CORE_UTIL") or 50), "Let LibreLane size the die"))
+                              % fmt(cfg.get("FP_CORE_UTIL") or 50), "Let LibreLane size the die", sure="likely"))
         if len(dims) == 4 and None not in dims and util:
             k = math.sqrt(util / 100.0 / 0.5)       # room for the cells at about half the core
             w, h = (dims[2] - dims[0]) * k, (dims[3] - dims[1]) * k
             to = "%s %s %s %s" % (fmt(dims[0]), fmt(dims[1]), fmt(dims[0] + 5 * math.ceil(w / 5)),
                                   fmt(dims[1] + 5 * math.ceil(h / 5)))
             fixes.append(_setting("DIE_AREA", die, to, "A die big enough for these cells at about half the core.",
-                                  "Make the die bigger"))
+                                  "Make the die bigger", sure="fixes"))
     else:
         core = _num(cfg.get("FP_CORE_UTIL"))
         if pad <= 0:
@@ -117,7 +125,7 @@ def _gpl_0301(msg: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
         if core:
             to = max(20, min(50, int(5 * math.floor(core * 100.0 / max(util or 100.0, 100.0) * 0.85 / 5))))
             fixes.append(_setting("FP_CORE_UTIL", core, to, "A bigger core: room for the cells and what placement adds.",
-                                  "Make the core bigger"))
+                                  "Make the core bigger", sure="fixes"))
     return {"title": "Placement ran out of room", "plain": plain, "fixes": fixes, "learn": ["utilization", "core"]}
 
 
@@ -138,11 +146,11 @@ def _dpl_0036(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None
     core = _num(cfg.get("FP_CORE_UTIL"))
     if core and core > 25:
         fixes.append(_setting("FP_CORE_UTIL", core, int(max(20, core - 10)),
-                              "More room around the cells the placer could not fit.", "Make the core bigger"))
+                              "More room around the cells the placer could not fit.", "Make the core bigger", sure="likely"))
     dens = _num(cfg.get("PL_TARGET_DENSITY_PCT"))
     if dens and dens > 30:
         fixes.append(_setting("PL_TARGET_DENSITY_PCT", dens, int(max(20, dens - 10)),
-                              "Spread the cells out before they are legalised.", "Spread the cells"))
+                              "Spread the cells out before they are legalised.", "Spread the cells", sure="try"))
     which = ("%d cell%s (%s)" % (len(cells), "" if len(cells) == 1 else "s", ", ".join(cells[:4]) + (" …" if len(cells) > 4 else ""))
              if cells else "some cells")
     if slug(step).startswith("openroad-cts"):
@@ -163,17 +171,6 @@ def _dpl_0036(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None
                      "Usually the core is too full in that area; look at where they sit in Layout."
                      % (which[0].upper() + which[1:], "has" if len(cells) == 1 else "have"),
             "fixes": fixes, "learn": ["utilization"]}
-
-
-def _grt_0116(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    fixes: List[Dict[str, Any]] = []
-    core = _num(cfg.get("FP_CORE_UTIL"))
-    if core and core > 25:
-        fixes.append(_setting("FP_CORE_UTIL", core, int(max(20, core - 10)),
-                              "A bigger core leaves more room for wires.", "Make the core bigger"))
-    return {"title": "Routing is too congested",
-            "plain": "Global routing found more wires than the metal layers have room for in some places.",
-            "fixes": fixes, "learn": ["congestion"]}
 
 
 def _die_area(cfg: Dict[str, Any]) -> Optional[List[float]]:
@@ -220,6 +217,7 @@ def _pdn_0185(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None
             big = _bigger_die(cfg, (side + (need - have) * 1.5 + 5) / side,
                               "Room for the straps: the core grows by as much as the die does.")
             if big:
+                big["sure"] = "fixes"
                 fixes.append(big)
         fixes.append(_relative(cfg, "LibreLane sizes the die from the cells' area and FP_CORE_UTIL (%s %%); a small "
                                     "design still gets a very small die, so check the power grid settings too."
@@ -229,7 +227,7 @@ def _pdn_0185(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None
         core = _num(cfg.get("FP_CORE_UTIL"))
         if core and core > 25:
             fixes.append(_setting("FP_CORE_UTIL", core, int(max(20, core - 15)),
-                                  "A bigger core has room for the power straps.", "Make the core bigger"))
+                                  "A bigger core has room for the power straps.", "Make the core bigger", sure="likely"))
     return {"title": "The die is too small for the power grid", "plain": plain, "fixes": fixes, "learn": ["pdn"]}
 
 
@@ -267,6 +265,7 @@ def _ppl_0024(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None
         big = _bigger_die(cfg, need / have * 1.05, "A die whose edge has room for every pin (%s µm around)." % fmt(math.ceil(need)),
                           "Make the die bigger")
         if big:
+            big["sure"] = "fixes"
             fixes.append(big)
     else:
         core = _num(cfg.get("FP_CORE_UTIL"))
@@ -275,7 +274,8 @@ def _ppl_0024(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None
             to = int(core * (have / need) ** 2 / 1.1)
             if to >= 1:
                 fixes.append(_setting("FP_CORE_UTIL", core, to, "LibreLane sizes the die from the cells; a lower "
-                                      "utilisation makes it big enough around for the pins.", "Make the die bigger"))
+                                      "utilization makes it big enough around for the pins.", "Make the die bigger",
+                                      sure="likely"))
             plain += " LibreLane sizes this die from the cells' area, which is small next to the pin count."
     return {"title": "Too many pins for the die's edge", "plain": plain, "fixes": fixes, "learn": []}
 
@@ -358,7 +358,9 @@ def _pdk_default(cfg: Dict[str, Any], var: str) -> Any:
     """The PDK's value of *var* for the run's PDK and library (its config.tcl)."""
     try:
         from . import celllib
-        return celllib.pdk_config(str(cfg.get("PDK") or ""), str(cfg.get("STD_CELL_LIBRARY") or "")).get(var)
+        pc = celllib.pdk_config(str(cfg.get("PDK") or ""), str(cfg.get("STD_CELL_LIBRARY") or ""))
+        # sky130's and gf180's config.tcl still use the old FP_PDN_* names.
+        return pc.get(var, pc.get("FP_" + var) if var.startswith("PDN_") else None)
     except Exception:
         return None
 
@@ -429,7 +431,8 @@ def _top_missing(ev: Dict[str, Any], m: "re.Match[str]") -> Optional[Dict[str, A
     cfg = ev.get("cfg") or {}
     name = m.group("top").lstrip("\\")
     if cfg.get("DESIGN_NAME") and name != cfg.get("DESIGN_NAME"):
-        return None                      # a missing submodule, not the top: the generic card
+        # A missing submodule, not the top.
+        return _submodule_card(ev, name, "", 0, m.group(0).strip())
     mods = _modules(cfg)
     tops = _top_candidates(cfg)
     fixes: List[Dict[str, Any]] = []
@@ -466,6 +469,509 @@ def _path_missing(ev: Dict[str, Any], m: "re.Match[str]") -> Dict[str, Any]:
             "learn": []}
 
 
+# ---------------------------------------------------------------- RTL the tools refused
+# Each forced with LibreLane 3.0.4 on a scratch copy of the Blinky template
+# (scripts/failure_goldens.py); the words are the tools' own.
+
+def _src_name(s: str) -> str:
+    """Yosys spells names as RTLIL ids: ``\\blinky``, ``$abstract\\blinky``."""
+    return re.sub(r"^\$abstract", "", str(s or "")).lstrip("\\")
+
+
+def _ide(rel: str, line: int, why: str) -> Dict[str, Any]:
+    return _open("Open %s at line %d" % (rel, line), {"tab": "ide", "rel": rel, "line": line}, why)
+
+
+_SOURCES = _open("Open the sources", {"tab": "setup", "section": "setup-sources"},
+                 "Which files go into the chip, and the top module.")
+
+
+def _declaring(cfg: Dict[str, Any], module: str, limit: int = 400) -> List[str]:
+    """Project files (design-relative) that declare *module*: what a missing
+    or doubled module is usually about. Bounded: at most *limit* HDL files,
+    never inside runs/."""
+    d = Path(str(cfg.get("DESIGN_DIR") or ""))
+    if not module or not d.is_dir():
+        return []
+    rx = re.compile(r"^\s*module\s+" + re.escape(module) + r"\b", re.M)
+    out: List[str] = []
+    seen = 0
+    for p in sorted(d.rglob("*")):
+        if p.suffix.lower() not in (".v", ".sv") or "runs" in p.relative_to(d).parts[:1] or not p.is_file():
+            continue
+        seen += 1
+        if seen > limit:
+            break
+        try:
+            text = re.sub(r"//[^\n]*|/\*.*?\*/", "", p.read_text(encoding="utf-8", errors="replace"), flags=re.S)
+        except OSError:
+            continue
+        if rx.search(text):
+            out.append(p.relative_to(d).as_posix())
+    return out
+
+
+def _in_sources(cfg: Dict[str, Any], rel: str) -> bool:
+    d = str(cfg.get("DESIGN_DIR") or "").rstrip("/")
+    return any(str(f) in (rel, d + "/" + rel) or str(f).endswith("/" + rel) for f in cfg.get("VERILOG_FILES") or [])
+
+
+def _latch(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    cfg = ev.get("cfg") or {}
+    rel, line, sig = _rel(m.group("file"), cfg), int(m.group("line")), m.group("sig")
+    short = sig.split(".")[-1]
+    return {"title": "A latch was inferred for %s" % short,
+            "plain": "The always block at %s line %d doesn't give %s a value on every path, so the hardware has to "
+                     "remember its old value: a latch. Latches are hard to time and almost always a mistake, so "
+                     "LibreLane's linter stops on them (LINTER_ERROR_ON_LATCH)." % (rel, line, short),
+            "fixes": [_ide(rel, line, "Give %s a value at the top of the block (%s = 0;), or add the missing else or "
+                                      "default." % (short, short))],
+            "notes": ["For a latch you do want, write it as always_latch, or set LINTER_ERROR_ON_LATCH to false."],
+            "learn": ["latch", "lint"]}
+
+
+def _submodule_card(ev: Dict[str, Any], name: str, where: str, line: int, said: str, parent: str = "") -> Dict[str, Any]:
+    cfg = ev.get("cfg") or {}
+    found = [f for f in _declaring(cfg, name) if not _in_sources(cfg, f)]
+    plain = ("%s uses a module called %s%s, and none of the design's files (VERILOG_FILES) declares it."
+             % (where or parent or "The design", name, (" (line %d)" % line) if line else ""))
+    fixes: List[Dict[str, Any]] = []
+    if found:
+        plain += " %s declares it but isn't one of the design's files: tick it in Sources." % found[0]
+    else:
+        plain += " Check the spelling, or add the file that defines it."
+    fixes.append(dict(_SOURCES))
+    if where and line:
+        fixes.append(_ide(where, line, "The line that uses %s." % name))
+    return {"title": "No file defines module %s" % name, "plain": plain, "evidence": [said[:300]],
+            "fixes": fixes, "learn": ["hierarchy"], "kb": "module-missing"}
+
+
+def _modmissing_vl(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    cfg = ev.get("cfg") or {}
+    card = _submodule_card(ev, m.group("mod"), _rel(m.group("file"), cfg), int(m.group("line")), m.group(0).strip())
+    card.pop("evidence", None)     # the lint checker's own lines are shown
+    return card
+
+
+def _modmissing_ys(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    return _submodule_card(ev, _src_name(m.group("mod")), "", 0, m.group(0).strip(), parent=_src_name(m.group("parent")))
+
+
+def _include_missing(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    cfg = ev.get("cfg") or {}
+    g = _Groups(m)
+    rel = _rel(g.group("file"), cfg) if g.group("file") else ""
+    line = int(g.group("line") or 0)
+    inc = g.group("inc")
+    d = Path(str(cfg.get("DESIGN_DIR") or ""))
+    hits = []
+    if d.is_dir():
+        for p in sorted(d.rglob(Path(inc).name))[:5]:
+            if p.is_file() and "runs" not in p.relative_to(d).parts[:1]:
+                hits.append(p.relative_to(d).as_posix())
+    plain = ("%s includes %s, and it isn't found. Include files are looked for next to the file that includes them "
+             "and in the folders VERILOG_INCLUDE_DIRS lists." % (rel or "A design file", inc))
+    fixes: List[Dict[str, Any]] = []
+    if hits:
+        folder = str(Path(hits[0]).parent.as_posix())
+        plain += " The project has it at %s." % hits[0]
+        fixes.append(_open("Add its folder to VERILOG_INCLUDE_DIRS", {"tab": "setup", "setting": "VERILOG_INCLUDE_DIRS"},
+                           "In the config: \"VERILOG_INCLUDE_DIRS\": [\"dir::%s\"]. Don't list the header in "
+                           "VERILOG_FILES: it is only read through the `include." % folder))
+    if rel and line:
+        fixes.append(_ide(rel, line, "The `include line."))
+    return {"title": "%s can't be found" % inc, "plain": plain, "evidence": [m.group(0).strip()[:300]],
+            "fixes": fixes, "learn": []}
+
+
+def _implicit(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    cfg = ev.get("cfg") or {}
+    rel, line, name = _rel(m.group("file"), cfg), int(m.group("line")), _src_name(m.group("sig"))
+    return {"title": "%s is used but never declared" % name,
+            "plain": "%s line %d uses %s without declaring it. LibreLane reads Verilog with implicit wires turned off "
+                     "(Yosys -noautowire), so every wire has to be declared, whatever `default_nettype says. The "
+                     "linter only warned about it (Verilator's IMPLICIT), so the run got as far as synthesis."
+                     % (rel, line, name),
+            "evidence": [m.group(0).strip()[:300]],
+            "fixes": [_ide(rel, line, "Declare it before it is used: wire %s; (with its width, if it has one)." % name)],
+            "learn": ["lint"]}
+
+
+def _redefined(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    cfg = ev.get("cfg") or {}
+    rel, name = _rel(m.group("file"), cfg), _src_name(m.group("mod"))
+    files = [f for f in _declaring(cfg, name) if _in_sources(cfg, f)] or _declaring(cfg, name)
+    others = [f for f in files if f != rel]
+    plain = ("Two of the design's files declare module %s: %s%s. Yosys reads every file in VERILOG_FILES, and a "
+             "module may be defined once. Usually it is an old copy of a file, picked up by a pattern such as "
+             "dir::src/*.v." % (name, rel, (" and " + ", ".join(others[:3])) if others else ""))
+    return {"title": "Module %s is defined twice" % name, "plain": plain, "evidence": [m.group(0).strip()[:300]],
+            "fixes": [_open("Open the sources", {"tab": "setup", "section": "setup-sources"},
+                            "Leave the old copy out of the design (untick it), or delete it.")],
+            "learn": ["hierarchy"]}
+
+
+def _sv_frontend(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    cfg = ev.get("cfg") or {}
+    rel, line, tok = _rel(m.group("file"), cfg), int(m.group("line")), m.group("tok").lower()
+    fixes: List[Dict[str, Any]] = []
+    if not cfg.get("USE_SLANG"):
+        fixes.append(_setting("USE_SLANG", False, True, "Read the design with the Slang frontend, which supports "
+                              "packages with import, interfaces and the rest of SystemVerilog.",
+                              "Use the full SystemVerilog reader", sure="likely"))
+    fixes.append(_ide(rel, line, "Or write it the way Yosys's own reader takes it: package-scoped names "
+                                 "(pkg::NAME) instead of import."))
+    return {"title": "Yosys's built-in reader doesn't support `%s`" % tok,
+            "plain": "%s line %d uses %s, which the Verilog reader LibreLane uses by default doesn't understand. "
+                     "LibreLane can read SystemVerilog with the Slang frontend instead (USE_SLANG)." % (rel, line, tok),
+            "evidence": [m.group(0).strip()[:300]], "fixes": fixes, "learn": ["synthesis"]}
+
+
+# ---------------------------------------------------------------- the config didn't load
+# LibreLane 3.0.4 stops before the first step (exit 1, no run folder):
+# "Errors have occurred while loading the design configuration file." then
+# one line per error (__main__.py, config/variable.py).
+
+def _bad_value(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    var, typ, val = m.group("var"), m.group("type"), m.group("val")
+    kind = {"Decimal": "a number", "int": "a whole number", "bool": "true or false", "Path": "a file path",
+            "float": "a number"}.get(typ, "a " + typ)
+    return {"title": "%s has a value LibreLane can't read" % var,
+            "plain": "%s is %s, and the config gives it '%s', so LibreLane stopped before the first step."
+                     % (var, kind, val),
+            "evidence": [m.group(0).strip()[:300]],
+            "fixes": [_open("Open the setting", {"tab": "setup", "setting": var}, "Where %s is set." % var)],
+            "learn": []}
+
+
+def _required(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    var = m.group("var")
+    words = {"DESIGN_NAME": "which module is the top", "VERILOG_FILES": "which files the design is made of",
+             "CLOCK_PERIOD": "the clock period"}.get(var, var)
+    return {"title": "The config doesn't say %s" % words,
+            "plain": "LibreLane needs %s, and the config doesn't set it, so it stopped before the first step." % var,
+            "evidence": [m.group(0).strip()[:300]],
+            "fixes": [_open("Open the setting", {"tab": "setup", "setting": var}, "Where %s goes." % var)] if var else [],
+            "learn": []}
+
+
+def _pdk_missing(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    pdk = m.group("pdk")
+    return {"title": "The PDK %s isn't installed" % pdk,
+            "plain": "The run asks for %s, and the PDK folder LibreLane was given has no such PDK, so it stopped "
+                     "before the first step. Install it from Tools, or pick an installed PDK in Setup." % pdk,
+            "evidence": [m.group(0).strip()[:300]], "fixes": list(_TOOLS_FIX), "learn": ["pdk"]}
+
+
+def nearest_names(name: str, known: Any, n: int = 3) -> List[str]:
+    """Known variable names closest to *name* (a typo), nearest first."""
+    import difflib
+    return difflib.get_close_matches(str(name), sorted(known or []), n=n, cutoff=0.75)
+
+
+def unknown_key_note(key: str, cfg_name: str = "the config", unused: bool = False) -> Dict[str, Any]:
+    """LibreLane 3.0.4 only warns about a key it doesn't know ("An unknown key
+    'FP_CORE_UTL' was provided.", config.py) and runs on without it: the
+    setting does nothing. Forced: FP_CORE_UTL 40 on Blinky ran clean. *unused*:
+    a real variable this flow never reads ("Key 'X' provided is unused by the
+    current flow.")."""
+    if unused:
+        return {"code": "unknown-key", "key": key, "near": [], "hard": False,
+                "message": "%s sets %s, which no step of this flow reads, so it changes nothing." % (cfg_name, key),
+                "fix": "Remove it, or run the flow that uses it."}
+    try:
+        from . import introspect
+        near = nearest_names(key, introspect.known_var_names())
+    except Exception:
+        near = []
+    msg = ("%s sets %s, which this LibreLane doesn't know, so it is ignored: the run goes ahead as if it weren't "
+           "there." % (cfg_name, key))
+    return {"code": "unknown-key", "key": key, "near": near,
+            "message": msg + (" The nearest known name is %s." % near[0] if near else ""),
+            "fix": ("Rename it to %s in %s." % (near[0], cfg_name)) if near else
+                   ("Check the name against LibreLane's variables, or remove it from %s." % cfg_name),
+            "hard": False}
+
+
+# ---------------------------------------------------------------- floorplan and pins
+
+def _margin_negative(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [IFP-0013] Negative values not allowed for margins.  (forced: LEFT_MARGIN_MULT -1)
+    defaults = {"LEFT_MARGIN_MULT": 12, "RIGHT_MARGIN_MULT": 12, "TOP_MARGIN_MULT": 4, "BOTTOM_MARGIN_MULT": 4}
+    bad = [k for k in defaults if (_num(cfg.get(k)) or 0) < 0]
+    fixes = [_setting(k, cfg.get(k), defaults[k], "LibreLane's default: %d %s between the die edge and the core."
+                      % (defaults[k], "sites" if k.startswith(("LEFT", "RIGHT")) else "rows"),
+                      "Use the default margin", sure="fixes") for k in bad]
+    return {"title": "A core margin is negative",
+            "plain": "%s %s below zero. The margins are the gap between the die edge and the core, counted in "
+                     "placement sites (left and right) and rows (top and bottom), so they can't be negative."
+                     % (" and ".join(bad) or "A *_MARGIN_MULT setting", "is" if len(bad) <= 1 else "are"),
+            "fixes": fixes, "learn": ["core-margin"]}
+
+
+def _pin_order(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    cfg = ev.get("cfg") or {}
+    pcfg = str(cfg.get("IO_PIN_ORDER_CFG") or cfg.get("FP_PIN_ORDER_CFG") or "pin_order.cfg")
+    rel = _rel(pcfg, cfg)
+    g = _Groups(m)
+    fixes: List[Dict[str, Any]] = [_open("Open %s" % Path(rel).name, {"tab": "ide", "rel": rel, "line": 1},
+                                         "The pin order file: #N, #S, #E, #W, then one pin name or pattern per line.")]
+    if g.group("pin"):
+        pin = g.group("pin")
+        title = "%s doesn't place %s" % (Path(rel).name, pin)
+        plain = ("Every port of the top module has to match a line of %s (ERRORS_ON_UNMATCHED_IO is %s), and %s "
+                 "matches none, so the pins couldn't be placed." % (rel, cfg.get("ERRORS_ON_UNMATCHED_IO") or "unmatched_design", pin))
+        fixes[0]["why"] = "Add %s under the side it belongs on (#N, #S, #E or #W)." % pin
+        if str(cfg.get("ERRORS_ON_UNMATCHED_IO") or "unmatched_design") in ("unmatched_design", "both"):
+            fixes.append(_setting("ERRORS_ON_UNMATCHED_IO", cfg.get("ERRORS_ON_UNMATCHED_IO") or "unmatched_design",
+                                  "none", "Pins the file doesn't name are then placed by OpenROAD wherever it likes.",
+                                  "Place unnamed pins anywhere", sure="try"))
+    elif g.group("side"):
+        side = {"N": "north (top)", "S": "south (bottom)", "E": "east (right)", "W": "west (left)"}.get(g.group("side"), g.group("side"))
+        title = "Too many pins on the %s edge" % side.split(" ")[0]
+        plain = ("%s puts %s pins on the %s edge, which has room for %s. Move some to another side, or make the die "
+                 "wider there." % (rel, g.group("pins"), side, g.group("slots")))
+    else:
+        title = "Two lines of %s match the same pin" % Path(rel).name
+        plain = ("%s matches more than one line of %s (%s), so OpenROAD can't tell where it goes. Make the patterns "
+                 "narrower." % (g.group("dup"), rel, g.group("which")))
+    return {"title": title, "plain": plain, "evidence": [m.group(0).strip()[:300]], "fixes": fixes, "learn": ["pin"]}
+
+
+# ---------------------------------------------------------------- power grid
+
+def _pdn_0175(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [PDN-0175] Pitch 3.0000 is too small for, must be atleast 7.4000  (forced: PDN_VPITCH 3 on spm)
+    m = re.search(r"Pitch (\d+(?:\.\d+)?) is too small for,? must be at ?least (\d+(?:\.\d+)?)", msg)
+    fixes: List[Dict[str, Any]] = []
+    if not m:
+        return {"title": "A power-grid pitch is too small", "plain": "The pitch of the power straps is smaller than "
+                "the straps it has to hold.", "fixes": [], "learn": ["pdn", "strap"]}
+    have, need = float(m.group(1)), float(m.group(2))
+    var = next((k for k in ("PDN_VPITCH", "PDN_HPITCH") if _num(cfg.get(k)) is not None and abs(_num(cfg.get(k)) - have) < 1e-6), None)
+    names = var or "PDN_VPITCH or PDN_HPITCH"
+    plain = ("%s is %s µm, and one group of straps (power and ground, each with its width and the spacing between) "
+             "needs at least %s µm, so they would overlap." % (names, fmt(have), fmt(need)))
+    if var:
+        dflt = _num(_pdk_default(cfg, var))
+        to = dflt if dflt and dflt >= need else _round_up(need, 1.0)
+        fixes.append(_setting(var, have, to, ("The PDK's own pitch." if dflt and dflt >= need else
+                                              "The smallest pitch the straps fit in, rounded up.") ,
+                              "Widen the strap pitch", sure="fixes"))
+    return {"title": "The power straps don't fit in their pitch", "plain": plain, "fixes": fixes, "learn": ["pdn", "strap"]}
+
+
+def _pdn_0351(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [PDN-0351] PDN rings do not fit inside the die area by {x} um in X and {y} um in Y. … (pdn/src/rings.cpp)
+    m = re.search(r"by (\d+(?:\.\d+)?) um in X and (\d+(?:\.\d+)?) um in Y", msg)
+    fixes: List[Dict[str, Any]] = []
+    if cfg.get("PDN_CORE_RING"):
+        fixes.append(_setting("PDN_CORE_RING", True, False, "No ring around the core: the straps connect to the "
+                              "rails directly, as LibreLane does by default.", "No core ring", sure="likely"))
+    fixes.append(_open("Open the die size", {"tab": "setup", "setting": "DIE_AREA"}, "A bigger die, or bigger core "
+                       "margins (*_MARGIN_MULT), leaves room for the ring."))
+    return {"title": "The core ring doesn't fit between the core and the die edge",
+            "plain": "PDN_CORE_RING draws a power ring in the margin around the core, and the ring needs %s more than "
+                     "the margins leave." % (("%s µm across and %s µm up" % (m.group(1), m.group(2))) if m else "more room"),
+            "fixes": fixes, "learn": ["pdn", "core-margin"]}
+
+
+def _pdn_macro_grid(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [PDN-0233] Failed to generate full power grid. after [WARNING PDN-0232]
+    # The grid "{}" ({}) does not contain any shapes or vias. (PdnGen.cc)
+    log = (ev or {}).get("log") or ""
+    g = re.search(r'PDN-0232\][^\n]*The grid "([^"]+)"', log + "\n" + msg)
+    grid = g.group(1) if g else None
+    return {"title": "The power grid for %s came out empty" % (grid or "a macro"),
+            "plain": "OpenROAD built the grid%s but nothing in it connected: the layers it joins don't reach the "
+                     "macro's power pins. Check the macro's power connections (PDN_MACRO_CONNECTIONS) and the layers "
+                     "of its power pins in its LEF." % ((" \"%s\"" % grid) if grid else ""),
+            "fixes": [_open("Show the macros", {"tab": "cells", "section": "cl-macros"},
+                            "Each macro's power pins and how they are hooked to the grid.")],
+            "learn": ["pdn", "macro"]}
+
+
+def _pdn_unplaced(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [PDN-0235] Design has unplaced macros. after [WARNING PDN-0234] {} has not been placed and fixed.
+    log = (ev or {}).get("log") or ""
+    names = re.findall(r"PDN-0234\]\s+(\S+) has not been placed", log + "\n" + msg)
+    who = ", ".join(names[:4]) + (" …" if len(names) > 4 else "") if names else "a macro"
+    return {"title": "%s has no position" % (names[0] if len(names) == 1 else "Some macros have" if names else "A macro"),
+            "plain": "LibreLane doesn't place macros by itself: every macro instance needs a location (MACROS, its "
+                     "instances), and %s has none, so the power grid can't be built around it." % who,
+            "fixes": [_open("Show the macros", {"tab": "cells", "section": "cl-macros"},
+                            "Arrange places them inside the core; the positions are saved in the config.")],
+            "learn": ["macro"]}
+
+
+def _macro_instance(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    log = (ev.get("log") or "") + "\n" + (ev.get("text") or "")
+    names = re.findall(r"^\s*\*\s+(\S+)\s*$", log, re.M)[:4] or ([m.group("inst")] if _Groups(m).group("inst") else [])
+    return {"title": "MACROS names an instance the netlist doesn't have",
+            "plain": "The macro settings place %s, and synthesis made no instance by that name. After synthesis the "
+                     "names are flattened paths of the Verilog instances (u_core.u_sram), not the LEF's cell name."
+                     % (", ".join(names) or "an instance"),
+            "evidence": [m.group(0).strip()[:300]],
+            "fixes": [_open("Show the macros", {"tab": "cells", "section": "cl-macros"},
+                            "Each macro's instances, checked against the netlist's names.")],
+            "learn": ["macro", "hierarchy"]}
+
+
+# ---------------------------------------------------------------- resizer, routing, placement
+
+def _rsz_0090(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [RSZ-0090] Max transition time from SDC is 0.010ns. Best achievable
+    # transition time is 0.033ns with a load of 0.00pF  (forced: MAX_TRANSITION_CONSTRAINT 0.01)
+    m = re.search(r"Max transition time from SDC is (\d+(?:\.\d+)?)ns\. Best achievable transition time is "
+                  r"(\d+(?:\.\d+)?)ns", msg)
+    want, best = (m.group(1), m.group(2)) if m else ("?", "?")
+    fixes: List[Dict[str, Any]] = []
+    sdc = cfg.get("PNR_SDC_FILE")
+    own_sdc = False
+    if sdc:
+        try:
+            own_sdc = "set_max_transition" in Path(str(sdc)).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            own_sdc = False
+    plain = ("The constraints ask every signal to switch in %s ns, and the fastest buffer in the library manages %s "
+             "ns even with no load, so design repair can't meet the limit anywhere. " % (want, best))
+    if own_sdc:
+        rel = _rel(str(sdc), cfg)
+        plain += "The limit is in the design's own SDC (%s, set_max_transition)." % rel
+        fixes.append(_open("Open %s" % Path(rel).name, {"tab": "ide", "rel": rel, "line": 1},
+                           "Raise set_max_transition to the PDK's limit, or remove it."))
+    else:
+        cur = cfg.get("MAX_TRANSITION_CONSTRAINT")
+        dflt = _pdk_default(cfg, "MAX_TRANSITION_CONSTRAINT")
+        plain += "The limit comes from MAX_TRANSITION_CONSTRAINT (%s ns)." % fmt(cur)
+        if _num(dflt) is not None and fmt(dflt) != fmt(cur):
+            fixes.append(_setting("MAX_TRANSITION_CONSTRAINT", cur, dflt, "The PDK's own limit for this library.",
+                                  "Use the PDK's slew limit", sure="fixes"))
+        else:
+            fixes.append(_open("Open the setting", {"tab": "setup", "setting": "MAX_TRANSITION_CONSTRAINT"},
+                               "Remove it to use the library's own limits."))
+    return {"title": "The slew limit is tighter than any buffer can drive", "plain": plain, "fixes": fixes,
+            "learn": ["slew", "resizer"]}
+
+
+def _rsz_util(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [ERROR RSZ-0025] max utilization reached. (RepairSetup; 0050 RepairHold, 0125 RecoverPower)
+    caps = [k for k in ("DESIGN_REPAIR_MAX_UTILIZATION", "PL_RESIZER_SETUP_MAX_UTIL_PCT", "PL_RESIZER_HOLD_MAX_UTIL_PCT",
+                        "GRT_RESIZER_SETUP_MAX_UTIL_PCT", "GRT_RESIZER_HOLD_MAX_UTIL_PCT") if cfg.get(k) not in (None, "")]
+    return {"title": "Timing repair hit the utilization cap",
+            "plain": "The repair step stops adding and growing cells once the core is as full as a cap allows%s. It "
+                     "stopped with violations still left." % ((" (" + ", ".join(caps) + ")") if caps else ""),
+            "fixes": [_open("Open the setting", {"tab": "setup", "setting": caps[0]}, "Raise or remove the cap.")] if caps
+            else [_open("Open the die size", {"tab": "setup", "setting": "FP_CORE_UTIL"}, "A bigger core leaves the "
+                        "repair room.")],
+            "learn": ["resizer", "utilization"]}
+
+
+def _route_fixes(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Room for the router, in the order that usually helps: congestion
+    allowed through global routing first (the detailed router inherits an
+    impossible plan), then spread cells, then a bigger core, then layers."""
+    fixes: List[Dict[str, Any]] = []
+    if cfg.get("GRT_ALLOW_CONGESTION") is True:
+        fixes.append(_setting("GRT_ALLOW_CONGESTION", True, False, "Global routing was allowed to finish congested, so "
+                              "the detailed router got a plan it couldn't route. Turned off, the run stops at global "
+                              "routing and shows where.", "Stop at congestion", sure="try"))
+    dens = _num(cfg.get("PL_TARGET_DENSITY_PCT"))
+    if dens and dens > 30:
+        fixes.append(_setting("PL_TARGET_DENSITY_PCT", dens, int(max(20, dens - 10)),
+                              "Spread the cells out, so fewer wires cross any one place.", "Spread the cells", sure="try"))
+    core = _num(cfg.get("FP_CORE_UTIL"))
+    if str(cfg.get("FP_SIZING") or "relative") != "absolute" and core and core > 25:
+        fixes.append(_setting("FP_CORE_UTIL", core, int(max(20, core - 10)),
+                              "A bigger core leaves more room for wires.", "Make the core bigger", sure="likely"))
+    elif str(cfg.get("FP_SIZING") or "relative") == "absolute":
+        big = _bigger_die(cfg, 1.2, "A die 20 % wider and taller: more room for wires.")
+        if big:
+            big["sure"] = "likely"
+            fixes.append(big)
+    return fixes
+
+
+def _grt_congestion(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # GRT-0116 Global routing finished with congestion; GRT-0228/0229 edge usage over the maximum.
+    return {"title": "Routing is too congested",
+            "plain": "Global routing found more wires than the metal layers have room for in some places, so the "
+                     "detailed router would leave shorts and opens there.",
+            "fixes": _route_fixes(cfg) + [_open("Show the layout before routing", {"tab": "layout"},
+                                                "Where the cells are packed; congestion follows them.")],
+            "learn": ["congestion", "global-routing"]}
+
+
+def _drt_access(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [ERROR DRT-0073] No access point for _123_/A (sky130_fd_sc_hd__nand2_1). (drt FlexPA_acc_point.cpp)
+    m = re.search(r"No access point for (\S+)", msg)
+    pin = m.group(1) if m else "a pin"
+    return {"title": "The router can't reach pin %s" % pin,
+            "plain": "The detailed router found no legal way onto %s. Usually a cell pressed against a macro or a "
+                     "blockage, or a macro placed off the routing grid." % pin,
+            "fixes": [_open("Show the layout before routing", {"tab": "layout"}, "Find the cell; look at what is next to it."),
+                      _open("Show the macros", {"tab": "cells", "section": "cl-macros"},
+                            "A macro moved onto the routing grid, or given a halo, usually clears it.")],
+            "learn": ["detailed-routing", "macro"]}
+
+
+def _drt_special(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [ERROR DRT-0305] Net {} of signal type {} is not routable by TritonRoute. Move to special nets.
+    m = re.search(r"Net (\S+) of signal type (\S+) is not routable", msg)
+    net = m.group(1) if m else "a net"
+    return {"title": "A power net is wired as a signal (%s)" % net,
+            "plain": "%s is a power or ground net, and nothing connected it to the power grid, so the signal router "
+                     "was asked to route it and can't. Usually a macro's power pin with no power connection "
+                     "(PDN_MACRO_CONNECTIONS)." % net,
+            "fixes": [_open("Show the macros", {"tab": "cells", "section": "cl-macros"}, "How each macro's power pins are hooked up.")],
+            "learn": ["pdn", "macro"]}
+
+
+def _drt_offgrid(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [ERROR DRT-0416] Term {} contains offgrid pin shape. …
+    return {"title": "A macro's pin is off the manufacturing grid",
+            "plain": "A pin shape in a LEF isn't on the PDK's manufacturing grid, so the router can't connect to it. "
+                     "The LEF is the problem, not the settings: regenerate the macro, or ask whoever made it.",
+            "fixes": [_open("Show the macros", {"tab": "cells", "section": "cl-macros"}, "The macros and their LEF files.")],
+            "learn": ["lef-def", "macro"]}
+
+
+def _gpl_0304(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [ERROR GPL-0304] RePlAce diverged at initial iteration with steplength being {}. …
+    fixes: List[Dict[str, Any]] = []
+    dens = _num(cfg.get("PL_TARGET_DENSITY_PCT"))
+    if dens and dens < 90:
+        fixes.append(_setting("PL_TARGET_DENSITY_PCT", dens, int(min(95, dens + 10)),
+                              "A little more room for the placer's first steps.", "Loosen the target density", sure="try"))
+    return {"title": "Global placement diverged at the start",
+            "plain": "The global placer's very first step blew up, which happens with a very small design, an odd die "
+                     "shape or a density target the design can't reach.",
+            "fixes": fixes, "learn": ["global-placement", "placement-density"]}
+
+
+def _dpl_0015(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # [ERROR DPL-0015] instance {} does not fit inside the ROW core area.
+    m = re.search(r"instance (\S+) does not fit inside the ROW core area", msg)
+    return {"title": "%s doesn't fit in the core's rows" % (m.group(1) if m else "A cell"),
+            "plain": "A cell or macro is bigger than the area the rows cover, so detailed placement has nowhere to put "
+                     "it. Usually a macro on a die that is too small for it.",
+            "fixes": [_open("Open the die size", {"tab": "setup", "setting": "DIE_AREA"}, "Setup's die and core settings.")],
+            "learn": ["row-site", "core"]}
+
+
+def _corner_wildcard(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    var = m.group("var")
+    base = "TIMING_VIOLATION_CORNERS" if var.endswith("VIOLATION_CORNERS") else var
+    return {"title": "%s names no corner of this PDK" % var,
+            "plain": "%s (or %s, which it defaults to) lists corner patterns, and one of them matches none of this "
+                     "PDK's timing corners, so LibreLane failed the run at the end. The corners are named like "
+                     "nom_tt_025C_1v80." % (var, base),
+            "evidence": [m.group(0).strip()[:300]],
+            "fixes": [_open("Open the setting", {"tab": "setup", "setting": base}, "Use patterns such as *tt*, or remove it.")],
+            "learn": ["corner"]}
+
+
 def _env(title: str, plain: str, fixes: Optional[List[Dict[str, Any]]] = None):
     return lambda ev, m: {"title": title, "plain": plain, "fixes": list(fixes or []), "learn": [],
                           "evidence": [m.group(0).strip()[:300]]}
@@ -486,47 +992,150 @@ def _code_card(fn):
     return lambda ev, m: fn(ev.get("text") or "", ev.get("cfg") or {}, ev)
 
 
+_VL_LATCH_RX = re.compile(r"%Error-LATCH: (?P<file>" + _SRC + r"):(?P<line>\d+):\d+: Latch inferred for signal '(?P<sig>[^']+)'[^\n]{0,160}")
+_VL_MODMISSING_RX = re.compile(r"%Error-MODMISSING: (?P<file>" + _SRC + r"):(?P<line>\d+):\d+: Cannot find file containing "
+                               r"module: '(?P<mod>[^']+)'")
+_YS_MODMISSING_RX = re.compile(r"ERROR: Module `(?P<mod>[^'\s]+)' referenced in module `(?P<parent>[^'\s]+)' in cell "
+                               r"`[^'\s]+' is not part of the design\.")
+_INCLUDE_RX = re.compile(r"%Error: (?P<file>" + _SRC + r"):(?P<line>\d+):\d+: Cannot find include file: '(?P<inc>[^']+)'"
+                         r"|(?:(?P<file2>" + _SRC + r"):(?P<line2>\d+): )?ERROR: Can't open include file `(?P<inc2>[^']+)'!")
+_IMPLICIT_RX = re.compile(r"^(?P<file>" + _SRC + r"):(?P<line>\d+): ERROR: Identifier `(?P<sig>[^']+)' is implicitly declared",
+                          re.M)
+_REDEF_RX = re.compile(r"^(?P<file>" + _SRC + r"):(?P<line>\d+): ERROR: Re-definition of module `(?P<mod>[^']+)'!", re.M)
+_SV_TOK_RX = re.compile(r"^(?P<file>" + _SRC + r"):(?P<line>\d+): ERROR: syntax error, unexpected TOK_(?P<tok>IMPORT|INTERFACE)\b",
+                        re.M)
+_PIN_ORDER_RX = re.compile(r"(?P<pin>[^\s\]]+) not found in config but found in design\."
+                           r"|The (?P<side>[NSEW]) side of the floorplan doesn't have enough slots for all the pins: "
+                           r"(?P<pins>\d+) pins/(?P<slots>\d+) slots"
+                           r"|Multiple regexes matched (?P<dup>\S+)\. Those are (?P<which>[^\n]{0,200})")
+
 # What LanEx knows about a step that raised, in order: the first entry that
 # matches wins. ``code``: the OpenROAD message id; ``rx``: the tool's own words
 # (searched in the error text, then the step's log); ``steps``: only for these
-# step ids. ``source`` says where the words were checked (LibreLane 3.0.4).
+# step ids. ``source`` says where the words were checked (LibreLane 3.0.4):
+# "forced: …" is a failure made on a real run (tests/goldens/failures).
+# ``about`` is the entry's one line for Help's error index, ``stage`` where it
+# stops a run, ``also`` other codes that get the same card.
 KB: List[Dict[str, Any]] = [
     {"id": "gpl-0301", "code": "GPL-0301", "fn": lambda ev, m: _gpl_0301(ev.get("text") or "", ev.get("cfg") or {}),
-     "source": "forced: FP_CORE_UTIL 140 on spm"},
+     "source": "forced: FP_CORE_UTIL 140 on spm", "stage": "placement",
+     "about": "The cells, with any padding, need more area than the core has."},
+    {"id": "gpl-0304", "code": "GPL-0304", "fn": _code_card(_gpl_0304), "stage": "placement",
+     "source": "OpenROAD dcf36133 gpl (text)", "about": "The global placer's first step diverged."},
     {"id": "dpl-0036", "code": "DPL-0036", "fn": _code_card(_dpl_0036),
-     "source": "forced: sweep point FP_CORE_UTIL 70 (in OpenROAD.CTS)"},
-    {"id": "grt-0116", "code": "GRT-0116", "fn": _code_card(_grt_0116), "source": "OpenROAD in the 3.0.4 image"},
-    {"id": "pdn-0185", "code": "PDN-0185", "fn": _code_card(_pdn_0185), "source": "forced: 30 x 30 um die"},
+     "source": "forced: sweep point FP_CORE_UTIL 70 (in OpenROAD.CTS)", "stage": "placement",
+     "about": "Detailed placement found no legal row position for some cells."},
+    {"id": "dpl-0015", "code": "DPL-0015", "fn": _code_card(_dpl_0015), "stage": "placement",
+     "source": "OpenROAD dcf36133 dpl (text)", "about": "A cell or macro is bigger than the rows."},
+    {"id": "grt-0116", "code": "GRT-0116", "also": ["GRT-0228", "GRT-0229"], "fn": _code_card(_grt_congestion),
+     "source": "OpenROAD in the 3.0.4 image", "stage": "routing",
+     "about": "Global routing ran out of room on the metal layers."},
+    {"id": "drt-0073", "code": "DRT-0073", "fn": _code_card(_drt_access), "stage": "routing",
+     "source": "OpenROAD dcf36133 drt (text)", "about": "The detailed router can't reach a pin."},
+    {"id": "drt-0305", "code": "DRT-0305", "fn": _code_card(_drt_special), "stage": "routing",
+     "source": "OpenROAD dcf36133 drt (text)", "about": "A power or ground net reached the signal router."},
+    {"id": "drt-0416", "code": "DRT-0416", "fn": _code_card(_drt_offgrid), "stage": "routing",
+     "source": "OpenROAD dcf36133 drt (text)", "about": "A macro pin is off the manufacturing grid."},
+    {"id": "pdn-0185", "code": "PDN-0185", "fn": _code_card(_pdn_0185), "source": "forced: 30 x 30 um die",
+     "stage": "pdn", "about": "The die is too small for the power straps."},
+    {"id": "pdn-0175", "code": "PDN-0175", "fn": _code_card(_pdn_0175), "source": "forced: PDN_VPITCH 3 on spm",
+     "stage": "pdn", "about": "A strap pitch is smaller than the straps it holds."},
     {"id": "pdn-0179", "code": "PDN-0179", "rx": re.compile(r"Unable to repair all channels\."), "fn": _code_card(_pdn_0179),
-     "source": "text in the 3.0.4 image's OpenROAD (pdn)"},
-    {"id": "ppl-0024", "code": "PPL-0024", "fn": _code_card(_ppl_0024), "source": "forced: 602 pins on a 60 um die"},
-    {"id": "ifp-0002", "code": "IFP-0002", "fn": _code_card(_ifp_core), "source": "forced: CORE_AREA 10 10 5 5"},
-    {"id": "ifp-0055", "code": "IFP-0055", "fn": _code_card(_ifp_core), "source": "forced: CORE_AREA past DIE_AREA"},
+     "source": "text in the 3.0.4 image's OpenROAD (pdn)", "stage": "pdn",
+     "about": "The straps can't pass through a gap between macros."},
+    {"id": "pdn-0233", "code": "PDN-0233", "fn": _code_card(_pdn_macro_grid), "stage": "pdn",
+     "source": "OpenROAD dcf36133 pdn PdnGen.cc (text)", "about": "A macro's power grid came out empty."},
+    {"id": "pdn-0235", "code": "PDN-0235", "fn": _code_card(_pdn_unplaced), "stage": "pdn",
+     "source": "OpenROAD dcf36133 pdn PdnGen.cc (text)", "about": "A macro has no position."},
+    {"id": "pdn-0351", "code": "PDN-0351", "fn": _code_card(_pdn_0351), "stage": "pdn",
+     "source": "OpenROAD dcf36133 pdn rings.cpp (text)", "about": "The core ring doesn't fit inside the die."},
+    {"id": "ppl-0024", "code": "PPL-0024", "fn": _code_card(_ppl_0024), "source": "forced: 602 pins on a 60 um die",
+     "stage": "floorplan", "about": "The die's edge has fewer pin places than the design has pins."},
+    {"id": "ifp-0002", "code": "IFP-0002", "fn": _code_card(_ifp_core), "source": "forced: CORE_AREA 10 10 5 5",
+     "stage": "floorplan", "about": "A cell is bigger than the whole core."},
+    {"id": "ifp-0013", "code": "IFP-0013", "fn": _code_card(_margin_negative), "source": "forced: LEFT_MARGIN_MULT -1 on blinky",
+     "stage": "floorplan", "about": "A core margin is negative."},
+    {"id": "ifp-0055", "code": "IFP-0055", "fn": _code_card(_ifp_core), "source": "forced: CORE_AREA past DIE_AREA",
+     "stage": "floorplan", "about": "CORE_AREA reaches outside DIE_AREA."},
     {"id": "ifp-margins", "code": "STA-0572", "rx": re.compile(r"-core_area '[^']*' is not a positive float"),
-     "fn": _code_card(_ifp_core), "source": "forced: DIE_AREA 0 0 8 8"},
-    {"id": "cts-0127", "code": "CTS-0127", "fn": _code_card(_cts_0127), "source": "forced: CTS_CLK_BUFFERS names no cell"},
-    {"id": "rsz-0022", "code": "RSZ-0022", "fn": _code_card(_rsz_0022), "source": "forced: every buffer excluded"},
+     "fn": _code_card(_ifp_core), "source": "forced: DIE_AREA 0 0 8 8", "stage": "floorplan",
+     "about": "The die is smaller than its margins: no core is left."},
+    {"id": "cts-0127", "code": "CTS-0127", "also": ["CTS-0126", "CTS-0074"], "fn": _code_card(_cts_0127),
+     "source": "forced: CTS_CLK_BUFFERS names no cell", "stage": "cts",
+     "about": "The clock tree names a buffer the library doesn't have."},
+    {"id": "rsz-0022", "code": "RSZ-0022", "fn": _code_card(_rsz_0022), "source": "forced: every buffer excluded",
+     "stage": "placement", "about": "Every buffer of the library is excluded."},
+    {"id": "rsz-0090", "code": "RSZ-0090", "fn": _code_card(_rsz_0090), "source": "forced: MAX_TRANSITION_CONSTRAINT 0.01 on blinky",
+     "stage": "placement", "about": "The slew limit is tighter than any buffer can drive."},
+    {"id": "rsz-util", "code": "RSZ-0025", "also": ["RSZ-0050", "RSZ-0125"], "fn": _code_card(_rsz_util),
+     "source": "OpenROAD dcf36133 rsz (text)", "stage": "cts", "about": "Timing repair hit a utilization cap."},
+    {"id": "macro-instance",
+     "rx": re.compile(r"One or more instances not found\. Make sure you use their Verilog and not their LEF names\."
+                      r"|No macro instance (?P<inst>\S+) found"),
+     "fn": _macro_instance, "source": "LibreLane 3.0.4 placers.py and check_macro_instances.tcl (text)",
+     "stage": "floorplan", "about": "The macro settings name an instance synthesis didn't make."},
+    {"id": "pin-order", "rx": _PIN_ORDER_RX, "fn": _pin_order, "source": "forced: clk left out of spm's pin_order.cfg",
+     "stage": "floorplan", "about": "The pin order file doesn't match the design's ports."},
+    # RTL the tools refused. The coded Verilator errors and Yosys's own
+    # wording come before the general syntax rule, which would also match them.
+    {"id": "latch", "rx": _VL_LATCH_RX, "fn": _latch, "source": "forced: an always @(*) without else on blinky",
+     "stage": "synthesis", "about": "An always block leaves a signal unassigned on some path: a latch."},
+    {"id": "module-missing", "rx": _VL_MODMISSING_RX, "fn": _modmissing_vl,
+     "source": "forced: blinky instantiates a module no file declares (linter on)", "stage": "synthesis",
+     "about": "The design uses a module no design file declares."},
+    {"id": "module-missing-yosys", "rx": _YS_MODMISSING_RX, "fn": _modmissing_ys,
+     "source": "forced: the same with RUN_LINTER false", "stage": "synthesis",
+     "about": "The design uses a module no design file declares.", "hidden": True},
+    {"id": "include-missing", "rx": _INCLUDE_RX, "fn": _include_missing, "source": "forced: blinky includes a missing header",
+     "stage": "synthesis", "about": "An `include names a file that isn't found."},
+    {"id": "implicit-wire", "rx": _IMPLICIT_RX, "fn": _implicit, "source": "forced: an undeclared wire on blinky",
+     "stage": "synthesis", "about": "A wire is used without being declared; lint only warns, synthesis stops."},
+    {"id": "module-twice", "rx": _REDEF_RX, "fn": _redefined, "source": "forced: an old copy of blinky.v in src/",
+     "stage": "synthesis", "about": "Two design files declare the same module."},
+    {"id": "sv-frontend", "rx": _SV_TOK_RX, "fn": _sv_frontend, "source": "forced: import inside a module, USE_SLANG false",
+     "stage": "synthesis", "about": "SystemVerilog the default Yosys reader doesn't take (import, interfaces)."},
     # Verilator (%Error: f.v:67:13: syntax error, …) and Yosys (f.v:67: ERROR: …).
     {"id": "verilog-error", "rx": _VERILOG_RX, "fn": lambda ev, m: _verilog_error(ev, _Groups(m)),
-     "source": "forced: a missing semicolon, linter on and off"},
+     "source": "forced: a missing semicolon, linter on and off", "stage": "synthesis",
+     "about": "A syntax error, or anything else the RTL readers refuse, with its file and line."},
+    # The config doesn't load: LibreLane stops before the first step.
+    {"id": "config-value",
+     "rx": re.compile(r"Value provided for variable '(?P<var>[A-Z0-9_]+)(?:\[\d+\])?' of type (?P<type>\w+) is invalid: "
+                      r"'(?P<val>[^'\n]{0,120})'"),
+     "fn": _bad_value, "source": "forced: FP_CORE_UTIL \"abc\" on blinky", "stage": "config",
+     "about": "A setting has a value of the wrong type."},
+    {"id": "config-required", "rx": re.compile(r"Required variable '(?P<var>[A-Z0-9_]+)' did not get a specified value"),
+     "fn": _required, "source": "LibreLane 3.0.4 config/config.py (text)", "stage": "config",
+     "about": "A setting LibreLane needs isn't set."},
+    {"id": "pdk-missing", "rx": re.compile(r"The PDK (?P<pdk>[^\s.]+(?:\.[^\s.]+)*) was not found\."),
+     "fn": _pdk_missing, "source": "forced: PDK sky130C on blinky", "stage": "config",
+     "about": "The PDK the run asks for isn't installed."},
+    {"id": "corner-wildcard", "rx": re.compile(r"One or more wildcards specified in (?P<var>[A-Z_]+) did not match any corners"),
+     "fn": _corner_wildcard, "source": "forced: TIMING_VIOLATION_CORNERS [*xyz*] on blinky", "stage": "signoff",
+     "about": "A corner setting matches none of the PDK's timing corners."},
     {"id": "top-missing",
      "rx": re.compile(r"(?:Specified --top-module '(?P<top>[^']+)' was not found in design"
                       r"|ERROR: Module `(?P<top2>[^']+)' not found!)"),
-     "fn": lambda ev, m: _top_missing(ev, _Groups(m)), "source": "forced: DESIGN_NAME spm_top, linter on and off"},
+     "fn": lambda ev, m: _top_missing(ev, _Groups(m)), "source": "forced: DESIGN_NAME spm_top, linter on and off", "stage": "synthesis",
+     "about": "DESIGN_NAME names a module no design file declares."},
     {"id": "path-missing",
      "rx": re.compile(r"Path provided for variable '(?P<var>[A-Z0-9_]+)(?:\[\d+\])?' is invalid: '(?P<path>[^']+)' does not exist"),
-     "fn": _path_missing, "source": "forced: VERILOG_FILES a missing file, and a glob matching nothing"},
+     "fn": _path_missing, "source": "forced: VERILOG_FILES a missing file, and a glob matching nothing", "stage": "config",
+     "about": "A file the config lists isn't there, or a pattern matches no file."},
     {"id": "disk-full", "rx": re.compile(r"No space left on device|\[Errno 28\][^\n]*|Disk quota exceeded"),
-     "fn": _disk_text, "source": "forced: runs/ on a 4 MB tmpfs (OSError: [Errno 28])"},
+     "fn": _disk_text, "source": "forced: runs/ on a 4 MB tmpfs (OSError: [Errno 28])", "stage": "any",
+     "about": "The disk the run writes to is full."},
     {"id": "oom", "rx": re.compile(r"std::bad_alloc|Interrupted \(SIGKILL\)|MemoryError|Cannot allocate memory|exit code 137\b"),
-     "fn": _oom_text, "source": "LibreLane 3.0.4 step.py (Interrupted (signal)); forced: docker --memory 150m (exit 137)"},
+     "fn": _oom_text, "source": "LibreLane 3.0.4 step.py (Interrupted (signal)); forced: docker --memory 150m (exit 137)", "stage": "any",
+     "about": "The system ran out of memory and stopped the tool."},
     {"id": "docker-permission",
      "rx": re.compile(r"permission denied while trying to connect to the docker[^\n]*", re.I),
      "fn": _env("This user can't use Docker",
                 "Docker is running, but this user isn't allowed to talk to it: Linux lets only root and the members of "
                 "the docker group use it. Add yourself to the group (sudo usermod -aG docker $USER), then log out "
                 "and back in (on Windows: wsl --shutdown, then start LanEx again).", _TOOLS_FIX),
-     "source": "text in the docker CLI on this PC"},
+     "source": "text in the docker CLI on this PC", "stage": "engine",
+     "about": "This user isn't allowed to use Docker."},
     {"id": "image-pull",
      "rx": re.compile(r"Failed to pull image '[^']+'[^\n]*|Failed to use image '[^']+'|Couldn't connect to the internet to pull "
                       r"container images|manifest unknown|pull access denied[^\n]*|toomanyrequests[^\n]*", re.I),
@@ -534,23 +1143,27 @@ KB: List[Dict[str, Any]] = [
                 "Container mode runs every tool inside LibreLane's image, and it couldn't be downloaded. Check the "
                 "internet connection (and any proxy), then pull it again from Tools. \"toomanyrequests\" means the "
                 "registry is limiting downloads: wait a while.", _TOOLS_FIX),
-     "source": "LibreLane 3.0.4 container.py; docker's own words"},
+     "source": "LibreLane 3.0.4 container.py; docker's own words", "stage": "engine",
+     "about": "The LibreLane container image couldn't be downloaded."},
     {"id": "no-engine", "rx": re.compile(r"No compatible container engine found\."),
      "fn": _env("No container engine is installed",
                 "Container mode needs Docker or Podman, and neither was found. Install one from Tools, or switch the "
                 "engine to Local tools in the Run menu.", _TOOLS_FIX),
-     "source": "LibreLane 3.0.4 container.py"},
+     "source": "LibreLane 3.0.4 container.py", "stage": "engine",
+     "about": "Neither Docker nor Podman is installed."},
     {"id": "engine-down",
      "rx": re.compile(r"cannot connect to the docker daemon[^\n]*|is the docker daemon running|cannot connect to podman[^\n]*"
                       r"|error during connect[^\n]*", re.I),
      "fn": _env("The container engine isn't running",
                 "Container mode needs Docker or Podman running. Start it (or switch the engine to Local tools in the "
                 "Run menu), then run again.", _TOOLS_FIX),
-     "source": "the docker CLI's words"},
+     "source": "the docker CLI's words", "stage": "engine",
+     "about": "The container engine isn't running."},
     {"id": "windows-docker", "rx": re.compile(r"--dockerized is not supported on windows", re.I),
      "fn": _env("Containers need WSL on Windows",
                 "LibreLane's container mode needs a Linux container engine; run LanEx inside its WSL appliance."),
-     "source": "LibreLane 3.0.4"},
+     "source": "LibreLane 3.0.4", "stage": "engine",
+     "about": "Container mode needs LanEx's WSL environment on Windows."},
 ]
 
 
@@ -576,7 +1189,7 @@ _MISSING_RX = re.compile(r"\b(" + "|".join(_LOCAL_TOOLS) + r")\b[^\n]{0,40}(comm
 def _match(rule: Dict[str, Any], ev: Dict[str, Any], code: Optional[str]) -> Any:
     if rule.get("steps") and not any(str(ev.get("step") or "").startswith(s) for s in rule["steps"]):
         return None
-    if rule.get("code") and code == rule["code"]:
+    if code and code in [rule.get("code")] + list(rule.get("also") or []):
         return True
     rx = rule.get("rx")
     if rx is None:
@@ -605,7 +1218,7 @@ def explain_error(text: str, cfg: Dict[str, Any], *, step: Optional[str] = None,
             continue
         card = rule["fn"](ev, hit)
         if card is not None:
-            card["kb"] = rule["id"]
+            card.setdefault("kb", rule["id"])
             break
     if card is None:
         tool = _MISSING_RX.search(text or "")
@@ -763,6 +1376,8 @@ def _note_sta_0366(text: str, cfg: Optional[Dict[str, Any]] = None) -> Optional[
         return None
     port, clk = m.group(1), (cfg or {}).get("CLOCK_PORT")
     if port == "__VIRTUAL_CLK__":
+        if not clocked_logic(cfg or {}):
+            return combinational_note(cfg or {})
         return ("No clock port is set (CLOCK_PORT is empty), so LibreLane timed the design against a made-up clock. "
                 "Registers clocked by a real input were never checked. Set CLOCK_PORT if the design has a clock.")
     if clk and port in (clk if isinstance(clk, list) else [clk]):
@@ -772,13 +1387,46 @@ def _note_sta_0366(text: str, cfg: Optional[Dict[str, Any]] = None) -> Optional[
     return "The SDC names a port '%s' that the design doesn't have; that constraint did nothing." % port
 
 
+_CLOCKED_RX = re.compile(r"\b(?:posedge|negedge|always_ff|always_latch)\b")
+
+
+def clocked_logic(cfg: Dict[str, Any]) -> Optional[bool]:
+    """Whether the run's RTL has any clocked block (an edge, always_ff or a
+    latch); None when no source could be read."""
+    seen = False
+    for f in cfg.get("VERILOG_FILES") or []:
+        try:
+            text = Path(str(f)).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        seen = True
+        if _CLOCKED_RX.search(re.sub(r"//[^\n]*|/\*.*?\*/", "", text, flags=re.S)):
+            return True
+    if seen and any(re.search(r"clk|clock", p, re.I) for p in _top_ports(cfg)["input"]):
+        return None        # an input named like a clock: not sure it is pure logic
+    return False if seen else None
+
+
+def combinational_note(cfg: Dict[str, Any]) -> str:
+    """A design with no register: its paths are still timed, from the inputs
+    to the outputs, against base.sdc's virtual clock. Said as information,
+    not as a problem (the 7-segment template is such a design)."""
+    per, io = fmt(cfg.get("CLOCK_PERIOD") or 10), fmt(cfg.get("IO_DELAY_CONSTRAINT") or 20)
+    return ("A design with no clock: LibreLane timed the paths from the inputs to the outputs against a virtual "
+            "clock of %s ns, with %s %% of it given to the outside world on each side (IO_DELAY_CONSTRAINT). That "
+            "is what the timing results measure." % (per, io))
+
+
 def _note_cts_0083(text: str, cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
     # [WARNING CTS-0083] No clock nets have been found.  (forced: CLOCK_PORT clock)
+    if not (cfg or {}).get("CLOCK_PORT") and clocked_logic(cfg or {}) is False:
+        return "No clock tree was needed: the design has no registers."
     return ("The clock tree step found no clock net, so no clock tree was built: the registers' clock pins are "
             "driven straight from the pin. Usually CLOCK_PORT doesn't name the clock input.")
 
 
-WARNING_NOTES = {"GPL-0302": _note_gpl_0302, "STA-0366": _note_sta_0366, "CTS-0083": _note_cts_0083}
+WARNING_NOTES = {"GPL-0302": _note_gpl_0302, "STA-0366": _note_sta_0366, "CTS-0083": _note_cts_0083,
+                 "CTS-0082": _note_cts_0083}
 
 
 # ---------------------------------------------------------------- timing
@@ -1174,9 +1822,16 @@ def checker_note(rep: Dict[str, Any], groups: Dict[str, Any]) -> Optional[str]:
                      "ERROR_ON_KLAYOUT_DRC), so both have to be clean; neither is the tiebreaker. Each runs its own rule "
                      "deck from the PDK, so the same problem can be one marker in one and several in the other, or "
                      "only in one." % (mg, kl))
-    if mg is not None and kl is None and not str(rep.get("pdk") or "").startswith("sky130"):
-        parts.append("KLayout DRC didn't run: in LibreLane 3.0.4 it supports only sky130A and sky130B, so Magic is the "
-                     "only DRC for this PDK.")
+    if mg is not None and kl is None:
+        # LibreLane 3.0.4 has KLayout DRC decks for sky130A/B, gf180mcuA-D,
+        # ihp-sg13g2 and ihp-sg13cmos5l (steps/klayout.py); RUN_KLAYOUT_DRC
+        # turns the step off.
+        pdk = str(rep.get("pdk") or cfg.get("PDK") or "")
+        if cfg.get("RUN_KLAYOUT_DRC") is False:
+            parts.append("KLayout DRC was turned off for this run (RUN_KLAYOUT_DRC), so Magic is the only DRC here.")
+        elif pdk and not re.match(r"^(sky130|gf180mcu|ihp-sg13)", pdk):
+            parts.append("KLayout DRC didn't run: LibreLane 3.0.4 has KLayout rule decks for sky130, gf180mcu and "
+                         "ihp-sg13g2 only, so Magic is the only DRC for %s." % pdk)
     if rt == 0 and mg and mg > 0:
         parts.append("The router finished clean, yet Magic found %d. The router checks only its own wires, against the "
                      "routing rules it knows; Magic checks every shape in the final GDS, cells and power grid included." % mg)
@@ -1211,14 +1866,20 @@ def drc_problems(run_dir: Path, rep: Dict[str, Any]) -> List[Dict[str, Any]]:
                            "%d violation%s %s." % (p["count"], "" if p["count"] == 1 else "s",
                                                    ("near the " + p["where"]) if p["where"] else "together")))
     if (by.get("route_drc") or {}).get("status") == "fail":
+        # The detailed router left violations (Checker.TrDRC, deferred): room
+        # first, in the order that usually clears them, then layers, and more
+        # router passes last (by 64 it has usually converged).
         cfg = _cfg(run_dir)
-        core = _num(cfg.get("FP_CORE_UTIL"))
-        if core and core > 25:
-            fixes.append(_setting("FP_CORE_UTIL", core, int(max(20, core - 10)),
-                                  "The router ran out of room: a bigger core leaves space for wires.", "Make the core bigger"))
+        fixes += _route_fixes(cfg)
+        top = str(cfg.get("RT_MAX_LAYER") or "")
+        pdk_top = str(_pdk_default(cfg, "RT_MAX_LAYER") or "")
+        if top and pdk_top and top != pdk_top:
+            fixes.append(_setting("RT_MAX_LAYER", top, pdk_top, "Routing stops at %s here; the PDK routes up to %s, so "
+                                  "the router gets more layers." % (top, pdk_top), "Route on more layers", sure="likely"))
         it = _num(cfg.get("DRT_OPT_ITERS"))
         if it:
-            fixes.append(_setting("DRT_OPT_ITERS", it, int(it * 2), "Let the router keep trying longer.", "More routing passes"))
+            fixes.append(_setting("DRT_OPT_ITERS", it, int(it * 2), "Let the router keep trying longer. It has usually "
+                                  "settled by then, so this helps least.", "More routing passes", sure="try"))
     rep2 = dict(rep, _cfg=_cfg(run_dir))
     note = checker_note(rep2, groups)
     return [{
@@ -1285,27 +1946,52 @@ def _antenna_fixes(cfg: Dict[str, Any], rep: Dict[str, Any]) -> tuple:
     on_out = [n for n in nets if base(n) in ports["output"]]
     fixes: List[Dict[str, Any]] = []
     notes: List[str] = []
-    if cfg.get("GRT_REPAIR_ANTENNAS") is False:
-        fixes.append(_setting("GRT_REPAIR_ANTENNAS", False, True, "Antenna repair during global routing is off in this "
-                              "run; it adds diodes and layer jumps where the limit is passed.", "Turn antenna repair on"))
-    it = _num(cfg.get("GRT_ANTENNA_REPAIR_ITERS"))
-    if it is not None:
-        fixes.append(_setting("GRT_ANTENNA_REPAIR_ITERS", it, int(it) + 3, "More antenna-repair passes during global routing."))
-    mg = _num(cfg.get("GRT_ANTENNA_REPAIR_MARGIN"))
-    if mg is not None:
-        fixes.append(_setting("GRT_ANTENNA_REPAIR_MARGIN", mg, int(mg) + 10, "Repair with more margin than the limit (%)."))
+    diode = str(cfg.get("DIODE_CELL") or _pdk_default(cfg, "DIODE_CELL") or "").split("/")[0]
+    diode_w = (" (" + diode + " on " + str(cfg.get("PDK") or "this PDK") + ")") if diode else ""
+    # LibreLane 3.0.4 calls it RUN_ANTENNA_REPAIR; GRT_REPAIR_ANTENNAS is its
+    # deprecated name, which resolved.json never holds (flows/classic.py).
+    repair = cfg.get("RUN_ANTENNA_REPAIR", cfg.get("GRT_REPAIR_ANTENNAS"))
+    if repair is False:
+        fixes.append(_setting("RUN_ANTENNA_REPAIR", False, True, "Antenna repair after global routing is off in this "
+                              "run; it adds diodes%s and jumps to higher layers where a wire passes the limit." % diode_w,
+                              "Turn antenna repair on", sure="likely"))
+    else:
+        it = _num(cfg.get("GRT_ANTENNA_REPAIR_ITERS"))
+        if it is not None:
+            fixes.append(_setting("GRT_ANTENNA_REPAIR_ITERS", it, int(it) + 3,
+                                  "More repair passes after global routing (the passes after detailed routing use the "
+                                  "same margin).", "More repair passes", sure="try"))
+        mg = _num(cfg.get("GRT_ANTENNA_REPAIR_MARGIN"))
+        if mg is not None:
+            fixes.append(_setting("GRT_ANTENNA_REPAIR_MARGIN", mg, int(mg) + 10,
+                                  "Repair nets that come within this much of the limit (%), not only those over it.",
+                                  "Repair with more margin", sure="try"))
+        # Heuristic insertion needs cell padding to leave room for the diodes
+        # (its own docstring: GPL_ and DPL_CELL_PADDING above 0).
+        if cfg.get("RUN_HEURISTIC_DIODE_INSERTION") is False and len(nets) >= 5:
+            pad = _num(cfg.get("GPL_CELL_PADDING")) or 0
+            fixes.append(_setting("RUN_HEURISTIC_DIODE_INSERTION", False, True,
+                                  "A diode%s on every net longer than %s µm, before routing. It needs room next to the "
+                                  "cells%s." % (diode_w, fmt(cfg.get("HEURISTIC_ANTENNA_THRESHOLD") or "the PDK's threshold"),
+                                                "" if pad > 0 else ": set GPL_CELL_PADDING and DPL_CELL_PADDING to 2 as well"),
+                                  "Diodes on long nets", sure="try"))
     cur = str(cfg.get("DIODE_ON_PORTS") or "none")
     want = {"in": bool(on_in) or cur in ("in", "both"), "out": bool(on_out) or cur in ("out", "both")}
     to = "both" if want["in"] and want["out"] else "in" if want["in"] else "out" if want["out"] else None
     if to and to != cur:
         hit = on_in + on_out
-        fixes.append(_setting("DIODE_ON_PORTS", cur, to, "%d of the %d violating nets %s top-level %s (%s): a diode "
+        fixes.append(_setting("DIODE_ON_PORTS", cur, to, "%d of the %d violating nets %s top-level %s (%s): a diode%s "
                               "on the port protects them whatever the wire outside does." % (
                                   len(hit), len(nets), "is a" if len(hit) == 1 else "are",
-                                  "port" if len(hit) == 1 else "ports", ", ".join(hit[:4])), "Diodes on the ports"))
+                                  "port" if len(hit) == 1 else "ports", ", ".join(hit[:4]), diode_w),
+                              "Diodes on the ports", sure="likely"))
     elif nets and not (on_in or on_out) and ports["input"]:
         notes.append("None of the violating nets is a top-level port, so diodes on the ports (DIODE_ON_PORTS) "
-                     "wouldn't help; the repair inside the design has to.")
+                     "wouldn't help here; the repair inside the design has to.")
+    if cur == "none" and ports["input"]:
+        notes.append("A block that will sit inside a bigger chip (a macro, a Tiny Tapeout tile, a Caravel project) "
+                     "usually wants DIODE_ON_PORTS in whatever this run reports: the long wires to its inputs are in "
+                     "the parent, which this run never sees.")
     return fixes, notes
 
 
@@ -1340,12 +2026,25 @@ def _slew_fixes(cfg: Dict[str, Any], run_dir: Path) -> tuple:
     pct = _num(cfg.get("DESIGN_REPAIR_MAX_SLEW_PCT"))
     fanout_fix = (_setting("MAX_FANOUT_CONSTRAINT", fan, max(4, int(fan) - 4),
                            "Fewer inputs per driver: design repair splits bigger nets with buffers, so each edge is "
-                           "faster, in the slow corners too.") if fan is not None and fan > 4 else None)
+                           "faster, in the slow corners too.", "Fewer loads per driver", sure="likely")
+                  if fan is not None and fan > 4 else None)
     pct_fix = (_setting("DESIGN_REPAIR_MAX_SLEW_PCT", pct, int(pct) + 10,
-                        "Design repair aims this much under the slew limit (%).") if pct is not None else None)
+                        "Design repair aims this much under the slew limit (%), to leave room for the wires it "
+                        "can't see yet.", "Repair with more margin", sure="try") if pct is not None else None)
+    wl = _num(cfg.get("DESIGN_REPAIR_MAX_WIRE_LENGTH"))
+    # 0 means design repair never buffers a wire for its length alone.
+    wire_fix = (_setting("DESIGN_REPAIR_MAX_WIRE_LENGTH", wl, 400,
+                         "Buffer any wire longer than this (µm): a slow edge at the end of a long wire is the wire's "
+                         "fault, not the driver's. A starting point; shorter adds more buffers.",
+                         "Buffer long wires", sure="try") if wl == 0 else None)
+    # Slew and capacitance only ever warn in LibreLane 3.0.4 (their checkers
+    # match no corner), so these are worth fixing but never stop a run.
     notes: List[str] = []
+    tail = ("LibreLane reports slow edges as a warning and finishes the run; the timing numbers of the nets over the "
+            "limit are extrapolated from the library's tables. Raising MAX_TRANSITION_CONSTRAINT above the PDK's value "
+            "only hides them.")
     if not by:
-        return [f for f in (pct_fix, fanout_fix) if f], notes
+        return [f for f in (pct_fix, fanout_fix, wire_fix) if f], [tail]
     corner, rows = max(by.items(), key=lambda kv: len(kv[1]))
     groups: List[List[tuple]] = []
     for r in sorted(rows, key=lambda r: -r[2]):
@@ -1358,10 +2057,10 @@ def _slew_fixes(cfg: Dict[str, Any], run_dir: Path) -> tuple:
         drivers = [p for p, _l, _s in big if re.search(r"/(X|Y|Q|Z|ZN|O)$", p) and not re.match(r"_\d+_/", p)] or [big[0][0]]
         notes.append("In %s, %d of the %d pins over the limit share one slew (%.3f ns): one net, driven by %s, with "
                      "many loads." % (corner, len(big), len(rows), big[0][2], drivers[0]))
-        return [f for f in (fanout_fix, pct_fix) if f], notes
+        return [f for f in (fanout_fix, pct_fix) if f], notes + [tail]
     notes.append("In %s the %d pins over the limit are on different nets, so it isn't one driver with too many loads: "
                  "the fanout limit is left alone." % (corner, len(rows)))
-    return [f for f in (pct_fix,) if f], notes
+    return [f for f in (pct_fix, wire_fix) if f], notes + [tail]
 _CHECK_OPEN = {
     "lint_errors": ("Open the RTL IDE", {"tab": "ide"}, "Its Problems list shows each lint error with file and line."),
     "lint_warnings": ("Open the RTL IDE", {"tab": "ide"}, "Its Problems list shows each warning with file and line."),
@@ -1441,7 +2140,10 @@ def boundary_layers(pdk: str) -> Dict[str, str]:
         rows = celllib._lyp(pdk) if pdk else []
     except Exception:
         rows = []
-    out = {"%d/%d" % (r["layer"], r["dt"]): "%s (the cell outline)" % r["name"].split(".")[0]
+    # IHP's outline has a label datatype too (prBoundary.label 189/1): still
+    # not a mask, so it is named for what it is.
+    out = {"%d/%d" % (r["layer"], r["dt"]): "%s (the cell outline%s)" % (
+               r["name"].split(".")[0], "'s label" if ".label" in str(r["name"]).lower() else "")
            for r in rows if _OUTLINE_NAME.match(str(r.get("name") or ""))}
     if out:
         return out
@@ -1603,6 +2305,51 @@ def _signature(run_dir: Path) -> tuple:
     return tuple(sig)
 
 
+_KB_SEEN: Dict[str, Any] = {}
+
+
+def kb_index(design_dir: Optional[str | Path] = None, max_runs: int = 60) -> Dict[str, Any]:
+    """The knowledge base as an index, LanEx's ``rustc --explain``: every
+    entry's codes, stage, one line and whether its words were checked on a
+    real forced failure; and, for the open project, which of its runs (the
+    newest *max_runs*) stopped on each one, read from each run's error.log
+    alone (a few KB each, so the request stays fast)."""
+    entries = [{"id": r["id"], "code": r.get("code"), "also": list(r.get("also") or []), "stage": r.get("stage"),
+                "about": r.get("about"), "forced": str(r.get("source") or "").startswith("forced"),
+                "source": r.get("source")} for r in KB]
+    seen: Dict[str, List[str]] = {}
+    runs = Path(design_dir) / "runs" if design_dir else None
+    if runs is not None and runs.is_dir():
+        try:
+            sig = (str(runs), runs.stat().st_mtime_ns)
+        except OSError:
+            sig = None
+        hit = _KB_SEEN.get("v")
+        if sig and hit and hit[0] == sig:
+            seen = hit[1]
+        else:
+            dirs = sorted((p for p in runs.iterdir() if p.is_dir()), key=lambda p: -p.stat().st_mtime)[:max_runs]
+            for rd in dirs:
+                el = rd / "error.log"
+                try:
+                    with el.open("r", encoding="utf-8", errors="replace") as f:
+                        text = f.read(20000)
+                except OSError:
+                    continue
+                if not text.strip():
+                    continue
+                m = _CODE_RX.search(text)
+                code = m.group(1) if m else None
+                for rule in KB:
+                    if (code and code in [rule.get("code")] + list(rule.get("also") or [])) or \
+                            (rule.get("rx") is not None and rule["rx"].search(text)):
+                        seen.setdefault(rule["id"], []).append(rd.name)
+                        break
+            if sig:
+                _KB_SEEN["v"] = (sig, seen)
+    return {"entries": entries, "seen": seen}
+
+
 def run_problems(run_dir: str | Path) -> Dict[str, Any]:
     """Every problem of one run, worst first: the step that stopped it (if
     any), then each failing or warning check, timing and DRC diagnosed.
@@ -1637,6 +2384,8 @@ def clock_problems(run_dir: Path, rep: Dict[str, Any], rx: Dict[str, Any]) -> Li
     virtual = port == "__VIRTUAL_CLK__"
     if not virtual and port not in clks:
         return []
+    if virtual and clocked_logic(cfg) is False:
+        return []          # pure logic: timed against the virtual clock, said as a note
     ports = _top_ports(cfg)
     cand = [p for p in ports["input"] if re.search(r"clk|clock", p, re.I)]
     fixes: List[Dict[str, Any]] = []

@@ -185,6 +185,21 @@ try:
     out["librelane_version"] = getattr(librelane, "__version__", None)
     from librelane.flows import Flow, SequentialFlow
     from librelane.config import Config
+    # A key LibreLane doesn't know (a typo) or that this flow doesn't read is
+    # only a logged warning (config/config.py): the run goes ahead and the
+    # setting does nothing. Catch those lines for the check.
+    import logging
+    _said = []
+    class _Said(logging.Handler):
+        def emit(self, r):
+            try:
+                m = r.getMessage()
+            except Exception:
+                return
+            if "unknown key" in m or "unused by the current flow" in m:
+                _said.append(m)
+    logging.getLogger("__librelane__").addHandler(_Said(level=logging.WARNING))
+    out["config_warnings"] = _said
     try:
         from librelane.config import InvalidConfig
     except Exception:
@@ -699,6 +714,7 @@ def check(*, design_dir: str, config_files: Sequence[str], pdk: Optional[str], s
         kind = probe.get("kind")
         if probe.get("ok"):
             res["checked"] = True
+            res["problems"] += key_warnings(probe.get("config_warnings") or [], cfg_name)
         elif kind in ("invalid", "config"):
             res["checked"] = True
             errs = [" ".join(str(e).split()) for e in (probe.get("errors") or []) if str(e).strip()]
@@ -750,6 +766,27 @@ def check(*, design_dir: str, config_files: Sequence[str], pdk: Optional[str], s
     res["ok"] = not res["problems"]
     res["seconds"] = round(time.time() - t0, 2)
     return res
+
+
+def key_warnings(lines: Sequence[str], cfg_name: str) -> List[Dict[str, Any]]:
+    """LibreLane's "An unknown key 'X' was provided." and "Key 'X' provided is
+    unused by the current flow." as findings that ask before the run (they
+    don't block it: LibreLane itself runs on, and the setting does nothing).
+    The words, and the nearest known name for a typo, are the knowledge
+    base's (problems.unknown_key_note)."""
+    from . import problems
+
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for ln in lines or []:
+        m = re.search(r"unknown key '([^']+)'", str(ln))
+        u = re.search(r"Key '([^']+)' provided is unused by the current flow", str(ln))
+        key = (m or u).group(1) if (m or u) else None
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(problems.unknown_key_note(key, cfg_name, unused=bool(u)))
+    return out[:6]
 
 
 def blockers_text(res: Dict[str, Any]) -> List[str]:

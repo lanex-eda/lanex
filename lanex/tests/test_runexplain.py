@@ -138,13 +138,14 @@ def test_a_lint_checker_that_raised_shows_verilators_own_lines(tmp_path):
     rx = runexplain.explain_run(run)
     assert rx["kind"] == "halted"
     card = rx["card"]
-    assert card["title"] == "The RTL has lint errors"
-    assert "Verilator" in card["plain"]
+    # A latch has its own card now (problems.KB "latch"), naming the signal and line.
+    assert card["title"] == "A latch was inferred for y" and card["kb"] == "latch"
+    assert "LINTER_ERROR_ON_LATCH" in card["plain"]
     # Errors first, paths relative to the project, the "Exiting" line dropped.
     assert card["evidence"][0].startswith("%Error-LATCH: src/brk.v:10:5: Latch inferred")
     assert card["evidence"][1].startswith("%Warning-CASEINCOMPLETE: src/brk.v:11:9")
     assert len(card["evidence"]) == 2
-    assert [f["label"] for f in card["fixes"] if f["kind"] == "open"] == ["Open the RTL IDE"]
+    assert [f["go"] for f in card["fixes"] if f["kind"] == "open"] == [{"tab": "ide", "rel": "src/brk.v", "line": 10}]
     # "Show it in the log" opens the Verilator step's log at the error.
     assert rx["at"]["step"] == "Verilator.Lint" and rx["at"]["line"] == 3
     assert rx["at"]["path"] == "01-verilator-lint/verilator-lint.log"
