@@ -219,8 +219,24 @@ export const api = {
   setDesignDir: (path) => _fetch("/api/set-design-dir", { method: "POST", body: JSON.stringify({ path }) }),
   diffRuns: (a, b) => _fetch("/api/diff", { method: "POST", body: JSON.stringify({ a, b }) }),
   startRun: (payload) => _fetch("/api/run/start", { method: "POST", body: JSON.stringify(payload) }),
-  cancelRun: () => _fetch("/api/run/cancel", { method: "POST", body: "{}" }),
-  resumeRun: () => _fetch("/api/run/resume", { method: "POST", body: "{}" }),
+  // Stop / next step of one queue job (job_id), else the run the open project follows.
+  cancelRun: (jobId) => _fetch("/api/run/cancel", { method: "POST", body: JSON.stringify(jobId ? { job_id: jobId } : {}) }),
+  resumeRun: (jobId) => _fetch("/api/run/resume", { method: "POST", body: JSON.stringify(jobId ? { job_id: jobId } : {}) }),
+  // ---------- the job queue (controller/jobs.py documents every field)
+  queue: () => _fetch("/api/queue"),
+  queueMove: (id, to) => _fetch("/api/queue/move", { method: "POST", body: JSON.stringify({ id, to }) }),
+  queueRemove: (sel) => _fetch("/api/queue/remove", { method: "POST", body: JSON.stringify(sel) }),
+  queuePause: (paused) => _fetch("/api/queue/pause", { method: "POST", body: JSON.stringify({ paused: !!paused }) }),
+  queueStop: (sel) => _fetch("/api/queue/stop", { method: "POST", body: JSON.stringify(sel) }),
+  queueStopAfter: (on) => _fetch("/api/queue/stop-after-current", { method: "POST", body: JSON.stringify({ on: !!on }) }),
+  queueSettings: (s) => _fetch("/api/queue/settings", { method: "POST", body: JSON.stringify(s) }),
+  queueRecover: (id, action) => _fetch("/api/queue/recover", { method: "POST", body: JSON.stringify({ id, action }) }),
+  queueResume: (id) => _fetch("/api/queue/resume", { method: "POST", body: JSON.stringify({ id }) }),
+  queueOrphan: (name) => _fetch("/api/queue/orphan", { method: "POST", body: JSON.stringify({ name, action: "stop" }) }),
+  runLog: (designDir, tag, from, to) => _fetch("/api/run/log?design_dir=" + encodeURIComponent(designDir || "") +
+    "&tag=" + encodeURIComponent(tag || "") + (from != null ? "&from=" + from : "") + (to != null ? "&to=" + to : ""), { timeout: 120000 }),
+  runLogUrl: (designDir, tag) => "/api/run/log?download=1&design_dir=" + encodeURIComponent(designDir || "") +
+    "&tag=" + encodeURIComponent(tag || ""),
   reportsDrc: (path) => _fetch("/api/reports/drc?path=" + encodeURIComponent(path)),
   reportsLvs: (path) => _fetch("/api/reports/lvs?path=" + encodeURIComponent(path)),
   getPdkRoot: () => _fetch("/api/settings/pdk-root"),

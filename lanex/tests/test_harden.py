@@ -275,18 +275,24 @@ def test_run_names_that_leave_runs_are_refused(monkeypatch, tmp_path, tag):
     assert status == 400 and "can't be used" in data and runner.started is None
 
 
-def test_a_run_waits_for_a_sweep_and_a_sweep_for_a_run(monkeypatch, tmp_path, got):
+def test_runs_and_sweeps_no_longer_refuse_each_other(monkeypatch, tmp_path, got):
+    # The job queue (lane 1) keeps runs and sweep points to what memory
+    # allows, so a run beside a sweep, or a sweep beside a run, is not refused
+    # with "a sweep is running" / "a run is in progress" any more.
     from lanex.server import app, routes
     a = _design(tmp_path, "a")
     monkeypatch.setattr(routes, "_get_active_design_dir", lambda: str(a))
     monkeypatch.setattr(app, "get_runner", lambda: _Runner(running=False))
     monkeypatch.setattr(type(dse.job), "active", property(lambda self: True))
     data, status = routes._start_run({})
-    assert status == 409 and "sweep is running" in data
+    assert not (status == 409 and "sweep is running" in str(data))
     monkeypatch.setattr(type(dse.job), "active", property(lambda self: False))
+    # A sweep this test starts must not outlive it (its points wait forever
+    # on the fake runner): it gets its own sweep object.
+    monkeypatch.setattr(dse, "job", dse.DseJob())
     monkeypatch.setattr(app, "get_runner", lambda: _Runner(running=True))
     routes.h_dse_start(_H({"axes": [{"var": "FP_CORE_UTIL", "values": [40, 50]}]}))
-    assert got["code"] == 409 and "run is in progress" in got["payload"]
+    assert "run is in progress" not in str(got.get("payload"))
 
 
 # ------------------------------------------------------------------ sweep parameters

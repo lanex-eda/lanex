@@ -77,12 +77,39 @@ _RUNNER: Optional[FlowRunner] = None
 
 
 def get_runner() -> FlowRunner:
-    """Singleton runner per server process."""
+    """The run the open project's pages follow (status, Stop, step-by-step
+    Next): its newest live job's runner, else the last one that ran, else an
+    idle runner that never starts anything. Runs themselves are started by
+    the job queue (``controller/jobs.py``), one runner per job, so several
+    can go at once; nothing should start a run on what this returns."""
     global _RUNNER
-    with _RUNNER_LOCK:
-        if _RUNNER is None:
-            _RUNNER = FlowRunner()
+    if _RUNNER is not None:          # a test swapped it in
         return _RUNNER
+    try:
+        from ..controller import jobs
+        from . import routes
+        dd = routes._get_active_design_dir()
+        if dd:
+            r = jobs.scheduler.runner(jobs.scheduler.followed_job(dd))
+            if r is not None:
+                return r
+    except Exception:
+        pass
+    with _RUNNER_LOCK:
+        global _IDLE
+        if _IDLE is None:
+            _IDLE = FlowRunner()
+        return _IDLE
+
+
+_IDLE: Optional[FlowRunner] = None
+
+
+def make_runner(job: Optional[Dict[str, Any]] = None) -> FlowRunner:
+    """A fresh runner for one queue job (tests swap this)."""
+    job = job or {}
+    return FlowRunner(job_id=job.get("id"), design_dir=job.get("design_dir"),
+                      origin=job.get("origin") or "lanex")
 
 
 def set_runner(r: Optional[FlowRunner]) -> None:
@@ -1005,6 +1032,14 @@ def serve_forever(httpd: ThreadingHTTPServer, *, open_after: bool, url: Optional
     """Block on serve_forever(). Optionally open the browser once."""
     if open_after and url:
         threading.Timer(0.5, open_browser, args=(url,)).start()
+    # The job queue: every known project's queue.json is read, runs that were
+    # going when LanEx stopped are found (followed again if their container
+    # still runs, else offered Continue), and waiting runs start by themselves.
+    try:
+        from . import routes as _routes
+        _routes.start_job_service()
+    except Exception:
+        _log.exception("the run queue did not start")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

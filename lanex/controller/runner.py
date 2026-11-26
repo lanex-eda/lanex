@@ -83,6 +83,26 @@ def _load_state(path: str) -> Any:
         return State.load(_json.load(f), validate_path=True)
 
 
+def latest_state_out(run_dir: Optional[str]) -> Optional[str]:
+    """The ``state_out.json`` of the highest-numbered finished step folder of
+    a run (the state the next step starts from), or None."""
+    if not run_dir:
+        return None
+    import re as _re
+    best = None
+    try:
+        for e in os.scandir(run_dir):
+            m = _re.match(r"(\d+)-", e.name)
+            if not m or not e.is_dir():
+                continue
+            so = os.path.join(e.path, "state_out.json")
+            if os.path.isfile(so) and (best is None or int(m.group(1)) > best[0]):
+                best = (int(m.group(1)), so)
+    except OSError:
+        return None
+    return best[1] if best else None
+
+
 def _toolchain_provenance(run_mode: Optional[str]) -> Dict[str, Any]:
     """Identity of the toolchain that produced a run, recorded into gui-run.json.
 
@@ -250,7 +270,23 @@ class FlowRunner:
     A second ``start()`` is refused while the first is running.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, job_id: Optional[str] = None, design_dir: Optional[str] = None,
+                 origin: str = "lanex") -> None:
+        # Which queue job this runner is (jobs.py), and its project: every
+        # event carries both, so a page follows the run it shows when several
+        # go at once.
+        self.job_id = job_id
+        self.design_dir = design_dir
+        self.origin = origin
+        self._listener: Any = None
+        # Container runs: the console kept on disk as it comes
+        # (runs/<tag>/lanex-console.log), so a reload, "Load the full log" and
+        # Download read the whole output; LibreLane's flow.log has no tool output.
+        self._tee: Any = None
+        self._tee_buf: List[str] = []
+        self.low_priority = False
+        self._lowered = False
+        self.step_started_at: Optional[float] = None
         self._lock = threading.RLock()
         self._seq = 0
         self._events: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=10000)
@@ -314,6 +350,24 @@ class FlowRunner:
     @property
     def running(self) -> bool:
         return self._running
+
+    @property
+    def container_name(self) -> Optional[str]:
+        """The name LanEx gave this run's container (container runs)."""
+        return self._container_name
+
+    @property
+    def awaiting_next(self) -> bool:
+        """Step by step in a container: between two steps, no process alive."""
+        return bool(self._awaiting_next)
+
+    @property
+    def current_step(self) -> Optional[str]:
+        return self._current_step_id
+
+    def set_listener(self, fn: Any) -> None:
+        """``fn(kind, body)`` for every event this run sends (the queue)."""
+        self._listener = fn
 
     @property
     def cancelled(self) -> bool:
@@ -699,6 +753,8 @@ class FlowRunner:
         seq = self._next_seq()
         body = _safe_jsonable(payload) if payload else {}
         tag = Path(self._run_dir).name if self._run_dir else None
+        if self.job_id:
+            body = {**body, "job_id": self.job_id, "design_dir": self.design_dir, "origin": self.origin}
         evt = {"type": kind.value, "seq": seq, "ts": time.time(), "tag": tag, **body}
         try:
             self._events.put_nowait(evt)
@@ -711,6 +767,93 @@ class FlowRunner:
         bus.emit(kind.value, {**body, "seq": seq, "ts": evt["ts"], "tag": tag})
         if kind == EventType.FLOW_DONE:
             self._persist_outcome(body)
+            self._close_tee(final=not self._awaiting_next)
+        if kind == EventType.STEP_STARTED:
+            self.step_started_at = time.time()
+            self._lower_priority()
+        fn = self._listener
+        if fn is not None:
+            try:
+                fn(kind.value, {**body, "tag": tag})
+            except Exception:
+                _log.debug("run listener failed", exc_info=True)
+
+    # ---- the console on disk (container runs)
+
+    TEE_NAME = "lanex-console.log"
+    TEE_BUF_MAX = 20000
+
+    def _tee_line(self, line: str) -> None:
+        """Keep one console line: buffered until the run folder holds its
+        first step (LibreLane decides new-or-existing run on an empty folder),
+        then appended to ``runs/<tag>/lanex-console.log``. The name has no
+        number prefix, so LibreLane's step loader ignores it."""
+        if self._tee is None:
+            self._tee_buf.append(line)
+            if len(self._tee_buf) > self.TEE_BUF_MAX:
+                del self._tee_buf[: len(self._tee_buf) - self.TEE_BUF_MAX]
+            if self._current_step_id and self._run_dir and Path(self._run_dir).is_dir():
+                try:
+                    self._tee = open(Path(self._run_dir) / self.TEE_NAME, "a", encoding="utf-8", buffering=1)
+                    self._tee.write("\n".join(self._tee_buf) + "\n")
+                    self._tee_buf = []
+                except Exception:
+                    self._tee = False
+            return
+        if self._tee:
+            try:
+                self._tee.write(line + "\n")
+            except Exception:
+                self._tee = False
+
+    def _close_tee(self, final: bool = True) -> None:
+        t = self._tee
+        if t is None and self._tee_buf and self._run_dir and Path(self._run_dir).is_dir():
+            # A run that ended before its first step (a config error): keep
+            # what it printed, the reason is in there.
+            try:
+                with open(Path(self._run_dir) / self.TEE_NAME, "a", encoding="utf-8") as f:
+                    f.write("\n".join(self._tee_buf) + "\n")
+            except Exception:
+                pass
+            self._tee_buf = []
+            return
+        if t and final:
+            try:
+                t.close()
+            except Exception:
+                pass
+            self._tee = None
+
+    def _lower_priority(self) -> None:
+        """Low priority: give this run's container a small CPU share once it
+        exists (``docker update --cpu-shares 256``): other work stays quick,
+        the run takes a little longer. Nothing where the engine can't."""
+        if not self.low_priority or self._lowered or not self._container_name:
+            return
+        self._lowered = True
+        name = self._container_name
+        engine = self._container_engine
+        sg = self._container_sg
+
+        def go() -> None:
+            exe = engine or shutil.which("docker") or shutil.which("podman")
+            if not exe:
+                return
+            argv = [exe, "update", "--cpu-shares", "256", name]
+            if sg:
+                try:
+                    from . import tools
+                    argv = tools.sg_wrap_argv(argv)
+                except Exception:
+                    pass
+            try:
+                r = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+                if r.returncode == 0:
+                    self._emit(EventType.INFO, {"message": "Low priority: this run's container gets a smaller share of the CPU."})
+            except Exception:
+                pass
+        threading.Thread(target=go, daemon=True, name="lanex.runner.lowprio").start()
 
     def _persist_outcome(self, done: Dict[str, Any]) -> None:
         """Note how the run ended in ``gui-run.json`` (``outcome``), so a run
@@ -1203,6 +1346,7 @@ class FlowRunner:
                 # otherwise flood the log (progress is shown on the timeline).
                 if line and not is_progress_bar(line):
                     self._emit(EventType.LOG, {"message": line})
+                    self._tee_line(line)
                 if self._cancel.is_set():
                     break
             proc.wait()
@@ -1382,8 +1526,12 @@ class FlowRunner:
                 # MUST reuse the run dir (overwrite would wipe prior step state).
                 overwrite=bool(c["overwrite"]) and idx == 0,
                 # A resumed run starts from the other run's state; every later
-                # step continues from this run's own latest state_out.json.
-                initial_state=c.get("initial_state") if idx == 0 else None,
+                # step starts from the state the step before it wrote, named
+                # with -i. Without -i LibreLane takes the newest state_out.json
+                # by time, which is the wrong one once a later step folder
+                # exists (checked on 3.0.4: CTS ran on the final layout).
+                initial_state=(c.get("initial_state") if idx == 0
+                               else (latest_state_out(self._run_dir) or c.get("initial_state"))),
                 entry_module="lanex.controller.librelane_entry",
             )
             argv, run_env = self._container_launch(argv)
@@ -1410,6 +1558,7 @@ class FlowRunner:
                         self._dispatch_parsed(parsed)
                 if line and not is_progress_bar(line):
                     self._emit(EventType.LOG, {"message": line})
+                    self._tee_line(line)
                 if self._cancel.is_set():
                     break
             proc.wait()
@@ -1425,7 +1574,13 @@ class FlowRunner:
                 self._running = False
                 return
 
-            if proc.returncode == 0:
+            # Exit 2 with --only is LibreLane's "one or more deferred errors":
+            # a check failed, the step did not break. A full run goes on past
+            # it, and so can this one.
+            checker_failed = proc.returncode == 2 and not parser.failed
+            if checker_failed:
+                self._emit(EventType.INFO, {"message": f"A check failed in '{sid}'. You can still go on to the next step."})
+            if proc.returncode == 0 or checker_failed:
                 self._step_statuses[sid] = StepStatus.DONE.value
                 self._emit(EventType.STEP_DONE, {"step_id": sid, "index": idx})
                 completed = idx + 1
@@ -1440,7 +1595,7 @@ class FlowRunner:
                     self._emit(
                         EventType.INFO,
                         {"message": f"step '{sid}' complete — click Resume for the next step ('{nxt}')",
-                         "paused": True},
+                         "paused": True, "next_step": nxt, "done_step": sid},
                     )
             else:
                 self._step_statuses[sid] = StepStatus.FAILED.value

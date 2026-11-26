@@ -817,35 +817,47 @@ def record_end(design_dir: str | Path, sweep_id: str, end: Dict[str, Any]) -> No
 
 
 class DseJob:
-    """A sequential queue of runs over an expanded override list.
+    """A sweep's points, run through ``start_one`` and followed to the end.
 
-    Drives the shared :class:`runner.FlowRunner` one config at a time, waiting
-    for each to finish (``runner.running`` falls) before starting the next.
-    Emits ``dse_config_started`` / ``dse_config_done`` / ``dse_done`` on the bus
-    so the SPA can show queue progress. Cancellation stops the active run and
-    drops the rest. Runs in a daemon thread.
+    ``start_one(tag, overrides)`` runs one point and blocks until it ends.
+    With ``parallel=1`` (the default) the points go one after another, as
+    they always did. The server passes every point at once
+    (``parallel=len(points)``): each ``start_one`` puts its point in the job
+    queue (``jobs.py``), which runs as many at a time as memory and cores
+    allow. Emits ``dse_config_started`` / ``dse_config_done`` / ``dse_done``
+    on the bus so the SPA can show queue progress. A stop rule (stop at the
+    first good point; two points ending the same way before any step) calls
+    ``on_halt(reason)``, which drops the points still waiting; points already
+    running finish. Cancellation stops the rest. Runs in daemon threads.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._cancel = threading.Event()
+        self._halt = threading.Event()
         self.queued: List[str] = []
         self.running_tag: Optional[str] = None
+        self.running_tags: List[str] = []
         self.done: List[str] = []
         self.failed: List[str] = []
+        self.skipped: List[str] = []
         # tag -> {ok, kind, stage, step, reason, values}: how each point ended.
         self.results: Dict[str, Dict[str, Any]] = {}
         self.sweep_id: Optional[str] = None
         self.total = 0
+        self.parallel = 1
         self.started_at: Optional[float] = None
         self._on_point = None
         self._on_done = None
+        self._on_halt = None
         self.stop_when_good = False
         self.stopped_early = False
         # Why the queue ended: done / stopped / first-clean / failed-fast.
         self.end_reason: Optional[str] = None
         self.end_detail: Optional[str] = None
+        self._early: Dict[str, int] = {}
+        self._failed_fast: Optional[str] = None
 
     @property
     def active(self) -> bool:
@@ -856,12 +868,16 @@ class DseJob:
             return {
                 "active": self.active,
                 "queued": list(self.queued),
-                "running": self.running_tag,
+                # The first point going now (older pages read one), and all of them.
+                "running": self.running_tags[0] if self.running_tags else self.running_tag,
+                "running_tags": list(self.running_tags),
                 "done": list(self.done),
                 "failed": list(self.failed),
+                "skipped": list(self.skipped),
                 "results": {k: dict(v) for k, v in self.results.items()},
                 "sweep_id": self.sweep_id,
                 "total": self.total,
+                "parallel": self.parallel,
                 "started_at": self.started_at,
                 "stopped_early": self.stopped_early,
                 "end_reason": self.end_reason,
@@ -870,32 +886,40 @@ class DseJob:
 
     def start(self, *, start_one, overrides_list: Sequence[Dict[str, str]],
               tags: Sequence[str], sweep_id: Optional[str] = None,
-              on_point=None, stop_when_good: bool = False, on_done=None) -> Dict[str, Any]:
-        """Begin the queue. ``start_one(tag, overrides)`` runs one point through
-        the runner and blocks until it ends; it returns the point's outcome
-        (``{ok, kind, stage, step, reason}``, see :func:`point_outcome`) or a
-        bare bool. ``on_point(tag, result)`` is called after each point (the
-        route persists results into the sweep manifest with it), and
-        ``on_done({reason, detail})`` once the queue ends. Returns
-        ``{ok, count, run_tags}``."""
+              on_point=None, stop_when_good: bool = False, on_done=None,
+              parallel: int = 1, on_halt=None) -> Dict[str, Any]:
+        """Begin. ``start_one(tag, overrides)`` runs one point and blocks
+        until it ends; it returns the point's outcome (``{ok, kind, stage,
+        step, reason}``, see :func:`point_outcome`) or a bare bool.
+        ``on_point(tag, result)`` is called after each point (the route
+        persists results into the sweep manifest with it), ``on_done({reason,
+        detail})`` once the sweep ends, ``on_halt(reason)`` when a stop rule
+        drops the points still waiting. Returns ``{ok, count, run_tags}``."""
         with self._lock:
             if self.active:
                 return {"ok": False, "error": "a sweep is already running"}
             self._cancel.clear()
+            self._halt.clear()
             self.queued = list(tags)
             self.done = []
             self.failed = []
+            self.skipped = []
             self.results = {}
             self.sweep_id = sweep_id
             self.total = len(tags)
+            self.parallel = max(1, int(parallel or 1))
             self.started_at = time.time()
             self._on_point = on_point
             self._on_done = on_done
+            self._on_halt = on_halt
             self.stop_when_good = bool(stop_when_good)
             self.stopped_early = False
             self.end_reason = None
             self.end_detail = None
             self.running_tag = None
+            self.running_tags = []
+            self._early = {}
+            self._failed_fast = None
             self._thread = threading.Thread(
                 target=self._run, args=(start_one, list(overrides_list), list(tags)),
                 daemon=True, name="librelane.gui.DseJob",
@@ -911,84 +935,140 @@ class DseJob:
         """Stop was asked for the current queue."""
         return self._cancel.is_set()
 
-    def _run(self, start_one, overrides_list, tags) -> None:
-        failed_fast = None
-        prev_early = None      # the reason of the last point that ended before any step
-        for i, tag in enumerate(tags):
-            if self._cancel.is_set():
-                break
-            with self._lock:
-                self.running_tag = tag
-                if tag in self.queued:
-                    self.queued.remove(tag)
-            events.publish("dse_config_started", {"tag": tag, "index": i, "total": len(tags),
-                                                  "overrides": overrides_list[i]})
-            res: Dict[str, Any]
-            try:
-                out = start_one(tag, overrides_list[i])
-                # A launched run is not a passed run: the closure reports how
-                # the point really ended. A bare bool is accepted for callers
-                # that only know whether it ran.
-                res = dict(out) if isinstance(out, dict) else {"ok": bool(out), "kind": None,
-                                                               "reason": None if out else "did not start"}
-            except Exception as ex:  # pragma: no cover - depends on live runner
-                events.publish("log", {"message": f"Sweep: could not run {tag}: {ex}"})
-                res = {"ok": False, "kind": "error", "reason": f"could not start: {ex}"}
-            if self._cancel.is_set() and not res.get("ok"):
-                res.setdefault("kind", "stopped")
-                res["reason"] = res.get("reason") or "stopped"
-            res["values"] = dict(overrides_list[i])
-            ok = bool(res.get("ok"))
-            with self._lock:
+    def _point(self, start_one, i: int, tag: str, ov: Dict[str, Any], total: int) -> None:
+        with self._lock:
+            self.running_tag = tag
+            self.running_tags.append(tag)
+            if tag in self.queued:
+                self.queued.remove(tag)
+        events.publish("dse_config_started", {"tag": tag, "index": i, "total": total, "overrides": ov})
+        res: Dict[str, Any]
+        try:
+            out = start_one(tag, ov)
+            # A launched run is not a passed run: the closure reports how
+            # the point really ended. A bare bool is accepted for callers
+            # that only know whether it ran.
+            res = dict(out) if isinstance(out, dict) else {"ok": bool(out), "kind": None,
+                                                           "reason": None if out else "did not start"}
+        except Exception as ex:  # pragma: no cover - depends on live runner
+            events.publish("log", {"message": f"Sweep: could not run {tag}: {ex}"})
+            res = {"ok": False, "kind": "error", "reason": f"could not start: {ex}"}
+        if self._cancel.is_set() and not res.get("ok"):
+            res.setdefault("kind", "stopped")
+            res["reason"] = res.get("reason") or "stopped"
+        res["values"] = dict(ov)
+        ok = bool(res.get("ok"))
+        skipped = bool(res.get("skipped"))
+        with self._lock:
+            if tag in self.running_tags:
+                self.running_tags.remove(tag)
+            self.running_tag = self.running_tags[0] if self.running_tags else None
+            if skipped:
+                self.skipped.append(tag)
+            else:
                 (self.done if ok else self.failed).append(tag)
-                self.results[tag] = res
-                self.running_tag = None
-            if self._on_point:
+            self.results[tag] = res
+        if self._on_point and not skipped:
+            try:
+                self._on_point(tag, res)
+            except Exception:  # pragma: no cover - persistence is best effort
+                pass
+        events.publish("dse_config_done", {"tag": tag, "ok": ok, "index": i, "total": total,
+                                           "kind": res.get("kind"), "stage": res.get("stage"),
+                                           "reason": res.get("reason"), "skipped": skipped})
+        if skipped:
+            return
+        good = bool(res.get("good", ok))
+        if good and self.stop_when_good:
+            # "Stop when one is good enough": timing met in every corner and
+            # every check clean (Verify's passed verdict, not only a flow
+            # that finished); the points still waiting are dropped, not run.
+            self._stop_rest("first-clean", "Not run: an earlier point met the goal")
+            return
+        # Two points that ended the same way before any step ran (the
+        # config did not load, the run would not start): the rest would too,
+        # so they are not run.
+        early = str(res.get("reason") or res.get("kind") or "") if failed_before_any_step(res) else None
+        if early and not self._cancel.is_set():
+            with self._lock:
+                n = self._early.get(early, 0) + 1
+                self._early[early] = n
+            if n >= 2 and self._remaining():
+                self._failed_fast = early
+                self._stop_rest("failed-fast", "Not run: two points failed the same way before any step")
+
+    def _remaining(self) -> int:
+        """Points not ended yet: not started here, or (all points in the job
+        queue at once) started and still waiting or running there."""
+        with self._lock:
+            return len(self.queued) + (len(self.running_tags) if self.parallel > 1 else 0)
+
+    def _stop_rest(self, why: str, words: str) -> None:
+        if not self._remaining():
+            return
+        with self._lock:
+            if self._halt.is_set():
+                return
+            self._halt.set()
+            if why == "first-clean":
+                self.stopped_early = True
+            # Points not handed to the queue yet are not run either.
+            if self.parallel > 1:
+                self.skipped.extend(self.queued)
+            self.queued = []
+        if self._on_halt:
+            try:
+                self._on_halt(words)
+            except Exception:  # pragma: no cover
+                pass
+
+    def _run(self, start_one, overrides_list, tags) -> None:
+        import queue as _q
+        work: "_q.Queue[int]" = _q.Queue()
+        for i in range(len(tags)):
+            work.put(i)
+        total = len(tags)
+
+        def worker() -> None:
+            while not self._cancel.is_set() and not self._halt.is_set():
                 try:
-                    self._on_point(tag, res)
-                except Exception:  # pragma: no cover - persistence is best effort
-                    pass
-            events.publish("dse_config_done", {"tag": tag, "ok": ok, "index": i, "total": len(tags),
-                                               "kind": res.get("kind"), "stage": res.get("stage"),
-                                               "reason": res.get("reason")})
-            good = bool(res.get("good", ok))
-            if good and self.stop_when_good and i + 1 < len(tags):
-                # "Stop when one is good enough": timing met in every corner
-                # and every check clean (Verify's passed verdict, not only a
-                # flow that finished); the rest are dropped, not run.
-                with self._lock:
-                    self.stopped_early = True
-                    self.queued = []
-                break
-            # Two points in a row that ended the same way before any step
-            # ran (the config did not load, the run would not start): the
-            # rest would too, so they are not run.
-            early = str(res.get("reason") or res.get("kind") or "") if failed_before_any_step(res) else None
-            if early and early == prev_early and i + 1 < len(tags) and not self._cancel.is_set():
-                failed_fast = early
-                with self._lock:
-                    self.queued = []
-                break
-            prev_early = early
+                    i = work.get_nowait()
+                except _q.Empty:
+                    return
+                self._point(start_one, i, tags[i], overrides_list[i], total)
+
+        n = min(self.parallel, max(1, total))
+        if n <= 1:
+            worker()
+        else:
+            ths = [threading.Thread(target=worker, daemon=True, name=f"librelane.gui.DseJob.{k}") for k in range(n)]
+            for t in ths:
+                t.start()
+                # Points enter the queue in their own order.
+                time.sleep(0.02)
+            for t in ths:
+                t.join()
         cancelled = self._cancel.is_set()
         reason = ("stopped" if cancelled else "first-clean" if self.stopped_early
-                  else "failed-fast" if failed_fast else "done")
+                  else "failed-fast" if self._failed_fast else "done")
         with self._lock:
             self.end_reason = reason
-            self.end_detail = failed_fast
+            self.end_detail = self._failed_fast
         # Recorded before the event, so a page that re-reads the sweeps on
         # dse_done already finds why it ended.
         if self._on_done:
             try:
-                self._on_done({"reason": reason, "detail": failed_fast})
+                self._on_done({"reason": reason, "detail": self._failed_fast})
             except Exception:  # pragma: no cover - persistence is best effort
                 pass
         events.publish("dse_done", {"done": list(self.done), "failed": list(self.failed),
+                                    "skipped": list(self.skipped),
                                     "cancelled": cancelled, "sweep_id": self.sweep_id,
                                     "stopped_early": self.stopped_early, "reason": reason,
-                                    "detail": failed_fast})
+                                    "detail": self._failed_fast})
         with self._lock:
             self.running_tag = None
+            self.running_tags = []
             self.queued = []
 
 
