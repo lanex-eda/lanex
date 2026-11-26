@@ -134,7 +134,8 @@ def build_lint_command(
         flags.append("-I" + str(inc))
     for k, v in (defines or {}).items():
         flags.append(f"-D{k}={v}" if v not in (None, "") else f"-D{k}")
-    flags.extend(str(s) for s in sources)
+    from .quoting import file_arg
+    flags.extend(file_arg(s) for s in sources)
     if run_mode == "container":
         from . import container_run
 

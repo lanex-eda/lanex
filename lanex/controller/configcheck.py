@@ -358,7 +358,8 @@ def _container_probe_argv(args: Dict[str, Any], *, engine: str, image: str, desi
     mount(str(design_dir))
     return ([engine, "run", "--rm", "--pull=never", "--network=none", "--name", name]
             + _permission_args(engine) + mounts
-            + ["-e", "HOME=/tmp", "-w", str(design_dir), image, "python3", "-c", PROBE, json.dumps(args)])
+            + ["-e", "HOME=/tmp", "-e", "PYTHONSAFEPATH=1", "-w", str(design_dir), image,
+               "python3", "-c", PROBE, json.dumps(args)])
 
 
 def _run_probe(args: Dict[str, Any], *, run_mode: str, design_dir: Path, pdk_root: Optional[str],
@@ -388,9 +389,13 @@ def _run_probe(args: Dict[str, Any], *, run_mode: str, design_dir: Path, pdk_roo
         engine, name = None, None
         argv = [sys.executable, "-c", PROBE, json.dumps(args)]
         where = "this machine's LibreLane"
+    # The probe's Python starts in the project folder: PYTHONSAFEPATH keeps
+    # that folder off its import path, so a json.py or librelane/ in a shared
+    # project is never imported (and run) by the check that opening it starts.
+    env = dict(os.environ, PYTHONSAFEPATH="1")
     try:
         r = subprocess.run(argv, cwd=str(design_dir), capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL)
+                           timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except subprocess.TimeoutExpired:
         if engine and name:
             try:
