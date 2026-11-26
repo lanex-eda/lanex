@@ -985,6 +985,29 @@ def finish_upload(design_dir: str | Path, name: str, pdk: Optional[str], scl: Op
     return {"ok": True, "macro": m}
 
 
+def apply_template_macros(design_dir: str | Path, template: str, pdk: Optional[str],
+                          scl: Optional[str]) -> List[Dict[str, Any]]:
+    """Add the PDK macros a project template lists (``"macros"`` in its
+    template.json: ``{pdk: glob, library, name, instances}``) to a project
+    just made from it. A macro for another PDK is skipped and reported."""
+    import fnmatch
+    from . import scaffold
+    tdir = scaffold._templates_root() / template
+    doc = scaffold._read_manifest(tdir) if tdir.is_dir() else None
+    out: List[Dict[str, Any]] = []
+    for m in (doc or {}).get("macros") or []:
+        if not isinstance(m, dict) or not m.get("name"):
+            continue
+        want = str(m.get("pdk") or "*")
+        if not pdk or not fnmatch.fnmatchcase(pdk, want):
+            out.append({"ok": False, "name": m["name"],
+                        "error": f"{m['name']} is a {want.rstrip('*')} block; this project uses {pdk or 'no PDK'}."})
+            continue
+        r = add_pdk_macro(design_dir, pdk, scl, m["name"], m.get("library"), instances=m.get("instances") or [])
+        out.append({"ok": bool(r.get("ok")), "name": m["name"], "error": r.get("error")})
+    return out
+
+
 def set_instances(design_dir: str | Path, placements: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Save every instance position at once (the Arrange canvas's Save):
     ``[{macro, name, location, orientation}]``. All or nothing."""

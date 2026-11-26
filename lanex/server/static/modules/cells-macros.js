@@ -392,7 +392,7 @@ function refreshSide() {
   const loc = p.location;
   const c = loc && g.grid === "default" ? P.crossings(AR.model, p) : null;
   insp.innerHTML =
-    "<div class='an-eyebrow'>" + esc(p.macro) + "</div><h4 class='mc-insp-name mono'>" + esc(p.name) + "</h4>" +
+    "<div class='an-eyebrow mc-insp-mod' title='" + esc(p.macro) + "'>" + esc(p.macro) + "</div><h4 class='mc-insp-name mono'>" + esc(p.name) + "</h4>" +
     (loc ? "<div class='mc-insp-xy'>" +
       "<label>X <input id='mc-ix' class='mono' inputmode='decimal' value='" + esc(P.fmtUm(loc[0])) + "' aria-label='X of the lower-left corner, µm'> <span class='muted'>µm</span></label>" +
       "<label>Y <input id='mc-iy' class='mono' inputmode='decimal' value='" + esc(P.fmtUm(loc[1])) + "' aria-label='Y of the lower-left corner, µm'> <span class='muted'>µm</span></label>" +

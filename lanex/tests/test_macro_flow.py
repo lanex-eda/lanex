@@ -314,3 +314,18 @@ def test_gf180_sram_power_nets_are_vdd_vss_and_gets_column_straps(tmp_path):
     plan = fp["macros"][name]["plan"]
     assert fp["core"]["box"] == [6.72, 15.68, 642.88, 431.2]
     assert (plan["kind"], plan["width"], plan["offset"], plan["pitch"]) == ("columns", 2.36, 1.18, 426.86)
+
+
+@pytest.mark.skipif(not _have("sky130A"), reason="sky130A not installed")
+def test_sram_template_makes_a_placed_powered_macro(tmp_path):
+    from lanex.controller import scaffold
+    d = tmp_path / "sramp"
+    assert scaffold.create_project(str(d), "sram", top="", pdk="sky130A")["ok"]
+    cfg = json.loads((d / "config.json").read_text())
+    assert cfg["FP_SIZING"] == "absolute" and cfg["DIE_AREA"] == [0, 0, 700, 600]
+    res = cm.apply_template_macros(str(d), "sram", "sky130A", "sky130_fd_sc_hd")
+    assert res == [{"ok": True, "name": "sky130_sram_1kbyte_1rw1r_32x256_8", "error": None}]
+    # the position verified clean on real runs (the research's and LanEx's own)
+    assert cm.run_problems(str(d), "sky130A", "sky130_fd_sc_hd") == []
+    other = cm.apply_template_macros(str(tmp_path / "x"), "sram", "gf180mcuD", None)
+    assert not other[0]["ok"] and "sky130" in other[0]["error"]

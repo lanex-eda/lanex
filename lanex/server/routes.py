@@ -3285,6 +3285,15 @@ def h_project_new(handler: Any) -> None:
     if not result.get("ok"):
         _respond(handler, result.get("error") or "could not create project", 400)
         return
+    # A template with hard macros (the SRAM example) gets them, placed and
+    # powered, on the Cells & macros tab (lane 7).
+    try:
+        from ..controller import custommacros
+        added = custommacros.apply_template_macros(result["design_dir"], template, pdk or None, scl)
+        if added:
+            result["macros"] = added
+    except Exception:
+        _log.exception("template macros failed")
     # Adopt the freshly-created design (mirrors h_set_design_dir).
     _set_active_design_dir(result["design_dir"])
     _respond(handler, result)

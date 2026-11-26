@@ -1059,10 +1059,14 @@ def pdn_cfg_text(plans: List[Tuple[str, List[str], Dict[str, Any]]]) -> str:
     for k, (macro, insts, p) in enumerate(plans):
         g = f"lanex_macro_{k}"
         inst_list = " ".join(insts)
+        # The bridge grid takes no halo, as in IHP's template: with one, the
+        # Metal5 straps' ground shapes came out unconnected (PSM-0038/0069 on a
+        # real IHP run); the columns grid keeps wafer.space's halo.
         lines += [f"# {macro}: {p['kind']} pattern",
                   "define_pdn_grid \\", "    -macro \\", f"    -instances \"{inst_list}\" \\",
-                  f"    -name {g} \\", "    -starts_with POWER \\",
-                  "    -halo \"$::env(PDN_HORIZONTAL_HALO) $::env(PDN_VERTICAL_HALO)\"", ""]
+                  f"    -name {g} \\"]
+        lines += (["    -starts_with POWER", ""] if p["kind"] == "bridge" else
+                  ["    -starts_with POWER \\", "    -halo \"$::env(PDN_HORIZONTAL_HALO) $::env(PDN_VERTICAL_HALO)\"", ""])
         if p["kind"] == "bridge":
             lines += ["add_pdn_stripe \\", f"    -grid {g} \\", f"    -layer {p['strap_layer']} \\",
                       f"    -width {p['width']} \\", f"    -pitch {p['pitch']} \\", f"    -offset {p['offset']} \\",
