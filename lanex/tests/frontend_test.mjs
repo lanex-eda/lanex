@@ -1040,7 +1040,8 @@ check("SSE: reconnect past ring eviction re-hydrates from run/status (N3)", () =
   assert.match(apiSrc, /addEventListener\("gap"/, "no gap-event listener");
   assert.match(apiSrc, /_wasDisconnected/, "reconnect-after-drop not tracked");
   assert.match(apiSrc, /run_status_resync/, "resync broadcast missing");
-  assert.match(apiSrc, /runStatus:\s*\(\)\s*=>\s*_fetch\("\/api\/run\/status"\)/,
+  // (It may name one queue job: runStatus(jobId).)
+  assert.match(apiSrc, /runStatus:\s*\(\w*\)\s*=>\s*_fetch\("\/api\/run\/status"/,
     "api.runStatus endpoint missing");
   const appSrc = readFileSync(resolve(HERE, "..", "server", "static", "app.js"), "utf8");
   const i = appSrc.indexOf('ev.type === "run_status_resync"');
@@ -1717,6 +1718,172 @@ check("layout: rulers and the scale bar speak in the natural unit", () => {
   assert.equal(LC.niceLength(7.3), 5);
   assert.equal(LC.niceLength(0.031), 0.02);
   assert.equal(LC.niceLength(180), 100);
+});
+
+// ---------- Layout pro analysis (heatmap.js, layoutkey.js, layoutoverlays.js) ------
+const HM = await import(toUrl(resolve(MOD, "heatmap.js")));
+const LK = await import(toUrl(resolve(MOD, "layoutkey.js")));
+const LO = await import(toUrl(resolve(MOD, "layoutoverlays.js")));
+
+check("heatmap: the LanEx ramp brightens with the value; the light canvas runs it the other way", () => {
+  const lum = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const steps = [0, 0.25, 0.5, 0.75, 1].map((t) => lum(HM.rampColor("lanex", t)));
+  for (let i = 1; i < steps.length; i++) assert.ok(steps[i] > steps[i - 1], "lightness must rise: " + steps.join(","));
+  assert.ok(lum(HM.rampColor("lanex", 1, true)) < lum(HM.rampColor("lanex", 0, true)), "on white, more is darker");
+  // It never ends in the DRC markers' red.
+  const [r, g] = HM.rampColor("lanex", 1);
+  assert.ok(g > 200 && r > 200, "the top of the ramp is pale yellow, not red");
+  assert.deepEqual(HM.rampColor("turbo", 0).length, 3);
+  assert.ok(HM.rampGradient("lanex").startsWith("linear-gradient(90deg,rgb("));
+});
+
+check("heatmap: the tile under a point, a histogram and the scale's top", () => {
+  const map = { xs: [0, 6.9, 13.8], ys: [0, 6.9, 10], nx: 2, ny: 2, v: [32, 95.65, 101, null], unit: "%", max: 101 };
+  assert.deepEqual(HM.heatValueAt(map, 7, 1), { v: 95.65, box: [6.9, 0, 13.8, 6.9] });
+  assert.equal(HM.heatValueAt(map, 8, 8), null, "no tile there");
+  assert.equal(HM.heatValueAt(map, 20, 1), null, "outside the map");
+  assert.deepEqual(HM.histogram([0, 49, 50, 99, 100, 150, null], 2, 0, 100), [2, 4]);
+  assert.equal(HM.scaleTop(map), 100);
+  assert.equal(HM.scaleTop({ unit: "μW", max: 7 }), 7);
+});
+
+check("layout key: rows by meaning, top of the stack first, words for the stage", () => {
+  const L = (id, name, purpose, group, z, extra = {}) => ({ id, name, purpose, group, z, label: name + "." + purpose, src: id + "/20", fill: "#123456", frame: "#123456", ...extra });
+  const layers = [L(1, "met1", "drawing", "metal", 12), L(2, "met2", "drawing", "metal", 14), L(3, "via", "drawing", "metal", 13),
+    L(4, "met5", "drawing", "metal", 20), L(5, "prBoundary", "boundary", "misc", 0), L(6, "met1", "pin", "pin", 12.5), L(7, "li1", "drawing", "local", 8)];
+  const vis = new Set([1, 2, 3, 4, 5, 7]);
+  const rows = LK.keyRows({ layers, vis, stage: "routing", kind: "def", pdn: { rail: "met1", vertical: "met4", horizontal: "met5" } });
+  assert.deepEqual(rows.map((r) => r.key), ["m5", "m2", "m1", "via", "local", "outline"]);
+  assert.match(rows.find((r) => r.key === "m1").words, /Short hops/);
+  assert.match(rows.find((r) => r.key === "m5").words, /power straps/);
+  assert.equal(rows.find((r) => r.key === "outline").words, "The die, and each standard cell's box");
+  // A hidden layer has no row; the pin twin is not a row of its own unless shown.
+  assert.ok(!rows.some((r) => r.key === "pin"));
+  // Before routing, metal 1 is the cells' pins and the rails.
+  const pre = LK.keyRows({ layers, vis, stage: "placement", kind: "def" });
+  assert.match(pre.find((r) => r.key === "m1").words, /Cell pins and the power rails/);
+  // The power grid stage (and the Power preset) name the straps and rails.
+  const pdn = LK.keyRows({ layers, vis, stage: "", kind: "def", pdn: { rail: "met1", vertical: "met4", horizontal: "met5" }, preset: "power" });
+  assert.equal(pdn.find((r) => r.key === "m1").words, "The power rails along each row");
+  assert.equal(pdn.find((r) => r.key === "m5").words, "Power straps, across");
+  assert.match(LK.keyRowsHtml(rows), /data-key-row='m5'/);
+});
+
+check("layout key: buckets across sky130, gf180 and IHP names", () => {
+  const b = (name, group, purpose = "drawing") => LK.bucketOf({ name, group, purpose });
+  assert.equal(b("met3", "metal"), "m3");
+  assert.equal(b("Metal4", "metal"), "m4");
+  assert.equal(b("TopMetal1", "metal"), "top");
+  assert.equal(b("via2", "metal"), "via");
+  assert.equal(b("mcon", "local"), "via");
+  assert.equal(b("li1", "local"), "local");
+  assert.equal(b("prBoundary", "misc", "boundary"), "outline");
+  assert.equal(b("met1", "pin", "pin"), "pin");
+});
+
+check("layout path contract: names, points and pins become one clean path", () => {
+  // As lane 4 sends it: names only, DEF escapes, pins in order.
+  const h = LO.normaliseHighlight({ kind: "path", label: "Worst setup", insts: ["input34", "_278_"], nets: ["dsa\\[0\\].x"],
+    pins: ["x", "input34/A", "input34/X", "_278_/D"], slack: "5.836", corner: "nom_tt_025C_1v80" });
+  assert.equal(h.kind, "path");
+  assert.deepEqual(h.nets, ["dsa[0].x"]);
+  assert.deepEqual(h.insts, ["input34", "_278_"]);
+  assert.equal(h.points.length, 4);
+  assert.equal(h.points[0].inst, "", "a top-level port has no instance");
+  assert.equal(h.startpoint, "x");
+  assert.equal(h.endpoint, "_278_/D");
+  assert.equal(h.slack, 5.836);
+  assert.equal(h.delay_type, "max");
+  // With points (straight from report_checks -format json).
+  const p = LO.normaliseHighlight({ points: [["input34/X", 9.63, 41.2, 2.25], ["_278_/D", 50, 77, 3.5]], delay_type: "min" });
+  assert.deepEqual(p.insts, ["input34", "_278_"]);
+  assert.equal(p.points[1].arrival, 3.5);
+  assert.equal(p.delay_type, "min");
+  assert.equal(LO.normaliseHighlight({ kind: "bogus" }).kind, "path");
+});
+
+check("layout path contract: exactly what Verify's Show on layout sends (lane 4 highlightOf)", () => {
+  const h = LO.normaliseHighlight({ kind: "path", label: "setup · max_ss_100C_1v60 · x → _278_/D · +4.100 ns",
+    insts: ["input34", "fanout47", "_278_"], nets: ["x", "net34", "dsa\\[13\\].y_out_next"],
+    pins: ["input34/A", "input34/X", "fanout47/A", "_278_/D"], ports: ["x"],
+    clock: { launch: { insts: [], nets: [] }, capture: { insts: ["clkbuf_0_clk", "_278_"], nets: ["clk", "clknet_0_clk"] } },
+    corner: "max_ss_100C_1v60", check: "setup", slack: 4.10026, run: "baseline" });
+  assert.deepEqual(h.pins, ["x", "input34/A", "input34/X", "fanout47/A", "_278_/D"], "the input port starts the path");
+  assert.equal(h.points[0].pin, "x");
+  assert.equal(h.startpoint, "x");
+  assert.equal(h.endpoint, "_278_/D");
+  assert.deepEqual(h.nets, ["x", "net34", "dsa[13].y_out_next"]);
+  assert.deepEqual(h.clockInsts, ["clkbuf_0_clk"], "a data-path cell is not counted twice");
+  assert.deepEqual(h.clockNets, ["clk", "clknet_0_clk"]);
+  assert.equal(h.delay_type, "max");
+  assert.equal(h.slack, 4.10026);
+  // An output port ends the path; a hold check is a min path.
+  const o = LO.normaliseHighlight({ label: "hold · nom · _314_/CLK → y · +0.2 ns", pins: ["_314_/CLK", "_314_/Q"], ports: ["y"], check: "hold" });
+  assert.deepEqual(o.pins, ["_314_/CLK", "_314_/Q", "y"]);
+  assert.equal(o.delay_type, "min");
+});
+
+check("layout path: places from the cells or the pin labels, increments per stage", () => {
+  const pts = [{ pin: "x", inst: "", x: null, y: null, arrival: 2.0 }, { pin: "u1/A", inst: "u1", x: null, y: null, arrival: 2.25 },
+    { pin: "u1/X", inst: "u1", x: 5, y: 6, arrival: 2.5 }];
+  const placed = LO.placePoints(pts, { u1: { cell: "lib__buf_1", box: [0, 0, 2, 4] } }, [{ text: "x", x: -1, y: 3 }]);
+  assert.deepEqual([placed[0].x, placed[0].y], [-1, 3]);
+  assert.deepEqual([placed[1].x, placed[1].y], [1, 2]);
+  assert.deepEqual([placed[2].x, placed[2].y], [5, 6], "the export's own position wins");
+  assert.equal(placed[0].incr, null);
+  assert.equal(Math.round(placed[1].incr * 1000), 250);
+  assert.equal(placed[1].cell, "lib__buf_1");
+});
+
+check("layout markers: next and previous wrap, and by category", () => {
+  const it = (cat, n) => ({ cat, n });
+  const items = [it("a", 1), it("a", 2), it("b", 3), it("b", 4), it("c", 5)];
+  const m = { sources: [{ label: "DRC", categories: [{ name: "a" }, { name: "b" }, { name: "c" }], items }] };
+  const list = LO.flattenMarkers(m);
+  assert.equal(list.length, 5);
+  assert.deepEqual(LO.stepMarker(list, null, 1), { i: 0, wrapped: false });
+  assert.deepEqual(LO.stepMarker(list, items[4], 1), { i: 0, wrapped: true });
+  assert.deepEqual(LO.stepMarker(list, items[0], -1), { i: 4, wrapped: true });
+  assert.equal(LO.stepMarker(list, items[0], 1, { byCat: true }).i, 2, "next category starts at its first");
+  assert.equal(LO.stepMarker(list, items[3], -1, { byCat: true }).i, 0, "previous category starts at its first");
+  // A hidden or unreadable report is not stepped through.
+  assert.equal(LO.flattenMarkers({ sources: [{ hidden: true, categories: [{ name: "a" }], items }] }).length, 0);
+  assert.equal(LO.flattenMarkers({ sources: [{ ok: false, categories: [{ name: "a" }], items }] }).length, 0);
+});
+
+check("layout overlays: nets, a path and the clock tree draw on any 2D context", () => {
+  const calls = [];
+  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => { calls.push(k); return { addColorStop() {} }; }), set: (t, k, v) => { t[k] = v; return true; } });
+  const v = { W: 400, H: 300, box: [0, 0, 100, 75], w2s: (x, y) => [x * 4, 300 - y * 4] };
+  LO.drawNets(ctx, v, [{ name: "n", color: "#38d6c8", g: { found: true, boxes: [["68/20", 10, 10, 20, 11]], pins: [{ x: 10, y: 10 }, { x: 20, y: 11 }] } },
+    { name: "pre", color: "#E69F00", g: { found: true, boxes: [], pins: [{ x: 1, y: 1 }, { x: 5, y: 5 }, { x: 9, y: 2 }] } }]);
+  assert.ok(calls.includes("fillRect") && calls.includes("lineTo"), "wires as rectangles, flight lines before routing");
+  calls.length = 0;
+  LO.drawPath(ctx, v, { cells: { u1: { box: [10, 10, 12, 14] } }, netGeom: {}, placed: [{ x: 5, y: 5, i: 0 }, { x: 11, y: 12, i: 1 }, { x: 30, y: 40, i: 2 }] });
+  assert.ok(calls.includes("strokeRect") && calls.includes("arc"), "cells outlined, start and stage dots");
+  calls.length = 0;
+  LO.drawClock(ctx, v, { summary: { arrival_min: 0.3, arrival_max: 0.4 }, nets: [{ name: "c", driver: { box: [1, 1, 3, 3] },
+    sinks: [{ box: [20, 20, 22, 22], ff: true, arrival: 0.35 }] }] });
+  assert.ok(calls.includes("moveTo") && calls.includes("arc"), "a star from the driver, a dot per flip-flop");
+});
+
+await checkAsync("layout: a viewer that dies at start is reported with its last lines and log", async () => {
+  const src = readFileSync(resolve(MOD, "layouttools.js"), "utf8");
+  assert.ok(src.includes("watchLaunch(res.launch"), "every launch is watched");
+  const LT = await import(toUrl(resolve(MOD, "layouttools.js")));
+  const msg = LT.launchVerdict({ state: "exited", code: 1, seconds: 1.2, label: "KLayout", tail: ["", "cannot connect to X server :0"], log: "/h/.lanex/logs/viewers/klayout-1.log" });
+  assert.match(msg, /^KLayout closed right after it started \(exit code 1\)\. Last lines: cannot connect to X server :0\. The full log is \/h\/\.lanex/);
+  assert.equal(LT.launchVerdict({ state: "running" }), null);
+  assert.equal(LT.launchVerdict({ state: "exited", code: 0, seconds: 120 }), null, "closed by the user after a while is not a failure");
+});
+
+check("layout: the highlight contract is wired from nav.js to layout.js", () => {
+  const nav = readFileSync(resolve(MOD, "nav.js"), "utf8");
+  assert.ok(/p\.highlight[\s\S]{0,200}revealHighlight\(p\.highlight, p\.run\)/.test(nav), "nav.js hands highlight + run to layout.js");
+  assert.equal(typeof LX.revealHighlight, "function");
+  const html = readFileSync(resolve(HERE, "..", "server", "static", "index.html"), "utf8");
+  assert.ok(html.includes('title="Pin names (L)"'), "the Labels button promises pin names only");
+  for (const id of ["lx-key", "lx-ovl", "lx-ovl-menu", "lx-stepper", "lx-focus", "lx-netchips"]) assert.ok(html.includes('id="' + id + '"'), id + " missing");
 });
 
 // ---------- Layout 3D (layout3d.js): pure helpers ---------------------------------
@@ -2882,7 +3049,8 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.match(pal, /A\("stop", "Stop the run", "Run", "stop", \(\) => click\("btn-cancel"\)\)/);
     const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
     assert.match(setup, /getElementById\("btn-cancel"\)\?\.addEventListener\("click", \(\) => requestStop\(\)\)/);
-    assert.equal((setup.match(/api\.cancelRun\(\)/g) || []).length, 2, "cancelRun is called only from requestStop and a start stopped mid-way");
+    // (It names the run the window follows: several can go at once.)
+    assert.equal((setup.match(/api\.cancelRun\(/g) || []).length, 2, "cancelRun is called only from requestStop and a start stopped mid-way");
     const fl = readFileSync(resolve(MOD, "flow.js"), "utf8");
     assert.ok(!/act === "stop"\) api\.cancelRun/.test(fl), "Flow's Stop skips the confirm");
     assert.match(fl, /m\.requestStop\(\)/);
@@ -2934,6 +3102,513 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   check("toasts sit above the status bar (the sign-off notice and progress stay readable)", () => {
     const css = readFileSync(resolve(MOD, "..", "features.css"), "utf8");
     assert.match(css, /\.toast-host \{[^}]*bottom: calc\(var\(--status-h, 30px\) \+ var\(--s-3\)\)/);
+  });
+}
+// ---- Verify: timing explorer, corner grid, warnings, share card (lane 4)
+{
+  const CG = await import(toUrl(resolve(MOD, "cornergrid.js")));
+  const TX = await import(toUrl(resolve(MOD, "timing.js")));
+  const WN = await import(toUrl(resolve(MOD, "warnings.js")));
+  const SC = await import(toUrl(resolve(MOD, "sharecard.js")));
+  const VM = await import(toUrl(resolve(MOD, "verify-model.js")));
+  check("cornergrid: sky130 and IHP corner names parse into process, temperature, voltage, wire RC", () => {
+    assert.deepEqual(CG.parseCorner("max_ss_100C_1v60"), { name: "max_ss_100C_1v60", rc: "max", process: "ss", speed: "slow", temp: 100, volt: 1.6 });
+    assert.equal(CG.parseCorner("min_ff_n40C_1v95").temp, -40);
+    const ihp = CG.parseCorner("nom_fast_1p32V_m40C");
+    assert.equal(ihp.speed, "fast"); assert.equal(ihp.volt, 1.32); assert.equal(ihp.temp, -40); assert.equal(ihp.rc, "nom");
+    assert.equal(CG.cornerWords("max_ss_100C_1v60"), "slow process, 100 °C, 1.60 V, max wire RC");
+  });
+  check("cornergrid: nine sky130 corners lay out 3 × 3 (fast → slow across, min → max RC down); unknown names fall back to a strip", () => {
+    const names = ["max_ff_n40C_1v95", "max_ss_100C_1v60", "max_tt_025C_1v80", "min_ff_n40C_1v95", "min_ss_100C_1v60", "min_tt_025C_1v80", "nom_ff_n40C_1v95", "nom_ss_100C_1v60", "nom_tt_025C_1v80"];
+    const L = CG.cornerLayout(names);
+    assert.equal(L.grid, true);
+    assert.deepEqual(L.rows, ["min", "nom", "max"]);
+    assert.equal(L.cols.length, 3);
+    assert.match(L.cols[0], /^ff\|/); assert.match(L.cols[2], /^ss\|/);
+    assert.equal(CG.cornerLayout(["foo", "bar"]).grid, false);
+    const html = CG.cornerGridHtml(names.map((c, i) => ({ corner: c, ws: i - 4 })), { value: (r) => r.ws, selected: "nom_tt_025C_1v80", gate: (r) => r.corner.includes("tt") });
+    assert.equal((html.match(/class='cg-b'/g) || []).length, 9);
+    assert.match(html, /is-bad/); assert.match(html, /is-sel/); assert.match(html, /aria-pressed='true'/);
+    assert.match(html, /fails the run here/);
+  });
+  check("timing: a slack never rounds a failure to zero; sums read as the report's terms", () => {
+    assert.equal(TX.fmtSlack(4.10026), "+4.100");
+    assert.equal(TX.fmtSlack(-0.0002), "−0.000200");
+    assert.equal(TX.fmtSlack(1e30), "no path");
+    assert.equal(TX.fmtSlack(null), "—");
+    assert.equal(TX.termsText(10.2682, [{ v: 10, word: "clock edge" }, { v: 0.651066, word: "capture clock" }, { v: -0.1, word: "uncertainty" }, { v: -0.282867, word: "setup time (dfrtp_2)" }]),
+      "10.268 = 10.000 clock edge + 0.651 capture clock − 0.100 uncertainty − 0.283 setup time (dfrtp_2)");
+  });
+  check("timing: Show on layout carries the names lane 3 highlights (insts, nets, pins, ports, clock split)", () => {
+    const p = { check: "setup", corner: "max_ss_100C_1v60", start: "x", end: "_278_", slack: 4.1, data: { rows: [{ pin: "_278_/D" }] },
+      highlight: { insts: ["input34", "_278_"], nets: ["x", "net34"], pins: ["input34/A", "_278_/D"], ports: ["x"], clock: { launch: { insts: [], nets: [] }, capture: { insts: ["clkbuf_0_clk"], nets: ["clk"] } } } };
+    const h = TX.highlightOf(p, "baseline");
+    assert.equal(h.kind, "path");
+    assert.deepEqual(h.insts, ["input34", "_278_"]);
+    assert.deepEqual(h.clock.capture.insts, ["clkbuf_0_clk"]);
+    assert.equal(h.label, "setup · max_ss_100C_1v60 · x → _278_/D · +4.100 ns");
+    assert.equal(h.run, "baseline");
+  });
+  check("timing: the old merged worst-paths card and its second baseline picker are gone from Verify", () => {
+    const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+    assert.doesNotMatch(html, /id="timing-compare"/);
+    assert.match(html, /id="vf-tx"/);
+    assert.match(html, /data-jump="vf-warnings"/);
+    assert.match(html, /data-export="html"/);
+  });
+  check("warnings: new-since-baseline and waived filters keep waived groups visible unless asked", () => {
+    const gs = [
+      { key: "a", code: "STA-1140", tool: "OpenSTA", count: 18, waived_count: 18, new: false, base_count: 18, samples: ["library x already exists"] },
+      { key: "b", code: "RSZ-0062", tool: "OpenROAD", count: 1, waived_count: 0, new: true, base_count: 0, samples: [] },
+      { key: "c", code: "DRT-0349", tool: "OpenROAD", count: 12, waived_count: 0, new: false, base_count: 10, samples: [] },
+    ];
+    assert.deepEqual(WN.filterGroups(gs, { mode: "all" }).map((g) => g.key), ["a", "b", "c"]);
+    assert.deepEqual(WN.filterGroups(gs, { mode: "new" }).map((g) => g.key), ["b", "c"], "a count that changed counts as new");
+    assert.deepEqual(WN.filterGroups(gs, { mode: "all", showWaived: false }).map((g) => g.key), ["b", "c"]);
+    assert.deepEqual(WN.filterGroups(gs, { q: "already" }).map((g) => g.key), ["a"]);
+  });
+  check("verdict: a run with no clock is 'Timing was never checked', never Clean", () => {
+    const rep = { verdict: { state: "incomplete", missing_core: ["setup", "hold"], skipped_core: [], blocker_ids: [], warning_ids: [], total: 20 },
+      flow_state: { state: "complete" }, run_verdict: { state: "incomplete", label: "Timing not checked: no clock" },
+      checks: [{ id: "setup", name: "Setup violations", status: "not_run", no_clock: { clock_port: null, registers: 64 } }, { id: "hold", name: "Hold violations", status: "not_run" }] };
+    const cp = VM.verdictCopy(rep);
+    assert.equal(cp.tone, "warn");
+    assert.equal(cp.title, "Timing was never checked");
+    assert.match(cp.sub, /CLOCK_PORT/);
+  });
+  await checkAsync("report card: Flow links to Verify's warnings instead of a second full list; other callers keep theirs", async () => {
+    const RC = await import(toUrl(resolve(MOD, "reportcard.js")));
+    const w = { total: 33, by_code: [{ code: "STA-1140", count: 18, sample: "x" }], other: 0 };
+    assert.match(RC.warningsHtml(w, { verifyLink: true }), /data-go='verify' data-go-section='vf-warnings'/);
+    assert.doesNotMatch(RC.warningsHtml(w, { verifyLink: true }), /Every warning code/);
+    assert.match(RC.warningsHtml(w), /Every warning code/);
+  });
+  check("share card: the numbers students post, Fmax per process corner, never a hidden failing verdict", () => {
+    const sum = { identity: { design: "spm", pdk: "sky130A", scl: "sky130_fd_sc_hd", run: "baseline", librelane: "3.0.4", finished: "2026-09-17T00:07:30" },
+      area: { die_w: 96.6, die_h: 107.32, util: 0.630246, logic_cells: 324, flipflops: 64 },
+      timing: { clock_period: 10, mhz: 100, corners: [
+        { corner: "max_ss_100C_1v60", setup_ws: 4.1, setup_tns: 0, hold_ws: 1.13, hold_tns: 0, fmax: 343.12 },
+        { corner: "nom_ss_100C_1v60", setup_ws: 4.15, setup_tns: 0, hold_ws: 1.13, hold_tns: 0, fmax: 344.6 },
+        { corner: "max_tt_025C_1v80", setup_ws: 5.96, setup_tns: 0, hold_ws: 0.5, hold_tns: 0, fmax: 684.16 },
+        { corner: "min_ff_n40C_1v95", setup_ws: 6.69, setup_tns: 0, hold_ws: 0.281, hold_tns: 0, fmax: 1034.5 }] },
+      physical: { magic_drc: 0, klayout_drc: 0, route_drc: 0, lvs: "Circuits match uniquely.", antenna_nets: 0 } };
+    const d = SC.cardData(sum, { tone: "pass", title: "Clean", short: "clean" });
+    const rows = Object.fromEntries(d.rows);
+    assert.equal(rows.Die, "96.6 × 107.3 µm");
+    assert.equal(rows["Logic cells"], "324 · 64 flip-flops");
+    assert.equal(rows.Utilisation, "63 %");
+    assert.equal(rows.Setup, "WNS +4.10 ns · TNS 0.00");
+    assert.equal(rows["Reg→reg Fmax"], "343 ss · 684 tt · 1035 ff MHz");
+    assert.equal(rows.Checks, "DRC 0 · LVS match · antenna 0");
+    assert.equal(d.word, "CLEAN");
+    const bad = SC.cardData({ ...sum, timing: { ...sum.timing, no_clock: { registers: 64 } } }, { tone: "warn", title: "Timing was never checked", short: "timing not checked" });
+    assert.equal(bad.word, "TIMING NOT CHECKED");
+    assert.ok(!Object.fromEntries(bad.rows)["Reg→reg Fmax"]);
+    assert.match(SC.altText(d), /^Layout of spm on sky130A: a 96\.6 by 107\.3 µm die, 324 logic cells, 10 ns clock\. .*not a foundry sign-off\.$/);
+  });
+}
+
+// ------------------------------------------------ lane 5: failures and learning
+{
+  const GL = JSON.parse(readFileSync(resolve(MOD, "..", "glossary.json"), "utf8"));
+  const TM = await import(toUrl(resolve(MOD, "term.js")));
+  const terms = TM.normGlossary(GL);
+  check("glossary: version 2, 60+ terms, each with a plain short line and real See also links", () => {
+    assert.equal(GL.version, 2);
+    const ids = Object.keys(terms);
+    assert.ok(ids.length >= 60, ids.length + " terms");
+    for (const [id, e] of Object.entries(terms)) {
+      assert.match(id, /^[a-z0-9-]+$/, id);
+      assert.ok(e.term && e.short && e.short.length < 260, id);
+      for (const s of e.see || []) assert.ok(terms[s], id + " sees " + s);
+    }
+  });
+  check("glossary: every place the registry attaches to names a real term (40+ labels)", () => {
+    const used = new Set();
+    for (const a of TM.ATTACH) {
+      assert.ok(a.in && a.sel, JSON.stringify(a));
+      for (const id of a.term ? [a.term] : Object.values(a.text || {})) { assert.ok(terms[id], id); used.add(id); }
+    }
+    assert.ok(used.size >= 40, used.size + " distinct terms on labels");
+    assert.equal(TM.termFor({ text: { "core utilization": "utilization" } }, "  Core utilization: "), "utilization");
+    assert.equal(TM.termFor({ term: "antenna" }, "anything"), "antenna");
+    assert.equal(TM.termFor({ text: { a: "b" } }, "c"), null);
+  });
+  check("glossary: a term is found by its id, its name or another name", () => {
+    assert.equal(TM.findTerm(terms, "wns").id, "wns");
+    assert.equal(TM.findTerm(terms, "Utilisation").id, "utilization");
+    assert.equal(TM.findTerm(terms, "WNS").id, "wns");
+    assert.equal(TM.findTerm(terms, "nope"), null);
+    // The old flat file still reads, and the palette gets a flat list.
+    assert.equal(TM.normGlossary({ DRC: "Design rule check." }).drc.short, "Design rule check.");
+    assert.match(TM.flatGlossary(GL).WNS, /worst path/);
+  });
+  check("glossary: the popover's words are escaped and link to Help", () => {
+    const h = TM.termHtml({ id: "x", term: "<b>X</b>", short: "a & b", lanex: "in LanEx", see: [] });
+    assert.ok(!h.includes("<b>X</b>") && h.includes("&#60;b&#62;X") && h.includes("a &#38; b"));
+    assert.match(h, /data-term-more='x'/);
+    assert.match(h, /term-lanex/);
+  });
+  check("glossary: the failure cards' terms are all in the glossary", () => {
+    const py = readFileSync(resolve(MOD, "..", "..", "..", "controller", "problems.py"), "utf8");
+    const keys = new Set();
+    // Literal lists ("learn": ["pdn", "strap"]) and the check-to-term table.
+    for (const m of py.matchAll(/"learn": \[((?:"[a-z0-9-]+"(?:, )?)*)\]/g)) for (const k of m[1].matchAll(/"([a-z0-9-]+)"/g)) keys.add(k[1]);
+    const table = (py.match(/_CHECK_TERM = \{([^}]*)\}/) || [])[1] || "";
+    for (const k of table.matchAll(/: "([a-z0-9-]+)"/g)) keys.add(k[1]);
+    assert.ok(keys.size >= 15, keys.size + " keys");
+    for (const k of keys) assert.ok(terms[k], "problems.py learn key " + k);
+  });
+
+  const CK = await import(toUrl(resolve(MOD, "clockfield.js")));
+  check("clock helper: periods and frequencies, both ways", () => {
+    assert.deepEqual(CK.parseClock("10"), { ns: 10, unit: "ns" });
+    assert.equal(CK.parseClock("100 MHz").ns, 10);
+    assert.equal(CK.parseClock("100M").ns, 10);
+    assert.equal(CK.parseClock("2.5GHz").ns, 0.4);
+    assert.equal(CK.parseClock("8 ns", "mhz").ns, 8, "a unit typed wins over the field's");
+    assert.equal(CK.parseClock("50", "mhz").ns, 20, "MHz mode reads a bare number as MHz");
+    assert.equal(CK.parseClock("3", "mhz").ns, 333.3);
+    assert.ok(CK.parseClock("0").error && CK.parseClock("abc").error && CK.parseClock("").error);
+    assert.equal(CK.freqText(10), "100 MHz");
+    assert.equal(CK.freqText(15), "66.67 MHz");
+    assert.equal(CK.freqText(0.4), "2.5 GHz");
+    assert.equal(CK.periodText(10), "10 ns");
+    assert.equal(CK.shown(10, "mhz"), "100");
+  });
+  check("clock helper: the last run's line is arithmetic on its slack, said as an estimate", () => {
+    assert.equal(CK.lastRunLine("t1", 10, 4.11), "t1 met 10 ns with 4.11 ns to spare.");
+    const miss = CK.lastRunLine("t1", 5, -0.59);
+    assert.match(miss, /missed 5 ns by 0\.59 ns: about 5\.6 ns \(179 MHz\) would meet, an estimate/);
+    assert.equal(CK.lastRunLine("t1", null, 1), "");
+  });
+
+  const FP = await import(toUrl(resolve(MOD, "fppreview.js")));
+  // LibreLane's own numbers, from real sky130A runs (sky130_fd_sc_hd).
+  const SKY = { site: { name: "unithd", w: 0.46, h: 2.72 }, margins: {},
+    pdn: { PDN_VOFFSET: 16.32, PDN_VWIDTH: 1.6, PDN_VSPACING: 1.7, PDN_HOFFSET: 16.65, PDN_HWIDTH: 1.6, PDN_HSPACING: 1.7, PDN_MULTILAYER: true },
+    io: { v_pitch: 0.46, h_pitch: 0.68 }, aspect: 1 };
+  check("floorplan: relative sizing gives the die LibreLane made (to the grid)", () => {
+    // A real run: 3359.472 µm² of cells at 40 % -> LibreLane's die 102.685 x 113.405.
+    const fp = FP.computeFloorplan({ FP_SIZING: "relative", FP_CORE_UTIL: 40 }, { ...SKY, synth: { area: 3359.472, tag: "t" } });
+    assert.ok(fp.estimate && Math.abs(fp.die[2] - 102.685) < 0.01 && Math.abs(fp.die[3] - 113.405) < 0.01, JSON.stringify(fp.die));
+    assert.equal(fp.rows, 33);
+    assert.ok(fp.checks.some((c) => c.level === "ok" && /straps fit/.test(c.text)));
+    assert.equal(FP.computeFloorplan({ FP_SIZING: "relative", FP_CORE_UTIL: 40 }, { ...SKY, synth: null }).state, "needs-synthesis");
+  });
+  check("floorplan: the power-grid check matches the PDN-0185 LibreLane really raised", () => {
+    // Forced: a 4-bit counter's core 19.78 µm across, straps need 16.32 + 4.9.
+    const small = FP.computeFloorplan({ FP_SIZING: "absolute", DIE_AREA: "0 0 30.82 60" }, SKY);
+    const f = small.checks.find((c) => c.code === "PDN-0185");
+    assert.ok(f && /needs 21\.22 µm of core width/.test(f.text) && /has 19\.78/.test(f.text), JSON.stringify(small.checks));
+    assert.equal(small.state, "problem");
+    // The 30 µm die: no room up the core for the horizontal straps either.
+    const none = FP.computeFloorplan({ FP_SIZING: "absolute", DIE_AREA: [0, 0, 8, 8] }, SKY);
+    assert.equal(none.state, "no-core");
+    assert.equal(none.checks[0].code, "STA-0572");
+  });
+  check("floorplan: a fixed die reports the cells' fill and the pins' room", () => {
+    const fp = FP.computeFloorplan({ FP_SIZING: "absolute", DIE_AREA: [0, 0, 60, 60] },
+      { ...SKY, pins: 602, synth: { area: 500, tag: "t1" } });
+    const pin = fp.checks.find((c) => c.code === "PPL-0024");
+    assert.ok(pin && pin.level === "fail" && /room for about 218/.test(pin.text), "OpenROAD counted 206; the formula says 218");
+    assert.ok(fp.checks.some((c) => /fill about \d+ %/.test(c.text)));
+    const out = FP.computeFloorplan({ FP_SIZING: "absolute", DIE_AREA: [0, 0, 100, 100], CORE_AREA: [10, 10, 120, 90] }, SKY);
+    assert.ok(out.checks.some((c) => c.code === "IFP-0055"));
+  });
+  check("floorplan: the drawing names its sizes for screen readers and says an estimate", () => {
+    const fp = FP.computeFloorplan({ FP_SIZING: "relative", FP_CORE_UTIL: 40 }, { ...SKY, synth: { area: 3359.472, tag: "t" } });
+    const svg = FP.floorplanSvg(fp);
+    assert.match(svg, /role='img' aria-label='Die 102\.7 by 113\.4 µm, core 91\.64 by 91\.64 µm with 33 rows \(an estimate\)'/);
+    assert.match(svg, /is-estimate/);
+    assert.match(FP.sourceLine(fp, { synth: { area: 3359.472, tag: "t", placed_area: 4167 } }), /An estimate, sized from t's synthesis \(3,359 µm² of cells\)\..*grew to 4,167/);
+    assert.equal(FP.previewHtml(FP.computeFloorplan({}, {}), {}, { compact: true }), "", "no PDK installed: nothing in the wizard");
+  });
+
+  const LN = await import(toUrl(resolve(MOD, "learn.js")));
+  check("help: the glossary and the error index search by name, other names and codes", () => {
+    assert.ok(LN.glossMatch(terms.utilization, "utilisation"));
+    assert.ok(!LN.glossMatch(terms.utilization, "zzz"));
+    const e = { id: "cts-0127", code: "CTS-0127", also: ["CTS-0126"], about: "A clock buffer the library lacks.", stage: "cts", forced: true };
+    assert.ok(LN.codeMatch(e, "cts-0126") && LN.codeMatch(e, "clock tree") && !LN.codeMatch(e, "PDN"));
+    const row = LN.codeRowHtml(e, { "cts-0127": ["t1", "t2"] });
+    assert.match(row, /CTS-0127<br>CTS-0126/);
+    assert.match(row, /checked on a real run · in 2 of your runs \(t1, t2\)/);
+  });
+
+  const PX5 = await import(toUrl(resolve(MOD, "problems.js")));
+  check("failure card: each fix says how sure it is, with a via and a word", () => {
+    assert.match(PX5.sureHtml("fixes"), /vf-mark is-pass.*Fixes it/);
+    assert.match(PX5.sureHtml("likely"), /is-warn.*Likely fix/);
+    assert.match(PX5.sureHtml("try"), /is-info.*Worth a try/);
+    assert.equal(PX5.sureHtml(undefined), "");
+    const row = PX5.fixRowHtml({ kind: "setting", var: "PDN_VPITCH", from: "3", to: "8", why: "w", sure: "fixes" }, { tag: "t" });
+    assert.match(row, /px-sure is-fixes/);
+  });
+  check("failure card: its terms are glossary chips and its code opens Help", () => {
+    const t = PX5.termsRowHtml(["pdn", "strap", "pdn"]);
+    assert.equal((t.match(/data-term=/g) || []).length, 2, "each term once");
+    assert.match(t, /tabindex='0'/);
+    assert.equal(PX5.termsRowHtml([]), "");
+    assert.match(PX5.codeChipHtml("PDN-0175"), /<button type='button' class='fl-code px-code' data-kb-code='PDN-0175'/);
+    assert.equal(PX5.codeChipHtml(null), "");
+    assert.match(PX5.notesHtml(["a <b>"]), /<li>a &lt;b&gt;<\/li>|<li>a &#60;b&#62;<\/li>/);
+  });
+
+  check("wizard: the examples are a ladder in teaching order", () => {
+    const l = WZ.ladder([{ name: "empty", kind: "blank" }, { name: "b", order: 3 }, { name: "a", order: 1 }, { name: "c" }]);
+    assert.deepEqual(l.map((t) => t.name), ["a", "b", "c"]);
+  });
+}
+
+// ---------------------------------------------------------------- RTL IDE (lane 8)
+{
+  const FZ = await import(toUrl(resolve(MOD, "ide", "fuzzy.js")));
+  check("ide fuzzy: letters in order match, a word start and a file name beat a scatter", () => {
+    assert.equal(FZ.score("xyz", "counter.v"), null);
+    assert.deepEqual(FZ.score("cnt", "counter_tb.v").hits, [0, 3, 4]);
+    assert.ok(FZ.score("tb cnt", "verify/counter_tb.v"), "space-separated pieces must all match");
+    const files = ["docs/contents.md", "src/counter.v", "verify/counter_tb.v", "src/cnt_defs.vh", "src/acc_top.v"];
+    const r = FZ.rank("count", files);
+    assert.equal(r[0].item, "src/counter.v", "a name that starts with the query comes first, the shorter one first");
+    assert.equal(FZ.rank("top", files)[0].item, "src/acc_top.v");
+    assert.equal(FZ.rank("", files).length, files.length);
+    assert.equal(FZ.markHits("abc", [0, 2], (s) => s), "<b>a</b>b<b>c</b>");
+    const big = Array.from({ length: 5000 }, (_, i) => "src/module_" + i + "/file_" + ((i * 7) % 1000) + ".sv");
+    const t0 = performance.now();
+    FZ.rank("mod12f3", big);
+    assert.ok(performance.now() - t0 < 200, "5,000 paths rank in well under 200 ms");
+  });
+
+  const SCH = await import(toUrl(resolve(MOD, "ide", "schematic.js")));
+  const LAY = await import(toUrl(resolve(MOD, "ide", "schlayout.js")));
+  // A tiny Yosys netlist: acc_top with an adder instance, a mux and a register.
+  const NET = { modules: {
+    "$paramod\\adder\\W=s32'00000000000000000000000000001000": { attributes: { hdlname: "adder" },
+      ports: { a: { direction: "input", bits: [2, 3] }, b: { direction: "input", bits: [4, 5] }, s: { direction: "output", bits: [6, 7, 8] } },
+      cells: { "$add$x": { type: "$add", attributes: { src: "src/adder.v:10.16-10.21" }, port_directions: { A: "input", B: "input", Y: "output" },
+        connections: { A: [2, 3], B: [4, 5], Y: [6, 7, 8] } } }, netnames: {} },
+    acc_top: { attributes: { top: "00000000000000000000000000000001" },
+      ports: { clk: { direction: "input", bits: [2] }, x: { direction: "input", bits: [3, 4] }, sum: { direction: "output", bits: [5, 6] } },
+      cells: {
+        u_add: { type: "$paramod\\adder\\W=s32'00000000000000000000000000001000", attributes: { src: "src/acc_top.v:17.5-21.7" },
+          port_directions: { a: "input", b: "input", s: "output" }, connections: { a: [5, 6], b: [3, 4], s: [7, 8, 9] } },
+        "$procdff$1": { type: "$dff", attributes: { src: "src/acc_top.v:30.5-33.8" }, port_directions: { CLK: "input", D: "input", Q: "output" },
+          connections: { CLK: [2], D: [10, 11], Q: [5, 6] } },
+        "$procmux$2": { type: "$mux", attributes: { src: "src/acc_top.v:31.13-31.16|src/acc_top.v:31.9-32.29" }, port_directions: { A: "input", B: "input", S: "input", Y: "output" },
+          connections: { A: [7, 8], B: ["0", "0"], S: [9], Y: [10, 11] } },
+      },
+      netnames: { held: { hide_name: 0, bits: [5, 6] }, next: { hide_name: 0, bits: [7, 8, 9] }, x: { hide_name: 0, bits: [3, 4] } } },
+  } };
+  check("ide schematic: module names, source ranges and the netlist as a graph", () => {
+    assert.equal(SCH.moduleLabel("$paramod\\adder\\W=s32'00000000000000000000000000001000", null), "adder W=8");
+    assert.deepEqual(SCH.srcOf("src/top.v:21.13-21.16|src/top.v:21.9-22.29"), { rel: "src/top.v", line: 21, col: 13, len: 3 });
+    assert.deepEqual(SCH.srcOf("/work/src/a.v:7"), { rel: "src/a.v", line: 7, col: 1, len: 0 });
+    const g = SCH.netlistToGraph(NET, "acc_top");
+    assert.equal(g.stats.cells, 3);
+    const inst = g.meta.get("c:u_add");
+    assert.equal(inst.shape, "inst", "a $paramod submodule is an instance you can open, not a box");
+    assert.equal(inst.sub, "adder W=8");
+    assert.equal(g.meta.get("c:$procmux$2").shape, "mux");
+    // the feedback: the register's Q (held) drives the adder and the output
+    const held = g.graph.edges.filter((e) => e.from[0] === "c:$procdff$1");
+    assert.deepEqual(held.map((e) => e.to[0]).sort(), ["c:u_add", "p:sum"]);
+    assert.equal(held[0].width, 2);
+    assert.equal(g.consts.get("c:$procmux$2\u0001B"), "2'b00", "a constant input is a label, not a node");
+  });
+  check("ide schematic: the layout puts inputs left, outputs right and routes every wire", () => {
+    const g = SCH.netlistToGraph(NET, "acc_top");
+    const lay = LAY.layoutGraph(g.graph);
+    assert.equal(Object.keys(lay.edges).length, g.graph.edges.length);
+    const x = (id) => lay.nodes[id].x;
+    assert.ok(x("p:clk") < x("c:$procdff$1") && x("p:x") < x("c:u_add"));
+    assert.ok(x("p:sum") > Math.max(x("c:u_add"), x("c:$procmux$2"), x("c:$procdff$1")));
+    // no two cells overlap
+    const boxes = Object.entries(lay.nodes);
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const [, a] = boxes[i], [, b] = boxes[j];
+      const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+      assert.ok(apart, boxes[i][0] + " overlaps " + boxes[j][0]);
+    }
+    // every wire is orthogonal
+    for (const pts of Object.values(lay.edges)) for (let i = 1; i < pts.length; i++) {
+      assert.ok(Math.abs(pts[i][0] - pts[i - 1][0]) < 0.01 || Math.abs(pts[i][1] - pts[i - 1][1]) < 0.01);
+    }
+    // a big chain lays out quickly
+    const nodes = [{ id: "i", kind: "in", w: 40, h: 22, ins: [], outs: ["o"] }];
+    const edges = [];
+    for (let k = 0; k < 600; k++) {
+      nodes.push({ id: "c" + k, kind: "cell", w: 50, h: 40, ins: ["A", "B"], outs: ["Y"] });
+      edges.push({ id: "e" + k, from: [k ? "c" + (k - 1) : "i", k ? "Y" : "o"], to: ["c" + k, "A"], net: "n" + k });
+      if (k > 3) edges.push({ id: "f" + k, from: ["c" + (k - 3), "Y"], to: ["c" + k, "B"], net: "n" + (k - 3) });
+    }
+    const t0 = performance.now();
+    const big = LAY.layoutGraph({ nodes, edges });
+    assert.equal(Object.keys(big.edges).length, edges.length);
+    assert.ok(performance.now() - t0 < 5000, "600 cells lay out in seconds, not minutes");
+  });
+
+  const SR = await import(toUrl(resolve(MOD, "ide", "simrun.js")));
+  check("ide run all: the summary line and times in plain units", () => {
+    assert.equal(SR.summary([{ state: "pass" }, { state: "pass" }, { state: "fail" }, { state: "build" }]),
+      "4 benches · 2 passed · 1 failed · 1 didn't build");
+    assert.equal(SR.timeWords({ ticks: 46000, unit: "1ps" }), "46 ns");
+    assert.equal(SR.timeWords({ value: 26, unit: "ns" }), "26 ns");
+    assert.equal(SR.timeWords({ ticks: 12 }), "12 ticks");
+    assert.equal(SR.stateWord("stop"), "ENDED AT $STOP");
+    assert.equal(SR.limitWords(3600), "1 h");
+    assert.equal(SR.limitWords(600), "10 min");
+  });
+
+  const NAV = await import(toUrl(resolve(MOD, "ide", "nav.js")));
+  check("ide navigation: kinds read as words; F12, Ctrl+P and search are wired", () => {
+    assert.equal(NAV.kindWord("param"), "parameter");
+    assert.equal(NAV.kindWord("net"), "wire");
+    const ed = readFileSync(resolve(MOD, "ide", "editor.js"), "utf8");
+    assert.match(ed, /key: "F12"/);
+    assert.match(ed, /key: "Shift-F12"/);
+    assert.match(ed, /clickAddsSelectionRange\.of\(\(e\) => e\.altKey\)/, "Ctrl+click is go to definition, Alt+click adds a cursor");
+    const ide = readFileSync(resolve(MOD, "ide", "main.js"), "utf8");
+    assert.match(ide, /k === "p" && !e\.shiftKey/);
+    assert.match(ide, /focusSearch\(\{ replace: true \}\)/);
+    assert.doesNotMatch(ide, /projectTexts\(/, "the hierarchy and the waveform links read the index, not every file");
+    const sx = readFileSync(resolve(MOD, "ide", "search.js"), "utf8");
+    assert.match(sx, /api\.fileWrite\(x\.rel, x\.before, \{ base_hash: x\.hash \}\)/, "Undo never overwrites a newer file");
+    assert.match(sx, /danger: true/, "Replace asks with Cancel focused");
+  });
+  check("ide lint: an implicit wire in a built file is an error (Yosys stops synthesis on it)", () => {
+    const ide = readFileSync(resolve(MOD, "ide", "main.js"), "utf8");
+    assert.match(ide, /state\.diags = implicitIsError\(diags\)/);
+    assert.match(ide, /d\.code === "IMPLICIT" && d\.severity === "warning" && inRun\(d\)/);
+    assert.match(readFileSync(resolve(MOD, "ide", "lintinfo.js"), "utf8"), /IMPLICIT: "[^"]*Yosys stops synthesis/);
+  });
+}
+
+// ---------- the run engine (lane 1): queue chip, following one run, the run menu, the log store
+{
+  const RF = await import(toUrl(resolve(MOD, "runfollow.js")));
+  check("run follow: a window follows its own project's run, the next one after it ends", () => {
+    const st = { designDir: "/p/spm" };
+    const ev = (type, job_id, design_dir = "/p/spm", extra = {}) => ({ type, job_id, design_dir, ...extra });
+    assert.equal(RF.followsRun(ev("info", "j1", "/p/spm", { step_graph: [] }), st), true);
+    assert.equal(st.followJob, "j1");
+    // Another project's run, or another run of this project while j1 runs: not shown.
+    assert.equal(RF.followsRun(ev("log", "j9", "/p/other"), st), false);
+    assert.equal(RF.followsRun(ev("info", "j2", "/p/spm", { step_graph: [] }), st), false);
+    assert.equal(RF.followsRun(ev("step_started", "j2"), st), false);
+    // j1 ends; j2's next step takes over.
+    assert.equal(RF.followsRun(ev("flow_done", "j1"), st), true);
+    assert.equal(RF.followsRun(ev("step_started", "j2"), st), true);
+    assert.equal(st.followJob, "j2");
+    // Older events with no job id always pass; a trailing slash is the same folder.
+    assert.equal(RF.followsRun({ type: "log" }, st), true);
+    assert.equal(RF.sameDesign("/p/spm/", "/p/spm"), true);
+    // Opening another project forgets what the old one followed.
+    st.designDir = "/p/blinky";
+    assert.equal(RF.followsRun(ev("log", "j3", "/p/blinky"), st), true);
+    assert.equal(st.followJob, "j3");
+    RF.followJob(st, "j7", true);
+    assert.equal(RF.followsRun(ev("log", "j3", "/p/blinky"), st), false);
+  });
+
+  const Q = await import(toUrl(resolve(MOD, "queue.js")));
+  check("queue: time left is rounded so it never ticks, and the chip says what is going on", () => {
+    assert.equal(Q.etaWords(null), "");
+    assert.equal(Q.etaWords(30), "less than a minute");
+    assert.equal(Q.etaWords(9 * 60 + 40), "about 10 min");
+    assert.equal(Q.etaWords(23 * 60), "about 25 min");
+    assert.equal(Q.etaWords(80 * 60), "about 1 h 20");
+    assert.equal(Q.chipText({ jobs: [] }).hidden, true);
+    const run = (id, extra = {}) => ({ id, state: "running", project: "spm", step: { index: 42, total: 80 }, ...extra });
+    let t = Q.chipText({ jobs: [run("a")], eta: { known: false } });
+    assert.equal(t.text, "Running · spm · step 43 of 80");
+    t = Q.chipText({ jobs: [run("a", { remaining_s: 700 })], eta: {} });
+    assert.equal(t.text, "Running · spm · about 10 min left");
+    t = Q.chipText({ jobs: [run("a"), run("b"), { id: "c", state: "queued" }], eta: { known: true, seconds: 4800 } });
+    assert.equal(t.text, "Running 2 · 1 queued · about 1 h 20 left");
+    assert.equal(t.short, "Running 2 · 1 queued");
+    t = Q.chipText({ jobs: [run("a"), { id: "c", state: "queued" }], eta: { known: false, unknown_count: 2 } });
+    assert.equal(t.text, "Running 1 · 1 queued");
+    assert.match(t.title, /2 of the 2 have no estimate/);
+    t = Q.chipText({ jobs: [{ id: "c", state: "queued", reason: "Waiting for memory: needs 2.1 GB, 1.4 GB free" }] });
+    assert.equal(t.text, "1 queued · waiting for memory");
+    t = Q.chipText({ paused: true, jobs: [{ id: "c", state: "queued" }, { id: "d", state: "queued" }] });
+    assert.equal(t.text, "Queue paused · 2 waiting");
+    t = Q.chipText({ jobs: [run("a", { origin: "terminal" }), run("b", { origin: "terminal" })], eta: {} });
+    assert.equal(t.text, "Running 2 from a terminal");
+    t = Q.chipText({ jobs: [run("a"), run("b", { origin: "terminal" })], eta: {} });
+    assert.equal(t.text, "Running 2 · 1 from a terminal");
+    t = Q.chipText({ jobs: [{ id: "i", state: "interrupted" }] });
+    assert.equal(t.text, "1 run interrupted");
+    assert.equal(t.tone, "warn");
+    t = Q.chipText({ jobs: [{ id: "f", state: "failed" }, { id: "g", state: "done" }] });
+    assert.equal(t.text, "Queue done · 1 finished · 1 failed");
+    assert.equal(Q.chipText({ jobs: [{ id: "f", state: "failed" }] }, { seenFail: new Set(["f"]) }).hidden, true);
+  });
+  check("queue: the stage bar is one cell per stage, sized by its steps", () => {
+    const segs = Q.stageSegments(["Yosys.Synthesis", "Yosys.JsonHeader", "OpenROAD.Floorplan", "OpenROAD.DetailedRouting"]);
+    assert.ok(segs.length >= 2 && segs.reduce((a, s) => a + s.n, 0) === 4);
+    const html = Q.segBar(segs, 2, { label: "step 3 of 4" });
+    assert.match(html, /role='progressbar'/);
+    assert.match(html, /aria-valuetext='step 3 of 4'/);
+    assert.ok((html.match(/is-done/g) || []).length >= 1);
+  });
+
+  const RM = await import(toUrl(resolve(MOD, "runmenu.js")));
+  check("run menu: the command splits into whole arguments and marks what LanEx sized", () => {
+    assert.deepEqual(RM.shellSplit("librelane --dockerized config.json -c 'VERILOG_FILES=a.v b.v' -c X=1"),
+      ["librelane", "--dockerized", "config.json", "-c", "VERILOG_FILES=a.v b.v", "-c", "X=1"]);
+    assert.deepEqual(RM.shellSplit("a 'it'\\''s' \"q\\\"d\""), ["a", "it's", "q\"d"]);
+    const html = RM.argSpans("librelane --docker-no-tty --dockerized config.json -c DRT_THREADS=8 -T OpenROAD.CTS");
+    assert.match(html, /class='a is-exe'>librelane</);
+    assert.match(html, /is-sized[^>]*>-c DRT_THREADS=8</);
+    assert.match(html, /-T OpenROAD.CTS</);
+    assert.match(html, /‹named at start›/, "no tag yet: the placeholder says LanEx names the run");
+    assert.ok(!/‹named at start›/.test(RM.argSpans("librelane x --run-tag r1")));
+    assert.ok(!/<script/.test(RM.argSpans("librelane '<script>'")), "arguments are escaped");
+    assert.deepEqual(RM.skippable(["Verilator.Lint", "Checker.LintErrors", "Yosys.Synthesis"]), ["Verilator.Lint", "Yosys.Synthesis"]);
+  });
+  check("run menu: Run while every slot is taken adds to the queue, and says where", () => {
+    const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+    assert.match(setup, /when: slotFree\(\) \? "now" : "queue"/);
+    assert.match(setup, /"Add to queue"/);
+    const idx = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+    for (const id of ["queue-chip", "queue-pop", "run-threads", "run-lowprio", "run-keepawake", "run-cmd", "run-now", "run-queue", "run-skip-list"]) {
+      assert.ok(idx.includes('id="' + id + '"'), id + " missing from index.html");
+    }
+    assert.match(idx, /id="run-menu" role="dialog" aria-label="Run options" data-keep/);
+  });
+
+  check("log store: typed arrays, the oldest fifth goes at once, levels the way the tools print them", () => {
+    const s = new LV.LogStore(10);
+    for (let i = 0; i < 12; i++) s.push(i === 3 ? "[ERROR DRT-0001] bad" : i === 5 ? "[WARNING GRT-0227] hm" : "line " + i);
+    assert.equal(s.kind.constructor.name, "Uint8Array");
+    const drop = s.trim();
+    assert.equal(drop, 4);
+    assert.equal(s.length, 8);
+    assert.equal(s.dropped, 4);
+    assert.equal(s.text[0], "line 4");
+    assert.equal(s.num[0], 5, "line numbers stay the run's own after a trim");
+    assert.equal(s.ne, 0);
+    assert.equal(s.nw, 1);
+    // A Rich record wrapped at 80 columns: the continuation keeps the level.
+    const r = new LV.LogStore();
+    r.push("[10:20:30] WARNING  The clock port 'clk' is not");
+    r.push("                    connected to anything");
+    assert.equal(r.kindOf(1), "warn");
+    assert.equal(LV.lineKind("%Warning-UNUSED: x.v:3: signal y is not used"), "warn");
+    assert.equal(LV.lineKind("%Error: x.v:9: syntax error"), "err");
+    assert.equal(LV.lineKind("3 FAILED checks: none"), "", "FAILED alone is not an error line any more");
+    assert.equal(LV.lowerBound(Uint32Array.from([1, 3, 5, 7]), 5), 2);
+    assert.equal(LV.upperBound(Uint32Array.from([0, 1, 3, 3, 6]), 3), 4);
+  });
+  check("log store: 200 000 lines go in fast", () => {
+    const s = new LV.LogStore();
+    const t0 = Date.now();
+    for (let i = 0; i < 200000; i++) s.push((i % 97 === 0 ? "[WARNING STA-1140] " : "[INFO GRT-0101] ") + "routing iteration " + i + " overflow " + (i * 7 % 1000));
+    assert.equal(s.length, 200000);
+    assert.ok(Date.now() - t0 < 1500, "pushing 200k lines took " + (Date.now() - t0) + " ms");
+    assert.ok(s.nw > 2000);
   });
 }
 

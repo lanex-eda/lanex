@@ -1,0 +1,52 @@
+/* logview.css — what the rebuilt log viewer adds to the .lv block in flow.css:
+   find with a match count, level chips that filter, wrap, the new-lines pill,
+   the "showing the last N lines" foot, and gutter marks that are a glyph as
+   well as a colour. */
+
+.lv { position: relative; }
+.lv-q { max-width: 380px; padding-right: 2px; }
+.lv-mc { flex: none; font: 11.5px var(--mono); color: var(--text-muted); white-space: nowrap; }
+.lv-qb {
+  flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 3px; background: transparent;
+  color: var(--text-muted); font: 12px var(--mono); cursor: pointer;
+}
+.lv-qb:hover { background: var(--hover); color: var(--text); }
+.lv-q:not(.has-q) .lv-qb[data-lv=prev], .lv-q:not(.has-q) .lv-qb[data-lv=nextm] { display: none; }
+.lv-aa[aria-pressed="true"] { color: var(--met1); background: var(--accent-soft); }
+.lv-levels { display: inline-flex; gap: 4px; }
+.lv-chip { font-variant-numeric: tabular-nums; }
+.lv-chip.is-info { color: var(--text-muted); }
+.lv-chip[aria-pressed="false"] { opacity: 0.45; text-decoration: line-through; text-decoration-thickness: 1px; }
+.lv-chip[aria-pressed="true"].is-err { background: color-mix(in srgb, var(--fail) 10%, var(--surface-2)); }
+.lv-chip[aria-pressed="true"].is-warn { background: color-mix(in srgb, var(--warn) 10%, var(--surface-2)); }
+.lv-jump { display: inline-flex; gap: 2px; }
+.lv-jump .btn[hidden] { display: none; }
+.lv-acts a[hidden] { display: none; }
+
+/* The gutter says the level in a glyph, not only a colour. */
+.lv .lv-n { position: relative; width: 66px; flex-basis: 66px; }
+.lv-n[data-g]::before { content: attr(data-g); position: absolute; left: 5px; font-size: 10px; }
+.lv-row.is-match { background: color-mix(in srgb, var(--met1) 16%, transparent); }
+.lv-t mark { background: color-mix(in srgb, var(--warn) 45%, transparent); color: inherit; border-radius: 2px; }
+body.theme-light .lv-t mark { background: color-mix(in srgb, var(--warn) 35%, transparent); }
+
+/* Wrap: rows at their own offsets, breaking anywhere so the character count holds. */
+.lv.is-wrap .lv-spacer { min-width: 0; }
+.lv.is-wrap .lv-rows { right: 0; }
+.lv.is-wrap .lv-row { position: absolute; left: 0; right: 0; height: auto; white-space: pre-wrap; word-break: break-all; }
+.lv.is-wrap .lv-t { flex: 1; min-width: 0; }
+
+.lv-newpill {
+  position: absolute; right: 18px; bottom: 44px; z-index: 2;
+  height: 28px; padding: 0 12px; border-radius: var(--r-md);
+  background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent-2);
+  font: 600 12.5px var(--sans, inherit); cursor: pointer; box-shadow: var(--sh-2, 0 4px 12px rgba(0,0,0,.3));
+}
+.lv-newpill[hidden] { display: none; }
+.lv-foot {
+  display: flex; align-items: center; gap: 10px; padding: 5px 10px;
+  border-top: 1px solid var(--border); background: var(--surface);
+  font-size: 12.5px; color: var(--text-muted);
+}
+.lv-foot[hidden] { display: none; }
+.lv-foot .btn[hidden] { display: none; }

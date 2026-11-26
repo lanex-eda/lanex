@@ -377,14 +377,34 @@ def h_runs(handler: Any) -> None:
         _respond(handler, [])
         return
     try:
-        _respond(handler, history.mark_live(history.list_runs(design_dir), _live_run_dir()))
+        rows = history.list_runs(design_dir)
+        for rd in _live_run_dirs():
+            rows = history.mark_live(rows, rd)
+        _annotate_run_origin(rows)
+        _respond(handler, rows)
     except Exception as ex:
         _log.exception("list_runs failed")
         _respond(handler, str(ex), 500)
 
 
+def _annotate_run_origin(rows: List[Dict[str, Any]]) -> None:
+    """Every Runs row says who started it (lane 2 shows it): ``started_by``
+    "lanex" / "sweep" / "terminal" and the queue ``job_id``, also as
+    ``origin.source``. (``origin`` itself stays the dict Runs reads today.)"""
+    from ..controller import jobs
+    for r in rows or []:
+        try:
+            o = jobs.run_row_origin(r.get("run_dir") or "")
+        except Exception:
+            o = {"started_by": "lanex", "job_id": None}
+        r["started_by"] = o["started_by"]
+        r["job_id"] = o["job_id"]
+        if isinstance(r.get("origin"), dict):
+            r["origin"]["source"] = o["started_by"]
+
+
 def _live_run_dir() -> Optional[str]:
-    """The run folder of the flow running right now, or None."""
+    """The run folder of the flow the open project follows right now, or None."""
     try:
         from ..server.app import get_runner
         r = get_runner()
@@ -393,19 +413,38 @@ def _live_run_dir() -> Optional[str]:
         return None
 
 
-def _live_probe() -> Optional[str]:
-    """:func:`_live_run_dir` for history's caches: lets them trust a finished
-    run's quick signature while always re-reading the live one. A runner that
-    was never created runs nothing; one whose run folder is not known yet
-    makes every run count as possibly live."""
+def _live_run_dirs() -> List[str]:
+    """Every run folder being written now (every project, every queue job,
+    followed terminal runs)."""
+    try:
+        from ..controller import jobs
+        out = list(jobs.scheduler.live_run_dirs())
+    except Exception:
+        out = []
+    one = _live_run_dir()
+    if one and one not in out:
+        out.append(one)
+    return out
+
+
+def _live_probe() -> Any:
+    """The live run folders, for history's caches: lets them trust a finished
+    run's quick signature while always re-reading the live ones. A live job
+    whose run folder is not known yet makes every run count as possibly live."""
     from ..server import app as _app
+    from ..controller import jobs
+    out: List[str] = []
     r = _app._RUNNER
-    if r is None or not r.running:
-        return None
-    rd = r.run_dir
-    if not rd:
-        raise RuntimeError("live run folder not known yet")
-    return rd
+    if r is not None and r.running:
+        if not r.run_dir:
+            raise RuntimeError("live run folder not known yet")
+        out.append(r.run_dir)
+    for j in jobs.scheduler.jobs_snapshot_live():
+        if not j.get("run_dir"):
+            raise RuntimeError("live run folder not known yet")
+        out.append(j["run_dir"])
+    out += [f.run_dir for f in list(jobs.scheduler._followers.values()) if f.alive]
+    return out or None
 
 
 history.set_live_probe(_live_probe)
@@ -485,7 +524,11 @@ def h_tools(handler: Any) -> None:
 
 def h_run_status(handler: Any) -> None:
     from ..server.app import get_runner
-    r = get_runner()
+    from ..controller import jobs
+    # ?job_id= : one queue job's run (the queue popover's Show); else the run
+    # the open project follows.
+    want = _query_param(handler.path, "job_id")
+    r = (jobs.scheduler.runner(want) if want else None) or get_runner()
     # A run cancelled before LibreLane created its run dir leaves status
     # pointing at a path that never came to exist, while /api/runs (rightly)
     # doesn't list it. Report None instead of a phantom path so the two
@@ -493,12 +536,17 @@ def h_run_status(handler: Any) -> None:
     run_dir = r.run_dir
     if run_dir and not Path(run_dir).is_dir():
         run_dir = None
+    job_id = getattr(r, "job_id", None)
     _respond(handler, {
         "running": r.running,
         "cancelled": r.cancelled,
-        "paused": r.paused,
+        "paused": r.paused or bool(getattr(r, "awaiting_next", False)),
         "run_dir": run_dir,
         "step_statuses": r.step_statuses,
+        # Which queue job the open project follows (pages ignore the events
+        # of every other run going at the same time).
+        "job_id": job_id,
+        "design_dir": getattr(r, "design_dir", None),
     })
 
 
@@ -1267,7 +1315,8 @@ def _clean_overrides(overrides: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
-                       custom_cells: bool = True) -> Dict[str, Any]:
+                       custom_cells: bool = True,
+                       share: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Single source of truth for the user-data payload of a run.
 
     Turns a run-request body into the pieces that carry USER-SUPPLIED data into
@@ -1333,11 +1382,26 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
     # callers send ``{**overrides, **threads}`` to LibreLane and the command.
     from ..controller import runresources
     _cf = _resolve_config_file(design_dir)
+    # *share*: this run's part of the PC when several go at once (the job
+    # queue), or the thread count the run menu set. None: the whole PC.
+    facts = None
+    if share:
+        m = runresources.machine()
+        facts = {"cores": share.get("cores") or m.get("cores"),
+                 "available_gb": share.get("available_gb") if share.get("available_gb") is not None else m.get("available_gb"),
+                 "total_gb": m.get("total_gb")}
     sized = runresources.plan(
         design_dir=design_dir,
         config_files=([str(_cf)] if _cf else []) + list(extra_config_files),
         flow_factory=_run_flow_cls(design_dir, body.get("flow")),
-        overrides=overrides, pdk=pdk)
+        overrides=overrides, pdk=pdk, facts=facts)
+    if share and sized.get("record"):
+        rec = sized["record"]
+        if share.get("fixed"):
+            rec["reason"] = f"{share.get('cores')} threads, as set in the Run menu"
+        elif share.get("share", 1) > 1:
+            rec["reason"] = (rec.get("reason") or "") + f", shared by {share['share']} runs at once"
+        rec["share"] = share.get("share")
     return {
         "pdk": pdk,
         "scl": scl,
@@ -1492,11 +1556,12 @@ def _design_refusal(handler: Any, design_dir: Optional[str]) -> Optional[str]:
     return None
 
 
-def _other_flow_busy(*, sweep_ok: bool = False, runner_ok: bool = False) -> Optional[str]:
-    """Another flow already has the machine: a sweep's queue (which starts its
-    next point the moment the runner goes idle), a flow run, or a ``librelane``
-    command from the Console. Two flows at once double the memory a full run
-    needs and can write into the same run folder. A plain refusal, or None."""
+def _other_flow_busy(*, sweep_ok: bool = True, runner_ok: bool = False) -> Optional[str]:
+    """A flow LanEx's queue does not schedule is going in this project: a
+    ``librelane`` command from the Console (it may name the same run folder),
+    or (for the Console) a LanEx run of the open project. Runs and sweeps no
+    longer refuse each other: they wait in the job queue, which keeps them to
+    what memory allows. A plain refusal, or None."""
     try:
         from ..controller import dse
         if not sweep_ok and dse.job.active:
@@ -1532,23 +1597,46 @@ def h_run_start(handler: Any) -> None:
         # run, with nothing changed. The fix route plans and starts it.
         b = body["branch_from"] if isinstance(body["branch_from"], dict) else {}
         _apply_fix(handler, {"tag": b.get("tag"), "sets": {}, "start": b.get("step") or "auto",
-                             "run_mode": body.get("run_mode"), "mode": body.get("mode"), "to": body.get("to"), "new_tag": body.get("tag")})
+                             "run_mode": body.get("run_mode"), "mode": body.get("mode"), "to": body.get("to"),
+                             "new_tag": body.get("tag"), "when": body.get("when")})
         return
     data, status = _start_run(body)
     _respond(handler, data, status)
 
 
+_RUN_SPEC_KEYS = ("flow", "run_mode", "mode", "tag", "frm", "to", "only", "skip", "overrides", "sources",
+                  "extras", "threads", "priority", "keep_awake", "notify", "checks_ack", "initial_state",
+                  "branched_from", "sweep", "label", "pdk", "scl")
+
+
+def _run_spec(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The part of a run request a queue job keeps (``jobs.py`` ``spec``)."""
+    return {k: body.get(k) for k in _RUN_SPEC_KEYS if body.get(k) is not None}
+
+
 def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
                branched_from: Optional[Dict[str, Any]] = None,
-               overrides_ready: bool = False) -> Tuple[Any, int]:
+               overrides_ready: bool = False, design_dir: Optional[str] = None,
+               runner: Any = None, share: Optional[Dict[str, Any]] = None,
+               dry: bool = False, continue_of: Optional[Dict[str, Any]] = None,
+               reserve: Any = None) -> Tuple[Any, int]:
     """Start a run from a run-request body: ``(reply, status)``.
+
+    Called without *runner* (a Run click, Resume from a stage, Verify's
+    re-run), the run goes through the job queue: it starts now when a slot
+    and memory are free (``body.when`` "now", the default) or waits in the
+    queue (``when: "queue"``, checked first so a config LibreLane refuses is
+    told now, not in an hour). The queue's launcher calls back here with the
+    job's own *runner* and the machine *share* its threads are sized to.
 
     *initial_state* and *branched_from* make it a run resumed from another
     one (``-i`` with ``frm``; recorded in ``gui-run.json``). *overrides_ready*
     says the body's overrides already hold the per-run custom cells (a
-    resumed run inherits the old run's), so they are not merged again."""
-    from ..server.app import get_runner
-    design_dir = _get_active_design_dir()
+    resumed run inherits the old run's), so they are not merged again.
+    *dry* runs every check and returns before anything starts.
+    *continue_of* is the ``gui-run.json`` of the run an interrupted job
+    continues in its own folder (kept, with this attempt added)."""
+    design_dir = design_dir or _get_active_design_dir()
     if not design_dir:
         return "No project is open. Open or create one on Setup, then run.", 400
     gone = _design_refusal(None, design_dir)
@@ -1563,9 +1651,33 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
     config_file = _resolve_config_file(design_dir)
     if config_file is None:
         return "no config.{json,yaml,tcl} found in design directory", 400
+    if runner is None and not dry:
+        busy = _other_flow_busy(runner_ok=True)
+        if busy:
+            return busy, 409
+        from ..controller import jobs
+        spec = _run_spec(body)
+        if initial_state:
+            spec["initial_state"] = str(Path(initial_state).resolve())
+        if branched_from:
+            spec["branched_from"] = branched_from
+        if body.get("when") == "queue":
+            data, st = _start_run(body, initial_state=initial_state, branched_from=branched_from,
+                                  overrides_ready=overrides_ready, design_dir=design_dir, dry=True)
+            if st != 200 or not (isinstance(data, dict) and data.get("ok")):
+                return data, st
+            spec["checks_ack"] = True
+            try:
+                job = jobs.scheduler.add(design_dir, spec, kind="run", position=body.get("position") or "end")
+            except ValueError as ex:
+                return str(ex), 400
+            return {"ok": True, "started": False, "queued": True, "job_id": job["id"], "job": job,
+                    "reason": job.get("reason") or "Waiting in the queue"}, 200
+        return jobs.scheduler.submit_now(design_dir, spec, initial_state=initial_state,
+                                         branched_from=branched_from)
     config_warning = _multi_config_warning(design_dir)
-    r = get_runner()
-    if r.running:
+    r = runner
+    if r is not None and r.running:
         return "already running", 400
     busy = _other_flow_busy(runner_ok=True)
     if busy:
@@ -1591,7 +1703,8 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
         # ONE shared helper (override cleaning that preserves 0/False, custom-cell
         # overrides, the hard-macro overlay). The DSE sweep path calls the exact
         # same helper, so a swept run can never silently differ from this one.
-        _asm = _assemble_overrides(design_dir, body, custom_cells=not overrides_ready)
+        _asm = _assemble_overrides(design_dir, body, custom_cells=not overrides_ready,
+                                   share=_thread_share(body, share))
         pdk, scl = _asm["pdk"], _asm["scl"]
         overrides = _asm["overrides"]
         run_overrides = {**overrides, **_asm["threads"]}  # + threads sized to this PC
@@ -1639,6 +1752,17 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
         if chk["blocking"] or (chk["problems"] and not body.get("checks_ack")):
             return {"ok": False, "started": False, "config_check": chk,
                     "reason": " ".join(configcheck.blockers_text(chk))}, 200
+        initial_state = initial_state or body.get("initial_state") or None
+        rng = _range_refusal(flow_factory, body, initial_state)
+        if rng:
+            return {"ok": False, "started": False, "reason": rng, "range_error": True}, 200
+        if body.get("only"):
+            body = {**body, "frm": body["only"], "to": body["only"]}
+        if dry:
+            return {"ok": True, "started": False, "checked": True, "flow": flow_name,
+                    "resources": _asm["resources"]}, 200
+        if reserve is not None:
+            body = {**body, "tag": reserve(body.get("tag") or None)}
         state_rel = None
         if initial_state:
             try:
@@ -1695,6 +1819,25 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             )
         except Exception:
             _log.debug("cli_command_for failed for gui-run.json", exc_info=True)
+        job_id = getattr(r, "job_id", None)
+        if job_id:
+            gui_meta["job_id"] = job_id
+        if body.get("sweep"):
+            gui_meta["sweep"] = body["sweep"]
+        if body.get("priority") == "low":
+            gui_meta["priority"] = "low"
+            try:
+                r.low_priority = True
+            except Exception:
+                pass
+        if continue_of:
+            # Continuing an interrupted run in its own folder: what it was
+            # started with stays; this attempt is added to its record.
+            attempt = {"at": platform_env.local_now().isoformat(timespec="seconds"), "how": "continue",
+                       "from_step": body.get("frm"), "job_id": job_id,
+                       "cli_command": gui_meta.get("cli_command")}
+            gui_meta = {**continue_of, "attempts": list(continue_of.get("attempts") or []) + [attempt]}
+            gui_meta.pop("outcome", None)
         result = r.start(
             flow_factory=flow_factory,
             config_files=[str(config_file)],
@@ -1727,10 +1870,69 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             result["command"] = gui_meta.get("cli_command")
             result["resources"] = gui_meta.get("resources")
             result["flow"] = flow_name
+            if body.get("tag"):
+                result["tag"] = body.get("tag")
         return result, 200
     except Exception as ex:
         _log.exception("run start failed")
         return str(ex), 500
+
+
+def _thread_share(body: Dict[str, Any], share: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The machine facts this run's threads are sized to: its share of the
+    PC when several runs go at once (the queue says), or the thread count the
+    run menu set ("Threads: 8")."""
+    t = body.get("threads")
+    try:
+        n = int(t) if t not in (None, "", "auto") else None
+    except (TypeError, ValueError):
+        n = None
+    if n and n > 0:
+        out = dict(share or {})
+        out["cores"] = n
+        if out.get("available_gb") is None:
+            try:
+                from ..controller import runresources
+                out["available_gb"] = runresources.machine().get("available_gb")
+            except Exception:
+                pass
+        out["fixed"] = True
+        return out
+    return share if share and share.get("share", 1) > 1 else None
+
+
+def _range_refusal(flow_factory: Any, body: Dict[str, Any], initial_state: Optional[str]) -> Optional[str]:
+    """Plain words for a step range LibreLane would get wrong, or None.
+
+    Checked on 3.0.4 (research, section 6): ``--from`` in a new run with no
+    ``-i`` stops at once with "missing required input"; ``--to`` before
+    ``--from`` silently runs to the end of the flow; ids that match nothing
+    stop with "no step(s) with ID"."""
+    frm = body.get("only") or body.get("frm")
+    to = body.get("only") or body.get("to")
+    steps = [s.id for s in (getattr(flow_factory, "Steps", None) or [])]
+    if not steps:
+        return None
+    low = [s.lower() for s in steps]
+
+    def pos(sid: Any) -> Optional[int]:
+        try:
+            return low.index(str(sid).lower())
+        except ValueError:
+            return None
+    for name, sid in (("start", frm), ("stop", to)):
+        if sid and pos(sid) is None:
+            return f"The flow has no step '{sid}' to {name} at. Pick a step from the list."
+    for sid in body.get("skip") or []:
+        if sid and not any(__import__("fnmatch").fnmatch(s, str(sid).lower()) for s in low):
+            return f"The flow has no step '{sid}' to skip."
+    if frm and to and pos(to) < pos(frm):
+        return ("That range ends before it starts: LibreLane would run to the end of the flow instead. "
+                "Pick a stop step after the start step.")
+    if frm and pos(frm) and not initial_state:
+        return ("Starting part-way needs a run to start from: LibreLane reads the results of the steps "
+                "before it. Use Resume from a stage on a finished run, or run the whole flow.")
+    return None
 
 
 # The ONE canonical order LanEx resolves a design's config file in. Preflight and
@@ -1825,8 +2027,19 @@ def h_cli_command(handler: Any) -> None:
         return
     run_mode = "container" if body.get("run_mode") == "container" else "local"
     # Assemble EXACTLY like a real run so the revealed command is faithful:
-    # cleaned overrides + custom cells + macro overlay + picker sources (A3).
-    asm = _assemble_overrides(design_dir, body)
+    # cleaned overrides + custom cells + macro overlay + picker sources (A3),
+    # and threads sized to the share of the PC this run would get if it
+    # started now beside the runs going (the run menu's live command).
+    share = None
+    try:
+        from ..controller import jobs as _jobs
+        k = _jobs.scheduler.running_count() + 1
+        if k > 1:
+            f = _jobs.scheduler.facts()
+            share = _jobs.share_of(f.get("cores"), f.get("free_gb"), k)
+    except Exception:
+        share = None
+    asm = _assemble_overrides(design_dir, body, share=_thread_share(body, share))
     pdk, scl = asm["pdk"], asm["scl"]
     pdk_root = os.environ.get("PDK_ROOT") or None
     try:
@@ -1842,11 +2055,12 @@ def h_cli_command(handler: Any) -> None:
         cli_flow = None if _fl["error"] else _fl["cli"]
     except Exception:
         cli_flow = None
+    only = body.get("only") or None
     cmd = manualcmd.cli_command_for(
         design_dir=design_dir, config_file=str(config_file),
         flow=cli_flow, pdk=pdk, scl=scl, pdk_root=pdk_root,
         run_mode=run_mode, tag=body.get("tag") or None,
-        frm=body.get("frm") or None, to=body.get("to") or None,
+        frm=only or body.get("frm") or None, to=only or body.get("to") or None,
         skip=body.get("skip") or [], overrides={**asm["overrides"], **asm["threads"]},
         extra_sources=asm["extra_sources"], extra_extras=asm["extra_extras"],
         extra_config_files=asm["extra_config_files"],
@@ -1906,21 +2120,286 @@ def h_manual_result(handler: Any) -> None:
 
 
 def h_run_cancel(handler: Any) -> None:
-    from ..controller import dse
+    """Stop one run: ``{job_id}``, else the run the open project follows.
+    Stopping a sweep point stops its sweep (its waiting points too)."""
+    from ..controller import dse, jobs
     from ..server.app import get_runner
-    # Stop during a sweep stops the sweep: otherwise the queue would start
-    # the next point the moment this run ends.
-    sweep = dse.job.active
-    if sweep:
+    body = getattr(handler, "_body", {}) or {}
+    jid = body.get("job_id") or getattr(get_runner(), "job_id", None)
+    if jid and str(jid).startswith("term:"):
+        # LanEx follows it but did not start it: its container has no name
+        # LanEx gave it, and killing "a container in this folder" could hit a
+        # viewer (audit G5). The person stops it where they started it.
+        _respond(handler, "This run was started in a terminal, outside LanEx. Stop it there (Ctrl+C in that "
+                          "terminal). LanEx keeps following it until it ends.", 409)
+        return
+    j = jobs.scheduler.job(jid) if jid else None
+    sweep = False
+    if j is not None and j.get("group") and dse.job.active and dse.job.sweep_id == j.get("group"):
         dse.job.cancel()
-    get_runner().cancel()
-    _respond(handler, {"status": "cancelled", "sweep_stopped": sweep})
+        jobs.scheduler.remove(group=j["group"], reason="Not run: the sweep was stopped")
+        sweep = True
+    if j is not None:
+        jobs.scheduler.stop(jid)
+    else:
+        get_runner().cancel()
+    _respond(handler, {"status": "cancelled", "sweep_stopped": sweep, "job_id": jid})
 
 
 def h_run_resume(handler: Any) -> None:
+    """Step by step: the next step (``{job_id}``, else the open project's
+    run). A container run between steps holds no slot; its next step starts
+    when one is free."""
+    from ..controller import jobs
     from ..server.app import get_runner
-    get_runner().resume()
+    body = getattr(handler, "_body", {}) or {}
+    r = get_runner()
+    jid = body.get("job_id") or getattr(r, "job_id", None)
+    j = jobs.scheduler.job(jid) if jid else None
+    if j is not None and j.get("state") == "paused" and getattr(jobs.scheduler.runner(jid), "awaiting_next", False):
+        try:
+            res = jobs.scheduler.resume_step(jid)
+        except KeyError as ex:
+            _respond(handler, str(ex), 409)
+            return
+        _respond(handler, {"status": "resumed" if res.get("started") else "queued", **res})
+        return
+    (jobs.scheduler.runner(jid) or r).resume()
     _respond(handler, {"status": "resumed"})
+
+
+# ---------------------------------------------------------------------------
+# The job queue (controller/jobs.py documents every field, state and route).
+# ---------------------------------------------------------------------------
+
+def _queue_design(body: Dict[str, Any]) -> Optional[str]:
+    raw = body.get("design_dir") or _get_active_design_dir()
+    if not raw:
+        return None
+    try:
+        p = platform_env.to_host_path(str(raw)) or str(raw)
+    except Exception:
+        p = str(raw)
+    return p if Path(p).expanduser().is_dir() else None
+
+
+def h_queue(handler: Any) -> None:
+    """GET: every project's queue, runs at once, memory, ETA, keep-awake."""
+    from ..controller import jobs
+    try:
+        _respond(handler, jobs.scheduler.snapshot())
+    except Exception as ex:
+        _log.exception("queue snapshot failed")
+        _respond(handler, f"Couldn't read the queue: {ex}", 500)
+
+
+def h_queue_add(handler: Any) -> None:
+    """Add runs to a project's queue: ``{design_dir, spec | specs, group?,
+    kind?, label?, position?}``. Each spec is checked like a Run click first
+    (LibreLane's config loader, the top module, the clock port)."""
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    dd = _queue_design(body)
+    if not dd:
+        _respond(handler, "That project folder is not there. Open it on Setup, then queue the run.", 400)
+        return
+    specs = body.get("specs") if isinstance(body.get("specs"), list) else [body.get("spec") or {}]
+    if not specs or not all(isinstance(s, dict) for s in specs):
+        _respond(handler, "spec must be a run request (an object)", 400)
+        return
+    kind = body.get("kind") if body.get("kind") in ("run", "point") else "run"
+    out = []
+    for i, s in enumerate(specs):
+        tag_err = _bad_tag(s.get("tag"))
+        if tag_err:
+            _respond(handler, tag_err, 400)
+            return
+        if i == 0 or kind == "run":
+            data, st = jobs.scheduler.check_only(dd, _run_spec(s), kind=kind)
+            if st != 200 or not (isinstance(data, dict) and data.get("ok")):
+                if st != 200:
+                    _respond(handler, data, st)
+                else:
+                    _respond(handler, {**(data or {}), "ok": False, "queued": False})
+                return
+        spec = _run_spec(s)
+        spec["checks_ack"] = True
+        try:
+            out.append(jobs.scheduler.add(dd, spec, kind=kind, group=body.get("group"),
+                                          label=(s.get("label") or body.get("label")),
+                                          position=body.get("position") or "end"))
+        except ValueError as ex:
+            _respond(handler, str(ex), 400)
+            return
+    _respond(handler, {"ok": True, "jobs": out})
+
+
+def h_queue_move(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    to = body.get("to")
+    if to not in ("top", "up", "down", "bottom") and not isinstance(to, int):
+        _respond(handler, "to is top, up, down, bottom or a position", 400)
+        return
+    try:
+        _respond(handler, jobs.scheduler.move(str(body.get("id") or ""), to))
+    except KeyError as ex:
+        _respond(handler, str(ex).strip("'\""), 404)
+
+
+def h_queue_remove(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    if not (body.get("id") or body.get("group") or body.get("finished")):
+        _respond(handler, "Say which: id, group, or finished", 400)
+        return
+    gone = jobs.scheduler.remove(job_id=body.get("id") or None, group=body.get("group") or None,
+                                 finished=bool(body.get("finished")))
+    _respond(handler, {"removed": gone})
+
+
+def h_queue_pause(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    jobs.scheduler.pause(bool(body.get("paused", True)), design_dir=body.get("design_dir") or None)
+    _respond(handler, {"paused": bool(body.get("paused", True))})
+
+
+def h_queue_stop(handler: Any) -> None:
+    from ..controller import dse, jobs
+    body = getattr(handler, "_body", {}) or {}
+    if body.get("all"):
+        if dse.job.active:
+            dse.job.cancel()
+        _respond(handler, {"stopped": jobs.scheduler.stop(everything=True)})
+        return
+    jid = str(body.get("id") or "")
+    if not jid:
+        _respond(handler, "Say which run to stop (id), or all", 400)
+        return
+    _respond(handler, {"stopped": jobs.scheduler.stop(jid)})
+
+
+def h_queue_stop_after(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    jobs.scheduler.stop_after_current(bool(body.get("on", True)))
+    _respond(handler, {"on": bool(body.get("on", True))})
+
+
+def h_queue_settings(handler: Any) -> None:
+    """``{max_parallel: "auto" | 1..16, keep_awake?: bool}`` (machine-wide)."""
+    from ..controller import jobs, power
+    body = getattr(handler, "_body", {}) or {}
+    out: Dict[str, Any] = {}
+    if "max_parallel" in body:
+        try:
+            out["max_parallel"] = jobs.scheduler.set_parallel(body.get("max_parallel"))
+        except (TypeError, ValueError) as ex:
+            _respond(handler, str(ex) if isinstance(ex, ValueError) else "max_parallel is auto or a number", 400)
+            return
+    if "keep_awake" in body:
+        power.set_enabled(bool(body.get("keep_awake")))
+        out["keep_awake"] = power.enabled()
+    _respond(handler, out)
+
+
+def h_queue_recover(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    try:
+        _respond(handler, jobs.scheduler.recover(str(body.get("id") or ""), str(body.get("action") or "")))
+    except KeyError as ex:
+        _respond(handler, str(ex).strip("'\""), 404)
+    except ValueError as ex:
+        _respond(handler, str(ex), 409)
+
+
+def h_queue_resume(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    try:
+        _respond(handler, jobs.scheduler.resume_step(str(body.get("id") or "")))
+    except KeyError as ex:
+        _respond(handler, str(ex).strip("'\""), 409)
+
+
+def h_queue_orphan(handler: Any) -> None:
+    from ..controller import jobs
+    body = getattr(handler, "_body", {}) or {}
+    name = str(body.get("name") or "")
+    if body.get("action") != "stop" or not name.startswith("lanex-flow-"):
+        _respond(handler, "Only a LanEx run container (lanex-flow-…) can be stopped here.", 400)
+        return
+    _respond(handler, {"stopped": jobs.scheduler.stop_orphan(name)})
+
+
+def h_power_hold(handler: Any) -> None:
+    """GET: should the PC stay awake now? The Windows launcher polls this
+    and holds Windows awake (``SetThreadExecutionState``/``PowerSetRequest``)
+    while ``hold`` is true; macOS and Linux are held by the server itself."""
+    from ..controller import jobs, power
+    power.note_poll()
+    want, why, n = jobs.scheduler.hold_wanted()
+    st = power.state()
+    hold = bool(want) and st.get("enabled", True)
+    _respond(handler, {"hold": hold, "reason": why if hold else "",
+                       "since": st.get("since") if hold else None, "jobs": n if hold else 0,
+                       "enabled": st.get("enabled", True), "how": st.get("how") or "",
+                       "note": st.get("note") or ""})
+
+
+_LOG_RANGE_MAX = 64 * 1024 * 1024
+
+
+def h_run_log(handler: Any) -> None:
+    """A run's whole console output, by byte range: ``?tag=&design_dir=&from=&to=``
+    (JSON ``{text, from, to, size, source}``) or ``&download=1`` (the file,
+    as an attachment). The console LanEx kept (``lanex-console.log``) when
+    there is one, else LibreLane's ``flow.log``."""
+    tag = _query_param(handler.path, "tag")
+    dd = _queue_design({"design_dir": _query_param(handler.path, "design_dir")})
+    if not dd or not tag or _bad_tag(tag):
+        _respond(handler, "missing or bad tag / design_dir", 400)
+        return
+    run = Path(dd) / "runs" / tag
+    which = _query_param(handler.path, "source")
+    cand = [run / "lanex-console.log", run / "flow.log"]
+    if which == "flow":
+        cand = [run / "flow.log"]
+    path = next((c for c in cand if c.is_file()), None)
+    if path is None:
+        _respond(handler, f"This run has no log yet ({run}).", 404)
+        return
+    if _query_param(handler.path, "download") == "1":
+        try:
+            data = path.read_bytes()
+        except OSError as ex:
+            _respond(handler, f"Couldn't read {path.name}: {ex}", 500)
+            return
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/plain; charset=utf-8")
+        handler.send_header("Content-Disposition", f'attachment; filename="{tag}-{path.name}"')
+        handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.end_headers()
+        handler.wfile.write(data)
+        return
+    try:
+        size = path.stat().st_size
+        a = max(0, int(_query_param(handler.path, "from") or 0))
+        b_raw = _query_param(handler.path, "to")
+        b = min(size, int(b_raw)) if b_raw else size
+        if b - a > _LOG_RANGE_MAX:
+            a = b - _LOG_RANGE_MAX
+        with open(path, "rb") as f:
+            f.seek(a)
+            chunk = f.read(max(0, b - a))
+    except (OSError, ValueError) as ex:
+        _respond(handler, f"Couldn't read {path.name}: {ex}", 500)
+        return
+    _respond(handler, {"text": chunk.decode("utf-8", "replace"), "from": a, "to": a + len(chunk),
+                       "size": size, "source": path.name, "path": str(path)})
 
 
 def h_reproducible(handler: Any) -> None:
@@ -2536,6 +3015,22 @@ def h_open_in_tool(handler: Any) -> None:
     if location == "container":
         from ..controller import container_tools
         design_dir = _get_active_design_dir()
+        # A stage's DEF (the Layout tab's "open the stage on screen") opens
+        # through a startup script that loads the run's LEFs first.
+        if target is not None and tool in ("magic", "klayout") and target.suffix.lower() == ".def":
+            from ..controller import desktop
+            if not target.is_file():
+                _respond(handler, {"ok": False, "error": f"this step wrote no DEF ({target.name})"}, 200)
+                return
+            script = desktop.def_open_script(tool, target, run_dir)
+            if script is None:
+                _respond(handler, {"ok": False, "error": f"{tool} needs the run's LEF files to open "
+                                   f"{target.name}, and they were not found."}, 200)
+                return
+            _respond(handler, container_tools.open_in_container_tool(
+                tool, design_dir=design_dir or str(run_dir.parent.parent),
+                work_dir=str(run_dir), pdk=pdk, pdk_root=pdk_root, layout_script=script), 200)
+            return
         # An explicitly requested file is honoured or refused — NEVER silently
         # swapped for the final GDS (the host path honours any file; silently
         # opening a different file than asked is a fidelity bug).
@@ -2661,9 +3156,14 @@ def h_layout_render(handler: Any) -> None:
     bg = _query_param(p, "bg", "#06080d")
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", bg):
         bg = "#06080d"
+    w = int(_float_param(p, "w", 800) or 800)
+    h = int(_float_param(p, "h", 600) or 600)
+    # A saved picture (4K, 8K) draws in the background worker: the view and
+    # the stage strip stay live meanwhile.
+    heavy = bool(_query_param(p, "dl")) or _query_param(p, "heavy") == "1" or w * h > 6_000_000
     try:
         png = layoutview.render(
-            sid, box=box, w=int(_float_param(p, "w", 800) or 800), h=int(_float_param(p, "h", 600) or 600),
+            sid, heavy=heavy, box=box, w=w, h=h,
             visible=visible, depth=depth, labels=_query_param(p, "labels", "1") != "0", bg=bg,
             boxes=_query_param(p, "boxes", "1") != "0",
             oversampling=int(_float_param(p, "os", 1) or 1), resolution=_float_param(p, "res", 0.0) or 0.0)
@@ -2759,6 +3259,9 @@ def h_layout_mesh(handler: Any) -> None:
             _respond(handler, "too much geometry for 3D here; zoom in to a smaller area first", 413)
             return
         raise
+    except layoutview.MeshCancelled:
+        _respond(handler, "the 3D build was cancelled", 409)
+        return
     except Exception as ex:
         _log.exception("layout mesh failed")
         _respond(handler, "3D failed: " + str(ex), 500)
@@ -2788,6 +3291,115 @@ def h_layout_commands(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     _respond(handler, layoutview.viewer_commands(run_dir, tag))
+
+
+def h_layout_nets(handler: Any) -> None:
+    """Nets of the layout on screen whose name holds ?q= (net search)."""
+    from ..controller import layoutview
+    p = handler.path
+    try:
+        res = layoutview.nets(_query_param(p, "sid"), _query_param(p, "q", ""),
+                              int(_float_param(p, "limit", 60) or 60))
+    except Exception as ex:
+        _log.exception("layout net search failed")
+        _respond(handler, "net search failed: " + str(ex), 500)
+        return
+    if res is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, res)
+
+
+def h_layout_net(handler: Any) -> None:
+    """One net's shapes and pins (?sid=&name=), for a highlight."""
+    from ..controller import layoutview
+    p = handler.path
+    try:
+        res = layoutview.net(_query_param(p, "sid"), _query_param(p, "name", ""))
+    except Exception as ex:
+        _log.exception("layout net lookup failed")
+        _respond(handler, "net lookup failed: " + str(ex), 500)
+        return
+    if res is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, res)
+
+
+def h_layout_locate(handler: Any) -> None:
+    """Where named instances and nets are (POST {sid, insts, nets}): a timing
+    path's cells and wires, from another page's highlight request."""
+    from ..controller import layoutview
+    body = getattr(handler, "_body", {}) or {}
+    insts = [str(x) for x in (body.get("insts") or []) if x][:5000]
+    nets = [str(x) for x in (body.get("nets") or []) if x][:400]
+    try:
+        res = layoutview.locate(str(body.get("sid") or ""), insts, nets)
+    except Exception as ex:
+        _log.exception("layout locate failed")
+        _respond(handler, "could not find those on the layout: " + str(ex), 500)
+        return
+    if res is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, res)
+
+
+def h_layout_mesh_cancel(handler: Any) -> None:
+    """Stop a 3D build in progress (POST {sid})."""
+    from ..controller import layoutview
+    body = getattr(handler, "_body", {}) or {}
+    _respond(handler, {"cancelled": layoutview.cancel_mesh(str(body.get("sid") or ""))})
+
+
+def _analysis_run(handler: Any, tag: Optional[str]) -> Optional["Path"]:
+    run_dir = _resolve_run_dir(tag) if tag else None
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+    return run_dir
+
+
+def h_layout_analysis(handler: Any) -> None:
+    """The OpenROAD analysis of one stage (?tag=&source=): its state, and when
+    it is ready the overlays' data (density, congestion, clock tree, paths)."""
+    from ..controller import odbexport
+    p = handler.path
+    run_dir = _analysis_run(handler, _query_param(p, "tag"))
+    if run_dir is None:
+        return
+    source = _query_param(p, "source", "final")
+    st = odbexport.status(run_dir, source)
+    if st.get("state") == "ready" and _query_param(p, "data", "1") != "0":
+        st["data"] = odbexport.data(run_dir, source)
+    _respond(handler, st)
+
+
+def h_layout_analysis_start(handler: Any) -> None:
+    """Measure one stage with OpenROAD (POST {tag, source, force}), or keep the
+    measurement that is running."""
+    from ..controller import odbexport
+    body = getattr(handler, "_body", {}) or {}
+    run_dir = _analysis_run(handler, body.get("tag"))
+    if run_dir is None:
+        return
+    _respond(handler, odbexport.start(run_dir, str(body.get("source") or "final"), force=bool(body.get("force"))))
+
+
+def h_layout_analysis_cancel(handler: Any) -> None:
+    """Stop measuring one stage (POST {tag, source})."""
+    from ..controller import odbexport
+    body = getattr(handler, "_body", {}) or {}
+    run_dir = _analysis_run(handler, body.get("tag"))
+    if run_dir is None:
+        return
+    _respond(handler, {"cancelled": odbexport.cancel(run_dir, str(body.get("source") or "final"))})
+
+
+def h_layout_viewer_status(handler: Any) -> None:
+    """How a desktop-viewer launch went (?id= from /api/open-in-tool): still
+    running, or exited with its code and the last lines of its log."""
+    from ..controller import desktop
+    _respond(handler, desktop.viewer_status(_query_param(handler.path, "id")))
 
 
 def h_run_note(handler: Any) -> None:
@@ -2869,14 +3481,17 @@ def _live_run_meta(tag: Optional[str]) -> Optional[Tuple[Dict[str, Any], str]]:
     if not tag:
         return None
     try:
+        from ..controller import jobs
         from ..server.app import get_runner
-        r = get_runner()
-        rd = r.run_dir
-        meta = r.gui_meta
-        if not rd or not meta or Path(rd).name != tag:
-            return None
-        meta.setdefault("tag", tag)
-        return meta, str(rd)
+        # Every run going (several can, the job queue), the open project's first.
+        for r in [get_runner()] + list(jobs.scheduler._runners.values()):
+            rd = getattr(r, "run_dir", None)
+            meta = getattr(r, "gui_meta", None)
+            if not rd or not meta or Path(rd).name != tag:
+                continue
+            meta.setdefault("tag", tag)
+            return meta, str(rd)
+        return None
     except Exception:
         return None
 
@@ -3606,6 +4221,156 @@ def h_timing_paths(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _base_run_dir(handler: Any) -> Optional[Path]:
+    base = _query_param(handler.path, "base")
+    return _resolve_run_dir(base) if base else None
+
+
+def h_timing_list(handler: Any) -> None:
+    """Verify's path explorer, one corner: ``?tag=&kind=setup|hold&corner=&q=&only=&base=``.
+    The corner's endpoints worst first (index rows, no path text), its slack
+    histogram (bins on 0) and, with ``base``, each endpoint's slack there."""
+    from ..controller import timing
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        _respond(handler, timing.path_list(
+            run_dir, kind=_query_param(handler.path, "kind") or "setup",
+            corner=_query_param(handler.path, "corner") or None, q=_query_param(handler.path, "q"),
+            only=_query_param(handler.path, "only"), base_dir=_base_run_dir(handler)))
+    except Exception as ex:
+        _log.exception("timing path list failed")
+        _respond(handler, f"Couldn't read this run's timing reports: {ex}", 500)
+
+
+def h_timing_detail(handler: Any) -> None:
+    """One path in full: ``?tag=&kind=&corner=&i=&base=`` (every pin, cell and
+    net, the required time's terms, the same endpoint in the other corners)."""
+    from ..controller import timing
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        i = int(_query_param(handler.path, "i") or "0")
+    except ValueError:
+        _respond(handler, "i must be a number", 400)
+        return
+    try:
+        _respond(handler, timing.path_detail(
+            run_dir, kind=_query_param(handler.path, "kind") or "setup",
+            corner=_query_param(handler.path, "corner") or None, i=i, base_dir=_base_run_dir(handler)))
+    except Exception as ex:
+        _log.exception("timing path detail failed")
+        _respond(handler, f"Couldn't read this path: {ex}", 500)
+
+
+def h_warnings(handler: Any) -> None:
+    """A run's warnings by tool and code (``?tag=&base=``), with the project's
+    waivers (``lanex-waivers.yaml``) and what is new since ``base``."""
+    from ..controller import runwarnings
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        _respond(handler, runwarnings.run_warnings(run_dir, _base_run_dir(handler), _get_active_design_dir()))
+    except Exception as ex:
+        _log.exception("warnings failed")
+        _respond(handler, f"Couldn't read this run's warnings: {ex}", 500)
+
+
+def _waiver_write(handler: Any, op: Any) -> None:
+    from ..controller import runwarnings
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "Open the project first: waivers are saved in the project folder.", 400)
+        return
+    # Never write the waiver file of a project this window isn't showing.
+    gone = _design_refusal(handler, design_dir)
+    if gone:
+        _respond(handler, gone, 409)
+        return
+    try:
+        _respond(handler, op(design_dir, body))
+    except runwarnings.WaiverError as ex:
+        _respond(handler, str(ex), 409)
+    except OSError as ex:
+        _respond(handler, f"Couldn't write {runwarnings.WAIVER_FILE} in {design_dir}: {ex}", 500)
+
+
+def h_warnings_waive(handler: Any) -> None:
+    """Add or edit a waiver: POST ``{entry: {tool, code, match, step, reason,
+    note, by, expect_count, id?}, mtime}`` (``mtime`` from the page's last read,
+    so two windows can't overwrite each other)."""
+    from ..controller import runwarnings
+    _waiver_write(handler, lambda d, b: runwarnings.save_waiver(
+        d, b.get("entry") or {}, mtime=b.get("mtime"), run_dir=_resolve_run_dir(b.get("tag")) if b.get("tag") else None))
+
+
+def h_warnings_unwaive(handler: Any) -> None:
+    """Remove a waiver: POST ``{id, mtime}``."""
+    from ..controller import runwarnings
+    _waiver_write(handler, lambda d, b: runwarnings.remove_waiver(d, str(b.get("id") or ""), mtime=b.get("mtime")))
+
+
+def h_verify_summary(handler: Any) -> None:
+    """The sign-off report's data without writing files (``?tag=&base=``):
+    the share card draws its numbers from it, so card and report agree."""
+    from ..controller import signoff
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else None
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        _respond(handler, signoff.build(run_dir, design_dir=_get_active_design_dir(),
+                                        base_dir=_base_run_dir(handler), hashes=False))
+    except Exception as ex:
+        _log.exception("sign-off summary failed")
+        _respond(handler, f"Couldn't read this run's results: {ex}", 500)
+
+
+def h_verify_report(handler: Any) -> None:
+    """Write the sign-off report of a run: POST ``{tag, base, verdict:{tone,
+    title, sub}, chip_png}`` -> ``<run>/lanex-report/report.{json,md,html}``.
+    *verdict* is Verify's own words, so the file says what the page says."""
+    import base64 as _b64
+    from ..controller import signoff
+    body = getattr(handler, "_body", {}) or {}
+    tag = body.get("tag")
+    run_dir = _resolve_run_dir(tag) if tag else None
+    if run_dir is None:
+        _respond(handler, "That run isn't in the open project any more. Refresh, or pick another run.", 404)
+        return
+    base = body.get("base")
+    chip = None
+    raw = body.get("chip_png")
+    if isinstance(raw, str) and raw:
+        try:
+            chip = _b64.b64decode(raw.split(",", 1)[-1], validate=False)[:6_000_000]
+        except Exception:
+            chip = None
+    try:
+        res = signoff.write(run_dir, design_dir=_get_active_design_dir(),
+                            base_dir=_resolve_run_dir(base) if base else None,
+                            verdict=body.get("verdict") if isinstance(body.get("verdict"), dict) else None,
+                            fonts_dir=Path(static_root()) / "vendor" / "fonts", chip_png=chip)
+        res["tag"] = run_dir.name
+        _respond(handler, res)
+    except OSError as ex:
+        _respond(handler, f"Couldn't write the report into {run_dir.name}/{signoff.REPORT_DIR}: {ex}", 500)
+    except Exception as ex:
+        _log.exception("sign-off report failed")
+        _respond(handler, f"Couldn't build the report: {ex}", 500)
+
+
 def h_cell_usage(handler: Any) -> None:
     """Per-cell-type usage table for a run."""
     tag = _query_param(handler.path, "tag")
@@ -3738,9 +4503,9 @@ def h_verify_rerun(handler: Any) -> None:
     if p.get("blocked"):
         _respond(handler, p["blocked"], 409)
         return
-    if get_runner().running:
-        _respond(handler, "A run is in progress. Re-run the step after it finishes.", 409)
-        return
+    # The re-run is a new run through the job queue: it starts beside a run
+    # that is going when there is room, else it says why it waits.
+    _ = get_runner
     overrides = dict(p["overrides"])
     try:
         from ..controller import customcells
@@ -3809,83 +4574,224 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                           run_mode: str, base_overrides: Dict[str, Any],
                           dse_body: Optional[Dict[str, Any]] = None,
                           sweep_id: Optional[str] = None, flowsel: Optional[Dict[str, Any]] = None):
-    """Return a ``start_one(tag, overrides)`` closure for the DSE queue that
-    starts a run through the shared runner and blocks until it finishes.
+    """Return a ``start_one(tag, overrides)`` closure for the sweep: it puts
+    the point in the job queue (``kind: "point"``, ``group``: the sweep) and
+    blocks until the point has ended. The queue decides how many points run
+    at once (memory and cores, ``jobs.py``), so a sweep's points run N at a
+    time; the sweep calls ``start_one`` for every point at once.
 
-    Each sweep point is assembled through the SAME ``_assemble_overrides`` helper
-    as a Setup run (override cleaning, custom cells, macro overlay, picker
-    sources/extras), so a swept run is identical to the same run launched from
-    Setup instead of silently dropping that context (audit A2)."""
-    import time
-    from ..server.app import get_runner
+    Each point is assembled at its start through the SAME
+    ``_assemble_overrides`` helper as a Setup run (override cleaning, custom
+    cells, macro overlay, picker sources/extras), by :func:`_launch_point`."""
+    from ..controller import dse, jobs
 
     def start_one(tag: str, overrides: Dict[str, Any]) -> Dict[str, Any]:
-        r = get_runner()
-        # Wait for any prior run to clear (defensive; queue is sequential).
-        for _ in range(600):
-            if not r.running:
-                break
-            time.sleep(0.5)
-        # Fold the swept point onto the sweep's base overrides, THEN run it all
-        # through the shared assembler so cleaning + custom cells + macro overlay
-        # + picker sources apply exactly as they do for a Setup run.
-        synthetic = dict(dse_body or {})
-        synthetic["overrides"] = {**base_overrides, **overrides}
-        asm = _assemble_overrides(design_dir, synthetic)
-        pdk, scl = asm["pdk"], asm["scl"]
-        # Resolve the pdk_root that actually holds this PDK for the run mode
-        # (ciel homes, not just $PDK_ROOT) — otherwise a sky130 sweep on a box
-        # whose $PDK_ROOT points elsewhere fails every config with "PDK not
-        # found", exactly like the lint/run-start paths used to.
-        pdk_root = os.environ.get("PDK_ROOT") or None
-        if pdk:
-            try:
-                pf = pdk_mod.check_pdk_ready(pdk, scl, run_mode)
-                pdk_root = pf.get("pdk_root") or pdk_root
-            except Exception:
-                pass
-        # Stop may have landed while this point was being prepared: launching
-        # it now would run a point the person already stopped.
-        from ..controller import dse as _dse
-        if _dse.job.cancelled:
+        if dse.job.cancelled:
             return {"ok": False, "kind": "stopped", "reason": "stopped"}
-        gui_meta = _sweep_point_meta(design_dir, config_file, flow_name, run_mode, tag, pdk, scl,
-                                     pdk_root, asm, sweep_id, overrides)
-        res = r.start(
-            flow_factory=(flowsel or {}).get("cls") or _flow_factory(flow_name),
-            config_files=[str(config_file)],
-            design_dir=design_dir,
-            pdk=pdk, scl=scl, pdk_root=pdk_root,
-            tag=tag, overwrite=True,
-            config_overrides={**asm["overrides"], **asm["threads"]},
-            extra_sources=asm["extra_sources"],
-            extra_extras=asm["extra_extras"],
-            extra_config_files=asm["extra_config_files"],
-            run_mode=run_mode, flow_name=(flowsel or {}).get("cli") if flowsel else flow_name,
-            gui_meta=gui_meta,
-        )
-        if not res.get("ok"):
-            return {"ok": False, "kind": "error",
-                    "reason": "did not start: " + str(res.get("error") or res.get("message") or "the runner refused")}
-        # Block until this run completes.
-        time.sleep(0.5)
-        for _ in range(86400 * 2):  # generous upper bound; ~12h at 0.5s
-            if not r.running:
-                break
-            time.sleep(0.5)
-        from ..controller import dse
-        run_dir = Path(design_dir) / "runs" / tag
+        spec = {
+            "tag": tag, "run_mode": run_mode, "flow": flow_name, "mode": "auto",
+            "overrides": {**base_overrides, **overrides},
+            "sources": list((dse_body or {}).get("sources") or []),
+            "extras": list((dse_body or {}).get("extras") or []),
+            "sweep": {"id": sweep_id, "values": dict(overrides)} if sweep_id else None,
+            "point_values": dict(overrides),
+            "keep_awake": (dse_body or {}).get("keep_awake", True),
+        }
+        try:
+            job = jobs.scheduler.add(design_dir, {k: v for k, v in spec.items() if v is not None},
+                                     kind="point", group=sweep_id)
+        except ValueError as ex:
+            return {"ok": False, "kind": "error", "reason": str(ex)}
+        fin = jobs.scheduler.wait_job(job["id"]) or {}
+        st = fin.get("state")
+        if st == "skipped":
+            return {"ok": False, "kind": "skipped", "reason": fin.get("reason") or "not run", "skipped": True}
+        if st == "stopped":
+            return {"ok": False, "kind": "stopped", "reason": "stopped"}
+        out_o = fin.get("outcome") or {}
+        if out_o.get("result") == "not-started":
+            return {"ok": False, "kind": "error", "reason": "did not start: " + str(out_o.get("message") or "")[:300]}
+        run_tag = fin.get("tag") or tag
+        run_dir = Path(design_dir) / "runs" / run_tag
         if sweep_id:
             dse.stamp_run(run_dir, sweep_id, overrides)
         # How the point really ended, read from its folder the way Flow reads
-        # it: a container run that exits non-zero leaves r.error unset, so
-        # "launched and the runner went idle" used to count as passed.
+        # it: a container run that exits non-zero is not a passed point.
         out = dse.point_outcome(run_dir)
-        if out.get("ok") and r.error:
-            out = {**out, "ok": False, "kind": "error", "reason": str(r.error)}
+        if out.get("ok") and out_o.get("result") == "error":
+            out = {**out, "ok": False, "kind": "error", "reason": str(out_o.get("message") or "the run failed")}
+        if run_tag != tag:
+            out["tag"] = run_tag
         return out
 
     return start_one
+
+
+def _launch_point(job: Dict[str, Any], runner: Any, share: Optional[Dict[str, Any]],
+                  dry: bool) -> Tuple[Any, int]:
+    """The queue starting one sweep point: assembled like a Setup run, with
+    the point's ``gui-run.json`` (``sweep``) and the exact CLI command."""
+    spec = dict(job.get("spec") or {})
+    design_dir = job["design_dir"]
+    config_file = _config_file_for(design_dir)
+    if config_file is None:
+        return "This project has no config file any more.", 400
+    run_mode = "container" if spec.get("run_mode") == "container" else "local"
+    from ..controller import configcheck, jobs
+    flowsel = configcheck.resolve_flow([str(config_file)], spec.get("flow") or None)
+    if flowsel["error"]:
+        return flowsel["error"], 400
+    if dry:
+        return {"ok": True, "started": False, "checked": True}, 200
+    asm = _assemble_overrides(design_dir, spec, share=share)
+    pdk, scl = asm["pdk"], asm["scl"]
+    pdk_root = os.environ.get("PDK_ROOT") or None
+    if pdk:
+        try:
+            pf = pdk_mod.check_pdk_ready(pdk, scl, run_mode)
+            pdk_root = pf.get("pdk_root") or pdk_root
+        except Exception:
+            pass
+    tag = jobs.reserve_tag(design_dir, spec.get("tag") or None)
+    jobs.scheduler.note_tag(job["id"], tag)
+    values = spec.get("point_values") or ((spec.get("sweep") or {}).get("values")) or {}
+    sweep_id = (spec.get("sweep") or {}).get("id") or job.get("group")
+    gui_meta = _sweep_point_meta(design_dir, config_file, flowsel["name"], run_mode, tag, pdk, scl,
+                                 pdk_root, asm, sweep_id, values)
+    gui_meta["job_id"] = job["id"]
+    res = runner.start(
+        flow_factory=flowsel["cls"],
+        config_files=[str(config_file)],
+        design_dir=design_dir,
+        pdk=pdk, scl=scl, pdk_root=pdk_root,
+        # The folder is reserved (mkdir), so the name is this point's alone:
+        # no --overwrite, which would delete the folder LibreLane is given.
+        tag=tag,
+        config_overrides={**asm["overrides"], **asm["threads"]},
+        extra_sources=asm["extra_sources"],
+        extra_extras=asm["extra_extras"],
+        extra_config_files=asm["extra_config_files"],
+        run_mode=run_mode, flow_name=flowsel["cli"],
+        gui_meta=gui_meta,
+    )
+    if not res.get("ok"):
+        jobs.unreserve(design_dir, tag)
+        return {"ok": False, "started": False, "reason": str(res.get("reason") or "the runner refused")}, 200
+    return {"ok": True, "started": True, "tag": tag, "command": gui_meta.get("cli_command"),
+            "resources": asm.get("resources")}, 200
+
+
+def _job_launcher(job: Dict[str, Any], runner: Any, share: Optional[Dict[str, Any]], dry: bool,
+                  *, initial_state: Optional[str] = None,
+                  branched_from: Optional[Dict[str, Any]] = None) -> Tuple[Any, int]:
+    """How the job queue starts a job: the checks and assembly of a Run
+    click, with the job's own runner and this machine share. The run folder
+    is reserved first (``mkdir``), so two starts never share one."""
+    from ..controller import jobs
+    if job.get("kind") == "point":
+        return _launch_point(job, runner, share, dry)
+    spec = dict(job.get("spec") or {})
+    dd = job["design_dir"]
+    init = initial_state or spec.get("initial_state") or None
+    bfrom = branched_from or spec.get("branched_from") or None
+    if dry:
+        return _start_run(spec, design_dir=dd, dry=True, initial_state=init, branched_from=bfrom,
+                          overrides_ready=bool(bfrom))
+    cont = None
+    reserved: List[str] = []
+    reserve = None
+    if job.get("kind") == "continue":
+        tag = spec.get("tag")
+        if not tag or not (Path(dd) / "runs" / tag).is_dir():
+            return "The run folder to continue is not there any more.", 409
+        cont = jobs._gui_meta(str(Path(dd) / "runs" / tag)) or {}
+        jobs.scheduler.note_tag(job["id"], tag)
+    else:
+        if _bad_tag(spec.get("tag")):
+            return _bad_tag(spec.get("tag")), 400
+
+        def reserve(want: Optional[str]) -> str:
+            # Once every check passed: the folder is made now, so a refused
+            # run leaves nothing behind and two starts never share one.
+            t = jobs.reserve_tag(dd, want or None)
+            reserved.append(t)
+            jobs.scheduler.note_tag(job["id"], t)
+            return t
+    data, st = _start_run(spec, design_dir=dd, runner=runner, share=share, initial_state=init,
+                          branched_from=bfrom, overrides_ready=bool(bfrom), continue_of=cont,
+                          reserve=reserve)
+    ok = st == 200 and isinstance(data, dict) and data.get("ok") and data.get("started", True) is not False
+    if not ok:
+        for t in reserved:
+            jobs.unreserve(dd, t)
+    if isinstance(data, dict):
+        data = dict(data)
+        if reserved:
+            data.setdefault("tag", reserved[-1])
+        elif spec.get("tag"):
+            data.setdefault("tag", spec.get("tag"))
+    return data, st
+
+
+def _job_outcome(run_dir: str) -> Dict[str, Any]:
+    """How a finished queue job went, read from its folder (the sweep's own
+    reading: Verify's verdict, the failing stage)."""
+    from ..controller import dse
+    return dse.point_outcome(run_dir)
+
+
+def _job_ended(job: Dict[str, Any]) -> None:
+    """After any queue job ends: a sweep point's result goes into its sweep's
+    record, also when the point ran after a restart (no sweep thread waits)."""
+    from ..controller import dse
+    if job.get("kind") != "point" or not job.get("group") or not job.get("tag"):
+        return
+    if dse.job.active and dse.job.sweep_id == job.get("group"):
+        return          # the sweep's own thread records it
+    if job.get("state") not in ("done", "failed"):
+        return
+    try:
+        run_dir = Path(job["design_dir"]) / "runs" / job["tag"]
+        vals = ((job.get("spec") or {}).get("point_values")) or {}
+        dse.stamp_run(run_dir, job["group"], vals)
+        res = dse.point_outcome(run_dir)
+        res["values"] = vals
+        dse.record_point(job["design_dir"], job["group"], job["tag"], res)
+    except Exception:
+        _log.debug("could not record a sweep point after a restart", exc_info=True)
+
+
+_JOBS_WIRED = [False]
+
+
+def wire_jobs() -> None:
+    """Register how the job queue starts runs (idempotent; tests call it)."""
+    from ..controller import jobs
+    from ..server import app as _app
+    jobs.scheduler.set_launcher(_job_launcher)
+    jobs.scheduler.set_runner_factory(lambda job: _app.make_runner(job))
+    jobs.scheduler.set_outcome_reader(_job_outcome)
+    jobs.scheduler.on_job_end(_job_ended)
+    _JOBS_WIRED[0] = True
+
+
+def start_job_service() -> None:
+    """At server start: wire the queue, read every known project's queue,
+    recover what was going, start the scheduler and the terminal-run watcher."""
+    from ..controller import designs, jobs
+    wire_jobs()
+    dirs = []
+    try:
+        dirs = list(designs.list_designs())
+    except Exception:
+        pass
+    a = _get_active_design_dir()
+    if a:
+        dirs.insert(0, a)
+    jobs.scheduler.start_service(dirs)
+
+
+wire_jobs()
 
 
 def h_dse_start(handler: Any) -> None:
@@ -3900,7 +4806,9 @@ def h_dse_start(handler: Any) -> None:
     if why:
         _respond(handler, why, 409)
         return
-    busy = _other_flow_busy()
+    # Its points wait in the job queue beside any other run (only a Console
+    # librelane command in this project holds it back).
+    busy = _other_flow_busy(runner_ok=True)
     if busy:
         _respond(handler, busy, 409)
         return
@@ -4019,10 +4927,16 @@ def h_dse_start(handler: Any) -> None:
             "ended": None,
         }
     dse.record_sweep(design_dir, manifest)
+    from ..controller import jobs as _jobs
+    # Every point goes into the queue at once; the queue runs as many at a
+    # time as memory and cores allow. A stop rule (first clean point, two
+    # points failing the same way early) drops the points still waiting.
     result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags,
                            sweep_id=sweep_id, stop_when_good=bool(body.get("stop_when_good")),
                            on_point=lambda tag, res: dse.record_point(design_dir, sweep_id, tag, res),
-                           on_done=lambda end: dse.record_end(design_dir, sweep_id, end))
+                           on_done=lambda end: dse.record_end(design_dir, sweep_id, end),
+                           parallel=max(1, len(tags)),
+                           on_halt=lambda why: _jobs.scheduler.skip_group(sweep_id, why))
     if not result.get("ok"):
         if prior:
             dse.record_sweep(design_dir, prior)
@@ -4080,19 +4994,31 @@ def h_dse_plan(handler: Any) -> None:
 
 
 def h_dse_cancel(handler: Any) -> None:
-    from ..controller import dse
-    from ..server.app import get_runner
+    """Stop the sweep: its waiting points leave the queue, its running ones stop."""
+    from ..controller import dse, jobs
+    sid = dse.job.sweep_id
     dse.job.cancel()
-    try:
-        get_runner().cancel()
-    except Exception:
-        pass
+    if sid:
+        jobs.scheduler.remove(group=sid, reason="Not run: the sweep was stopped")
+        for j in jobs.scheduler.jobs_snapshot_live():
+            if j.get("group") == sid:
+                jobs.scheduler.stop(j["id"])
     _respond(handler, {"ok": True})
 
 
 def h_dse_status(handler: Any) -> None:
-    from ..controller import dse
-    _respond(handler, dse.job.status())
+    """The sweep's progress. Its points wait in the job queue: which run now
+    and which wait comes from there (``running_tags``, ``queued``)."""
+    from ..controller import dse, jobs
+    st = dse.job.status()
+    if st.get("active") and st.get("sweep_id"):
+        g = jobs.scheduler.group_jobs(st["sweep_id"])
+        tag = lambda j: j.get("tag") or (j.get("spec") or {}).get("tag")  # noqa: E731
+        run = [tag(j) for j in g if j.get("state") in ("starting", "running", "stopping", "paused")]
+        st["running_tags"] = run
+        st["running"] = run[0] if run else None
+        st["queued"] = [tag(j) for j in g if j.get("state") == "queued"] + list(st.get("queued") or [])
+    _respond(handler, st)
 
 
 def h_system_resources(handler: Any) -> None:
@@ -4134,6 +5060,11 @@ def h_file_write(handler: Any) -> None:
             return
         _respond(handler, result.get("error"), 400)
         return
+    try:
+        from ..controller import hdlindex
+        hdlindex.note_saved(design_dir, result.get("path") or rel)
+    except Exception:
+        pass
     _respond(handler, result)
 
 
@@ -4153,6 +5084,11 @@ def h_file_delete(handler: Any) -> None:
     if not result.get("ok"):
         _respond(handler, result.get("error"), 400)
         return
+    try:
+        from ..controller import hdlindex
+        hdlindex.note_saved(design_dir, rel)
+    except Exception:
+        pass
     # The config follows: a deleted design file leaves an explicit
     # VERILOG_FILES list (a glob stops matching it by itself).
     from ..controller import configedit
@@ -4193,6 +5129,12 @@ def h_file_rename(handler: Any) -> None:
         _respond(handler, result.get("error"), 400)
         return
     try:
+        from ..controller import hdlindex
+        hdlindex.note_saved(d, rel)
+        hdlindex.note_saved(d, result.get("rel") or new_rel)
+    except Exception:
+        pass
+    try:
         cfg = configedit.follow_rename(d, str(Path(d) / rel), result["abs"], before)
         result["config"] = {"name": cfg.get("name"), "changed": cfg.get("changed") or []}
     except configedit.ConfigEditError as ex:
@@ -4228,22 +5170,29 @@ def h_lint(handler: Any) -> None:
     include_dirs = [s for s in (body.get("include_dirs") or []) if s]
     defines = body.get("defines") if isinstance(body.get("defines"), dict) else {}
     cfg_used: Optional[Dict[str, Any]] = None
+    disable_warnings: List[str] = []
     if body.get("from_config"):
         ci = lint.config_inputs(design_dir, for_lint=True)
         cfg_used = {"mode": ci["mode"], "name": ci["name"], "reason": ci["reason"],
                     "missing": ci["missing"], "files": ci["files"]}
+        disable_warnings = list(ci.get("disable_warnings") or [])
         if ci["mode"] == "list" and ci["files"]:
             m = lint.merge_inputs(ci, extra_sources=body.get("extra_sources") or [],
                                   include_dirs=include_dirs, defines=defines)
             sources, include_dirs, defines = m["sources"], m["include_dirs"], m["defines"]
-    if not sources:
+        else:
+            # The flow's own defines still apply (`ifdef __librelane__ ...).
+            defines = {**(ci.get("defines") or {}), **defines}
+    vhdl_files = [str(v) for v in (body.get("vhdl_sources") or []) if str(v).lower().endswith((".vhd", ".vhdl"))]
+    sources = [x for x in sources if not str(x).lower().endswith((".vhd", ".vhdl"))]
+    if not sources and not vhdl_files:
         try:
             walked = fsbrowser.walk_sources(design_dir)
             sources = [s["relpath"] for s in (walked.get("sources") or [])
                        if str(s.get("relpath", "")).lower().endswith((".v", ".sv"))]
         except Exception:
             sources = []
-    if not sources:
+    if not sources and not vhdl_files:
         _respond(handler, "no Verilog sources found to lint", 400)
         return
 
@@ -4275,7 +5224,16 @@ def h_lint(handler: Any) -> None:
         # delays and event controls only with --timing; 4.x doesn't know it.
         timing=(run_mode == "container"
                 or (lint.verilator_major(platform_env.usable_which("verilator") or "verilator") or 0) >= 5),
-    )
+        disable_warnings=disable_warnings,
+    ) if sources else []
+    # VHDL files: GHDL's analysis in the image (experimental, see vhdltools),
+    # in the same job so Problems shows both.
+    vhdl_note = None
+    if vhdl_files:
+        argv, vhdl_note = _lint_with_vhdl(design_dir, argv, vhdl_files)
+        if not argv:
+            _respond(handler, vhdl_note or "VHDL files can't be checked here.", 400)
+            return
     if run_mode == "container" and engine_name and tools_mod.resolve_engine().get("sg_wrap"):
         argv = tools_mod.sg_wrap_argv(argv)
     try:
@@ -4284,13 +5242,40 @@ def h_lint(handler: Any) -> None:
             _respond(handler, result.get("error"), 400)
             return
         result["engine"] = "container" if run_mode == "container" else "verilator"
-        result["sources"] = list(sources)
+        result["sources"] = list(sources) + list(vhdl_files)
+        if vhdl_note:
+            result["vhdl_note"] = vhdl_note
         if cfg_used is not None:
             result["config"] = cfg_used
         _respond(handler, result)
     except Exception as ex:
         _log.exception("lint start failed")
         _respond(handler, str(ex), 500)
+
+
+def _lint_with_vhdl(design_dir: str, argv: List[str], vhdl_files: List[str]) -> Tuple[List[str], Optional[str]]:
+    """The lint argv with GHDL's analysis of *vhdl_files* added (in the image),
+    or the argv unchanged and a note saying why VHDL isn't checked."""
+    import shlex
+    from ..controller import container_run, vhdltools
+    from ..controller.configcheck import _permission_args
+    eng = tools_mod.resolve_engine()
+    if not eng.get("ready"):
+        return argv, "VHDL files weren't checked: that needs Docker or Podman for GHDL in the LibreLane image."
+    image = container_run.image_ref()
+    caps = vhdltools.caps(eng["engine"], image, wait=20.0)
+    if caps.get("state") != "ready":
+        return argv, caps.get("note") or "VHDL files weren't checked."
+    ghdl = vhdltools.lint_shell(vhdl_files)
+    if argv and argv[-3:-1] == ["bash", "-lc"] and argv[0] in ("docker", "podman"):
+        # the Verilog check runs in the image already: one container for both
+        out = list(argv)
+        out[-1] = out[-1] + "; rc=$?; " + ghdl + "; rc2=$?; exit $(( rc > rc2 ? rc : rc2 ))"
+        return out, None
+    gh = vhdltools.container_argv(eng["engine"], image, design_dir, ghdl, _permission_args(eng["engine"]))
+    if not argv:
+        return gh, None
+    return ["bash", "-lc", shlex.join(argv) + "; rc=$?; " + shlex.join(gh) + "; rc2=$?; exit $(( rc > rc2 ? rc : rc2 ))"], None
 
 
 def h_lint_result(handler: Any) -> None:
@@ -4309,138 +5294,119 @@ def h_sim_testbenches(handler: Any) -> None:
 
 
 def h_sim_start(handler: Any) -> None:
-    """Build + launch a Verilator simulation of a testbench (Phase 3.5)."""
+    """Build + launch a simulation of one testbench: Icarus or Verilator for
+    Verilog, GHDL (in the image) for VHDL, with the run settings' parameters,
+    plusargs, defines and time limit (simulate.plan_sim)."""
     from ..controller import simulate
     body = getattr(handler, "_body", {})
     design_dir = _get_active_design_dir()
     if not design_dir:
         _respond(handler, "no active design dir", 400)
         return
-    if simulate.job.running:
+    if simulate.job.running or simulate.batch.running:
         _respond(handler, "a simulation is already running", 400)
         return
-    top = (body.get("top") or "").strip()
-    testbench = (body.get("testbench") or "").strip()
-    sources = body.get("sources") or []
-    if not testbench:
-        _respond(handler, "missing testbench", 400)
+    plan = simulate.plan_sim(design_dir, body)
+    if not plan.get("ok"):
+        _respond(handler, plan.get("error"), 400)
         return
-    # Auto-derive the elaboration top from the testbench when the user didn't
-    # give one — typing the DUT name instead of the bench module is the usual
-    # cause of "ran but no VCD" (the bench's $dumpvars never executes).
-    if not top:
-        top = simulate.top_module_of(design_dir, testbench) or ""
-    if not top:
-        _respond(handler, "could not determine the testbench top module — open the "
-                          "testbench and ensure it declares `module <name>;`", 400)
-        return
-    trace = "fst" if body.get("trace") == "fst" else "vcd"
-    # The RTL-IDE simulator is an INDEPENDENT tool — it is NOT the hardening flow,
-    # so it does not follow the flow's container/local engine toggle. We pick the
-    # best place to run each engine on its own:
-    #   • iverilog : event-driven, 4-state, great for classic testbenches. The
-    #                host's when installed, else the LibreLane image's (3.0.4
-    #                ships Icarus on its PATH).
-    #   • verilator: the host's only. The image has Verilator but no make or
-    #                C++ compiler on its PATH, so `--binary` can't build there
-    #                (checked: "make ... exited with 127"); say so instead.
-    #   • auto     : host iverilog → host verilator → container iverilog.
-    req_engine = (body.get("sim_engine") or "auto").lower()
-    # usable_which skips Windows binaries on the WSL /mnt/c PATH so we never pick
-    # a Windows iverilog/verilator the Linux flow can't run.
-    has_iverilog = bool(platform_env.usable_which("iverilog") and platform_env.usable_which("vvp"))
-    has_verilator = bool(platform_env.usable_which("verilator"))
-    eng_info = tools_mod.resolve_engine()
-    has_container = bool(eng_info.get("ready"))
-
-    if req_engine == "iverilog":
-        if has_iverilog:
-            sim_engine, run_mode = "iverilog", "local"
-        elif has_container:
-            sim_engine, run_mode = "iverilog", "container"
-        else:
-            _respond(handler, "Icarus Verilog (iverilog/vvp) isn't installed on this machine and no "
-                              "container engine is available. Install Icarus from the Tools tab, then retry.", 400)
-            return
-    elif req_engine == "verilator":
-        if has_verilator:
-            sim_engine, run_mode = "verilator", "local"
-        else:
-            _respond(handler, "A Verilator simulation needs Verilator on this machine: the LibreLane "
-                              "image has no C++ build tools to compile one. Install Verilator from the "
-                              "Tools tab, or pick Icarus (Auto uses the image's Icarus).", 400)
-            return
-    else:  # auto
-        if has_iverilog:
-            sim_engine, run_mode = "iverilog", "local"
-        elif has_verilator:
-            sim_engine, run_mode = "verilator", "local"
-        elif has_container:
-            sim_engine, run_mode = "iverilog", "container"
-        else:
-            _respond(handler, "No simulator found. Install Icarus Verilog or Verilator from the "
-                              "Tools tab, or Docker/Podman for the LibreLane image's Icarus.", 400)
-            return
-
-    # Local sim builds + runs via `bash -lc` — fine on Linux/macOS/WSL2, but not
-    # native Windows. Fail with guidance instead of a cryptic FileNotFoundError.
-    if run_mode == "local" and not platform_env.usable_which("bash"):
-        _respond(handler, "Local simulation needs a POSIX shell (bash), which isn't available here. "
-                          "Use WSL2, or switch the engine to Container mode.", 400)
-        return
-
-    engine = None
-    env: Dict[str, str] = {}
-    container_name = None
-    if run_mode == "container":
-        engine = eng_info["engine"]
-        env = eng_info.get("env") or {}
-        import uuid as _uuid
-        container_name = "ll-sim-" + _uuid.uuid4().hex[:12]
-    # With from_config (the IDE): the design is the config's VERILOG_FILES with
-    # its VERILOG_DEFINES and VERILOG_INCLUDE_DIRS, as a run builds it, plus the
-    # simulation-only helpers the IDE adds; never another testbench.
-    defines = body.get("defines") if isinstance(body.get("defines"), dict) else {}
-    include_dirs = [s for s in (body.get("include_dirs") or []) if s]
-    cfg_used: Optional[Dict[str, Any]] = None
-    if body.get("from_config"):
-        from ..controller import lint as lint_mod
-        ci = lint_mod.config_inputs(design_dir)
-        cfg_used = {"mode": ci["mode"], "name": ci["name"], "reason": ci["reason"],
-                    "missing": ci["missing"], "files": ci["files"]}
-        if ci["mode"] == "list" and ci["files"]:
-            m = lint_mod.merge_inputs(
-                ci, extra_sources=body.get("extra_sources") or [],
-                exclude=[testbench] + [t for t in (body.get("testbenches") or []) if isinstance(t, str)],
-                include_dirs=include_dirs, defines=defines)
-            sources, include_dirs, defines = m["sources"], m["include_dirs"], m["defines"]
-    timeout = simulate.sim_timeout(body.get("timeout"))
-    argv = simulate.build_sim_command(
-        design_dir, top=top, sources=sources, testbench=testbench,
-        defines=defines, include_dirs=include_dirs,
-        trace=trace, run_mode=run_mode, engine=engine or "docker", container_name=container_name,
-        sim_engine=sim_engine,
-    )
-    # iverilog always emits VCD; Verilator honours the requested trace format.
-    vcd_name = "dump.fst" if (trace == "fst" and sim_engine == "verilator") else "dump.vcd"
-    result = simulate.job.start(argv, design_dir=design_dir, run_mode=run_mode, env=env,
-                                vcd_name=vcd_name, container_name=container_name, engine=engine,
-                                timeout=timeout)
+    result = simulate.job.start(plan["argv"], design_dir=design_dir, run_mode=plan["run_mode"], env=plan["env"],
+                                vcd_name=plan["vcd_name"], container_name=plan["container_name"],
+                                engine=plan["engine"], timeout=plan["timeout"], sim_engine=plan["sim_engine"])
     if not result.get("ok"):
         _respond(handler, result.get("error"), 400)
         return
-    result["sim_engine"] = sim_engine
-    result["top"] = top
-    result["timeout"] = timeout
-    result["sources"] = list(sources)
-    if cfg_used is not None:
-        result["config"] = cfg_used
+    for k in ("sim_engine", "top", "timeout", "sources", "command", "params", "plusargs", "run_defines"):
+        result[k] = plan[k]
+    if plan.get("config") is not None:
+        result["config"] = plan["config"]
     _respond(handler, result)
+
+
+def h_sim_run_all(handler: Any) -> None:
+    """Run every testbench in turn (POST {benches: [{testbench, params,
+    plusargs, run_defines, timeout}], sim_engine, from_config, extra_sources,
+    include_dirs, testbenches}). The table comes as ``sim_batch`` events and
+    from GET /api/sim/batch."""
+    from ..controller import simulate
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no active design dir", 400)
+        return
+    if simulate.job.running or simulate.batch.running:
+        _respond(handler, "a simulation is already running", 400)
+        return
+    benches = [b for b in (body.get("benches") or []) if isinstance(b, dict) and b.get("testbench")]
+    if not benches:
+        _respond(handler, "There's no testbench to run yet.", 400)
+        return
+    plans = []
+    shared = {k: body.get(k) for k in ("sim_engine", "from_config", "extra_sources", "include_dirs",
+                                       "testbenches", "sources", "trace")}
+    for b in benches[:200]:
+        spec = dict(shared)
+        spec.update({k: b.get(k) for k in ("testbench", "params", "plusargs", "run_defines", "timeout", "top")})
+        spec["build_dir"] = simulate.SIM_BUILD + "/" + simulate.bench_stem(b["testbench"])
+        # A helper (bus model) is never one of the other benches.
+        spec["extra_sources"] = [x for x in (body.get("extra_sources") or []) if x != b["testbench"]]
+        pl = simulate.plan_sim(design_dir, spec)
+        pl.setdefault("testbench", b["testbench"])
+        plans.append(pl)
+    res = simulate.batch.start(design_dir, plans)
+    if not res.get("ok"):
+        _respond(handler, res.get("error"), 400)
+        return
+    res["benches"] = [{"testbench": pl.get("testbench"), "ok": bool(pl.get("ok")), "error": pl.get("error"),
+                       "command": pl.get("command"), "sim_engine": pl.get("sim_engine")} for pl in plans]
+    _respond(handler, res)
+
+
+def h_sim_batch(handler: Any) -> None:
+    """The Run all table (GET), or one bench's output (``?log=<index>``)."""
+    from ..controller import simulate
+    log = _query_param(handler.path, "log")
+    if log != "":
+        try:
+            i = int(log)
+        except ValueError:
+            _respond(handler, "log must be a bench index", 400)
+            return
+        _respond(handler, {"index": i, "lines": simulate.batch.log(i)})
+        return
+    _respond(handler, simulate.batch.snapshot())
+
+
+def h_sim_preview(handler: Any) -> None:
+    """What Simulate would run for a bench with these run settings (POST,
+    nothing runs): the command, the bench's own parameters and defaults, and
+    any problem with the settings."""
+    from ..controller import hdlindex, simulate
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no active design dir", 400)
+        return
+    tb = str(body.get("testbench") or "")
+    top = simulate.top_module_of(design_dir, tb) if tb else None
+    info = None
+    if top:
+        try:
+            info = hdlindex.unit_info(hdlindex.get(design_dir, wait=1.5), top)
+        except Exception:
+            info = None
+    plan = simulate.plan_sim(design_dir, body) if tb else {"ok": False, "error": "no testbench"}
+    _respond(handler, {"top": top, "params": (info or {}).get("params") or [], "vhdl": simulate.is_vhdl(tb),
+                       "ok": bool(plan.get("ok")), "error": plan.get("error"), "bad": plan.get("bad") or [],
+                       "command": plan.get("command"), "sim_engine": plan.get("sim_engine"),
+                       "run_mode": plan.get("run_mode"), "timeout": plan.get("timeout")})
 
 
 def h_sim_cancel(handler: Any) -> None:
     from ..controller import simulate
     simulate.job.cancel()
+    if simulate.batch.running:
+        simulate.batch.cancel()
     _respond(handler, {"ok": True})
 
 
@@ -4525,6 +5491,182 @@ def h_ide_open_wave(handler: Any) -> None:
 # ---------------------------------------------------------------------------
 # Phase 4 — 2D/3D viewers + cells
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# RTL IDE: project index (definition, references, symbols, hierarchy),
+# project search and replace, the schematic, what the image can do
+# ---------------------------------------------------------------------------
+
+def _ide_dirty(body: Dict[str, Any]) -> Dict[str, str]:
+    """Unsaved editor tabs the IDE sends with a query ({rel: text}), capped."""
+    d = body.get("dirty")
+    if not isinstance(d, dict):
+        return {}
+    out: Dict[str, str] = {}
+    total = 0
+    for rel, text in list(d.items())[:50]:
+        if isinstance(rel, str) and isinstance(text, str):
+            total += len(text)
+            if total > 16 * 1024 * 1024:
+                break
+            out[rel] = text
+    return out
+
+
+def _ide_index(handler: Any, wait: float = 1.5):
+    from ..controller import hdlindex
+    design_dir = _get_active_design_dir()
+    if not design_dir or not Path(design_dir).is_dir():
+        _respond(handler, "no project is open", 400)
+        return None
+    return hdlindex.get(design_dir, wait=wait)
+
+
+def h_ide_index(handler: Any) -> None:
+    """The index's state (POST {refresh}: re-check the disk now)."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler, wait=0.2)
+    if idx is None:
+        return
+    if body.get("refresh") and not idx.building:
+        hdlindex._spawn(idx)
+    _respond(handler, idx.status())
+
+
+def h_ide_definition(handler: Any) -> None:
+    """Go to definition: POST {rel, line, col, dirty}."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler)
+    if idx is None:
+        return
+    r = hdlindex.definition(idx, str(body.get("rel") or ""), int(body.get("line") or 1), int(body.get("col") or 1),
+                            _ide_dirty(body))
+    r["index"] = {"ready": idx.ready.is_set(), "building": idx.building, "progress": idx.progress}
+    _respond(handler, r)
+
+
+def h_ide_references(handler: Any) -> None:
+    """Find references: POST {rel, line, col, dirty}."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler)
+    if idx is None:
+        return
+    r = hdlindex.references(idx, str(body.get("rel") or ""), int(body.get("line") or 1), int(body.get("col") or 1),
+                            _ide_dirty(body))
+    r["index"] = {"ready": idx.ready.is_set(), "building": idx.building, "progress": idx.progress}
+    _respond(handler, r)
+
+
+def h_ide_symbols(handler: Any) -> None:
+    """Symbols of one file (POST {rel}) or of the project (POST {})."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler)
+    if idx is None:
+        return
+    rel = body.get("rel")
+    if rel:
+        _respond(handler, hdlindex.file_symbols(idx, str(rel), _ide_dirty(body)))
+    else:
+        _respond(handler, hdlindex.project_symbols(idx, _ide_dirty(body)))
+
+
+def h_ide_hierarchy(handler: Any) -> None:
+    """Modules and their instances, from the index (POST {dirty})."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler)
+    if idx is None:
+        return
+    _respond(handler, hdlindex.hierarchy(idx, None, _ide_dirty(body)))
+
+
+def h_ide_search(handler: Any) -> None:
+    """Project search: POST {query, regex, case, word, include, exclude, replace, dirty}."""
+    from ..controller import hdlsearch
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no project is open", 400)
+        return
+    try:
+        r = hdlsearch.search(design_dir, str(body.get("query") or ""), regex=bool(body.get("regex")),
+                             case=bool(body.get("case")), word=bool(body.get("word")),
+                             include=body.get("include"), exclude=body.get("exclude"),
+                             replace=body.get("replace") if isinstance(body.get("replace"), str) else None,
+                             dirty=_ide_dirty(body))
+    except hdlsearch.SearchError as ex:
+        _respond(handler, {"ok": False, "error": str(ex), "groups": [], "total": 0})
+        return
+    _respond(handler, r)
+
+
+def h_ide_replace(handler: Any) -> None:
+    """Replace the ticked matches: POST {query, regex, case, word, replace,
+    edits: [{rel, hash, offs}]}. Never while a run reads the files."""
+    from ..controller import hdlsearch
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no project is open", 400)
+        return
+    edits = [e for e in (body.get("edits") or []) if isinstance(e, dict)]
+    if not edits:
+        _respond(handler, "Tick at least one match to replace.", 400)
+        return
+    try:
+        r = hdlsearch.replace(design_dir, str(body.get("query") or ""), str(body.get("replace") or ""), edits,
+                              regex=bool(body.get("regex")), case=bool(body.get("case")), word=bool(body.get("word")))
+    except hdlsearch.SearchError as ex:
+        _respond(handler, str(ex), 400)
+        return
+    _respond(handler, r)
+
+
+def h_ide_caps(handler: Any) -> None:
+    """What the IDE can run here: VHDL through the image's GHDL, Yosys for
+    the schematic (GET; ?wait=1 waits for the first probe)."""
+    from ..controller import container_run, vhdltools
+    eng = tools_mod.resolve_engine()
+    engine = eng.get("engine") if eng.get("ready") else None
+    wait = 20.0 if _query_param(handler.path, "wait") else 0.0
+    try:
+        image = container_run.image_ref() if engine else None
+    except Exception:
+        image = None
+    vh = vhdltools.caps(engine, image, wait=wait)
+    _respond(handler, {"vhdl": vh, "container": bool(engine),
+                       "yosys": bool(engine) or bool(platform_env.usable_which("yosys"))})
+
+
+def h_ide_schematic(handler: Any) -> None:
+    """Start reading the design with Yosys for the schematic: POST {top, level}."""
+    from ..controller import schematic
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no project is open", 400)
+        return
+    level = body.get("level") if body.get("level") in schematic.LEVELS else "rtl"
+    r = schematic.job.start(design_dir, top=(body.get("top") or None), level=level)
+    if not r.get("ok"):
+        _respond(handler, r.get("error"), 400)
+        return
+    _respond(handler, r)
+
+
+def h_ide_schematic_result(handler: Any) -> None:
+    """The schematic job's state, and the netlist once it is done (GET ?id=)."""
+    from ..controller import schematic
+    jid = _query_param(handler.path, "id")
+    if _query_param(handler.path, "cancel"):
+        schematic.job.cancel()
+    _respond(handler, schematic.job.result(jid))
+
 
 def _final_gds(run_dir: Path) -> Optional[Path]:
     final = run_dir / "final"
@@ -5092,6 +6234,32 @@ def h_problems(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_kb_errors(handler: Any) -> None:
+    """The failure cards' index for Help (controller/problems.py kb_index),
+    with the runs of the open project that stopped on each."""
+    try:
+        from ..controller import problems
+        _respond(handler, problems.kb_index(_get_active_design_dir()))
+    except Exception as ex:
+        _log.exception("kb index failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_floorplan_estimate(handler: Any) -> None:
+    """What Setup's floorplan preview needs for the open project
+    (controller/fpestimate.py): the site, margins, power straps, pin tracks,
+    the latest synthesis's cell area and the top module's pin count."""
+    # With no project open (the new-project wizard): the PDK's numbers only.
+    design_dir = _get_active_design_dir() if _query_param(handler.path, "project", "1") != "0" else None
+    try:
+        from ..controller import fpestimate
+        _respond(handler, fpestimate.estimate_inputs(design_dir, _query_param(handler.path, "pdk"),
+                                                     _query_param(handler.path, "scl")))
+    except Exception as ex:
+        _log.exception("floorplan estimate failed")
+        _respond(handler, str(ex), 500)
+
+
 def _fix_plan(body: Dict[str, Any]) -> Tuple[Any, int]:
     from ..controller import branch, manualcmd
     design_dir = _get_active_design_dir()
@@ -5223,13 +6391,22 @@ def _apply_fix(handler: Any, body: Dict[str, Any]) -> None:
         # the top-module/clock reading doesn't hold it up (a config LibreLane
         # refuses still does; see _start_run).
         "checks_ack": bool(r) or bool(body.get("checks_ack")),
+        # "Add to queue" from the Run menu: the resumed run waits its turn.
+        "when": body.get("when") or "now",
     }
     state = str(Path(design_dir) / r["state"]) if r and r.get("state") else None
     data, st = _start_run(run_body, initial_state=state, branched_from=branch.branch_meta(p) if r else None)
+    if st == 200 and isinstance(data, dict) and data.get("busy"):
+        _respond(handler, {**data, "ok": False, "started": False, "tag": p["tag"], "undo": undo, "plan": p})
+        return
     if st != 200 or not (isinstance(data, dict) and data.get("ok")):
         # The config change stays (with its Undo): say so rather than hide it.
         msg = data if st != 200 else (data or {}).get("reason") or "the run didn't start"
         _respond(handler, {"ok": True, "started": False, "error": str(msg), "undo": undo, "plan": p})
+        return
+    if data.get("queued") or data.get("busy"):
+        _respond(handler, {**data, "ok": not data.get("busy"), "started": False, "tag": p["tag"], "resume": r,
+                           "undo": undo, "plan": p})
         return
     _respond(handler, {"ok": True, "started": True, "tag": p["tag"], "resume": r, "undo": undo,
                        "changes": p["changes"], "command": data.get("command")})
@@ -5277,16 +6454,25 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/fs/native-pick", h_native_pick),
     ("/api/run-export", h_run_export),
     ("/api/verify/rerun", h_verify_rerun),
+    ("/api/verify/report", h_verify_report),
+    ("/api/verify/summary", h_verify_summary),
     ("/api/verify", h_verify),
     ("/api/compare", h_compare),
     ("/api/cell-usage", h_cell_usage),
     ("/api/run-stages", h_run_stages),
     ("/api/run-explain", h_run_explain),
     ("/api/problems", h_problems),
+    ("/api/kb/errors", h_kb_errors),
+    ("/api/floorplan/estimate", h_floorplan_estimate),
     ("/api/fix/plan", h_fix_plan),
     ("/api/fix/apply", h_fix_apply),
     ("/api/config/undo", h_config_undo),
     ("/api/timing-paths", h_timing_paths),
+    ("/api/timing/paths", h_timing_list),
+    ("/api/timing/path", h_timing_detail),
+    ("/api/warnings/waive", h_warnings_waive),
+    ("/api/warnings/unwaive", h_warnings_unwaive),
+    ("/api/warnings", h_warnings),
     ("/api/dse/start", h_dse_start),
     ("/api/dse/plan", h_dse_plan),
     ("/api/dse/cancel", h_dse_cancel),
@@ -5303,6 +6489,19 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/sim/cancel", h_sim_cancel),
     ("/api/waveform", h_waveform),
     ("/api/ide/open-wave", h_ide_open_wave),
+    ("/api/sim/run-all", h_sim_run_all),
+    ("/api/sim/batch", h_sim_batch),
+    ("/api/sim/preview", h_sim_preview),
+    ("/api/ide/index", h_ide_index),
+    ("/api/ide/definition", h_ide_definition),
+    ("/api/ide/references", h_ide_references),
+    ("/api/ide/symbols", h_ide_symbols),
+    ("/api/ide/hierarchy", h_ide_hierarchy),
+    ("/api/ide/search", h_ide_search),
+    ("/api/ide/replace", h_ide_replace),
+    ("/api/ide/caps", h_ide_caps),
+    ("/api/ide/schematic", h_ide_schematic),
+    ("/api/ide/schematic-result", h_ide_schematic_result),
     ("/api/celllib/cell", h_celllib_cell),
     ("/api/celllib/layout", h_celllib_layout),
     ("/api/celllib/view", h_celllib_view),
@@ -5377,6 +6576,14 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/layout/mesh", h_layout_mesh),
     ("/api/layout/markers", h_layout_markers),
     ("/api/layout/commands", h_layout_commands),
+    ("/api/layout/nets", h_layout_nets),
+    ("/api/layout/net", h_layout_net),
+    ("/api/layout/locate", h_layout_locate),
+    ("/api/layout/mesh/cancel", h_layout_mesh_cancel),
+    ("/api/layout/analysis", h_layout_analysis),
+    ("/api/layout/analysis/start", h_layout_analysis_start),
+    ("/api/layout/analysis/cancel", h_layout_analysis_cancel),
+    ("/api/layout/viewer-status", h_layout_viewer_status),
     ("/api/runs/", h_run),
     ("/api/tools", h_tools),
     ("/api/metrics-catalog", h_metrics_catalog),
@@ -5404,6 +6611,19 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/run/start", h_run_start),
     ("/api/run/cancel", h_run_cancel),
     ("/api/run/resume", h_run_resume),
+    ("/api/run/log", h_run_log),
+    ("/api/queue/add", h_queue_add),
+    ("/api/queue/move", h_queue_move),
+    ("/api/queue/remove", h_queue_remove),
+    ("/api/queue/pause", h_queue_pause),
+    ("/api/queue/stop-after-current", h_queue_stop_after),
+    ("/api/queue/stop", h_queue_stop),
+    ("/api/queue/settings", h_queue_settings),
+    ("/api/queue/recover", h_queue_recover),
+    ("/api/queue/resume", h_queue_resume),
+    ("/api/queue/orphan", h_queue_orphan),
+    ("/api/queue", h_queue),
+    ("/api/power/hold", h_power_hold),
     ("/api/reproducible", h_reproducible),
     ("/api/tools/install-ciel", h_tools_install_ciel),
     ("/api/container/pull", h_container_pull),
@@ -5435,7 +6655,9 @@ _POST_ROUTES = {
     "/api/fs/native-pick", "/api/verify/rerun", "/api/compare", "/api/fix/plan",
     "/api/fix/apply", "/api/config/undo", "/api/dse/start", "/api/dse/cancel", "/api/dse/plan",
     "/api/file/write", "/api/file/delete", "/api/file/rename", "/api/lint",
-    "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave", "/api/celllib/view",
+    "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave",
+    "/api/sim/run-all", "/api/sim/preview", "/api/ide/index", "/api/ide/definition", "/api/ide/references",
+    "/api/ide/symbols", "/api/ide/hierarchy", "/api/ide/search", "/api/ide/replace", "/api/ide/schematic", "/api/celllib/view",
     "/api/celllib/view/close", "/api/macros/add", "/api/macros/settings",
     "/api/custom-cells/save", "/api/custom-cells/remove", "/api/custom-cells/enable",
     "/api/custom-macros/save", "/api/custom-macros/remove", "/api/custom-macros/enable",
@@ -5444,21 +6666,30 @@ _POST_ROUTES = {
     "/api/xquartz/restart", "/api/open-in-tool", "/api/layout/open", "/api/write-config",
     "/api/set-design-dir", "/api/diff", "/api/cli-command", "/api/manual/run",
     "/api/manual/cancel", "/api/run/start", "/api/run/cancel", "/api/run/resume",
+    "/api/queue/add", "/api/queue/move", "/api/queue/remove", "/api/queue/pause",
+    "/api/queue/stop-after-current", "/api/queue/stop", "/api/queue/settings",
+    "/api/queue/recover", "/api/queue/resume", "/api/queue/orphan",
     "/api/reproducible", "/api/tools/install-ciel", "/api/container/pull",
     "/api/container/enable-docker-group", "/api/container/start-engine", "/api/tools/cancel",
     "/api/tools/install/", "/api/tools/uninstall/", "/api/pdk/uninstall",
     "/api/pdk/fix-permissions", "/api/copy-spm",
     "/api/runs-bulk", "/api/runs-values", "/api/runs-changed", "/api/runs-export",
+    "/api/verify/report", "/api/warnings/waive", "/api/warnings/unwaive",
+    # Layout (lane 3)
+    "/api/layout/locate", "/api/layout/mesh/cancel", "/api/layout/analysis/start",
+    "/api/layout/analysis/cancel",
 }
 _BOTH_ROUTES = {
     "/api/run-note", "/api/watch", "/api/settings/pdk-root", "/api/suggest-config",
     "/api/update-check", "/api/runs-meta",
 }
 _GET_ROUTES = {
+    "/api/queue", "/api/power/hold", "/api/run/log",
     "/api/templates", "/api/project/defaults", "/api/project/files", "/api/run-export",
-    "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems",
+    "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems", "/api/kb/errors", "/api/floorplan/estimate",
     "/api/timing-paths", "/api/dse/sweeps", "/api/dse/status", "/api/system-resources",
-    "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/celllib/cell",
+    "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/sim/batch", "/api/ide/caps",
+    "/api/ide/schematic-result", "/api/celllib/cell",
     "/api/celllib/layout", "/api/celllib", "/api/macros/catalog", "/api/macros/projects",
     "/api/macros/inspect", "/api/cells", "/api/custom-cells", "/api/custom-macros",
     "/api/health", "/api/presence", "/api/hello", "/api/about", "/api/steps", "/api/variables",
@@ -5473,6 +6704,9 @@ _GET_ROUTES = {
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
     "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
     "/api/runs-keys", "/api/compare-image",
+    "/api/timing/paths", "/api/timing/path", "/api/warnings", "/api/verify/summary",
+    # Layout (lane 3)
+    "/api/layout/nets", "/api/layout/net", "/api/layout/analysis", "/api/layout/viewer-status",
 }
 # A route in none of the sets keeps the old answer-anything behaviour, so a
 # route added elsewhere never breaks at run time; the test names it instead.

@@ -41,6 +41,57 @@ export function resumeText(r) {
   return "resumes at " + st + (r.n && !r.stage_start ? ", step " + r.n : "");
 }
 
+// How sure the knowledge base is that a fix clears the failure (rustc's
+// applicability, in words): "fixes" when the tool's own numbers say so,
+// "likely" when it removes the usual cause, "try" for a lever that often
+// helps. A square via plus a word, like every status in LanEx.
+const SURE = { fixes: ["pass", "Fixes it"], likely: ["warn", "Likely fix"], try: ["info", "Worth a try"] };
+export function sureHtml(sure) {
+  const s = SURE[sure];
+  if (!s) return "";
+  return "<span class='px-sure is-" + sure + "' title='" + esc(SURE_TIP[sure]) + "'><span class='vf-mark is-" + s[0] + "' aria-hidden='true'></span>" + esc(s[1]) + "</span>";
+}
+const SURE_TIP = {
+  fixes: "The tool's own message gives the number this change meets.",
+  likely: "This removes the usual cause of this failure.",
+  try: "A change that helps in many cases like this one; the run will tell.",
+};
+
+// The card's glossary terms as a row of chips: hover or focus one for its
+// definition (term.js reads data-term). Hidden when there are none.
+export function termsRowHtml(learn) {
+  const ids = [...new Set((learn || []).filter(Boolean))];
+  if (!ids.length) return "";
+  return "<div class='px-terms'><span class='px-terms-k'>Terms</span>" +
+    ids.map((t) => "<span class='px-term' data-term='" + esc(t) + "' tabindex='0'>" + esc(TERM_LABEL[t] || t.replace(/-/g, " ")) + "</span>").join("") + "</div>";
+}
+// Display names for the card's term ids before the glossary has loaded
+// (term.js shows the full entry).
+const TERM_LABEL = { wns: "WNS", tns: "TNS", pdn: "power grid", drc: "DRC", lvs: "LVS", xor: "mask XOR", cts: "clock tree",
+  sta: "STA", pdk: "PDK", "lef-def": "LEF/DEF", "row-site": "rows and sites", "core-margin": "core margin" };
+
+// The tool's message code on a card, as a button to Help's error index
+// (LanEx's --explain). A card with no code shows none.
+export function codeChipHtml(code, kb) {
+  if (!code) return "";
+  return "<button type='button' class='fl-code px-code' data-kb-code='" + esc(code) + "' title='What " + esc(code) +
+    " means, its usual causes, and the runs of this project that hit it'>" + esc(code) + " " + icon("chevron", { size: 10 }) + "</button>";
+}
+
+export function notesHtml(notes) {
+  const list = (notes || []).filter(Boolean);
+  return list.length ? "<ul class='px-notes'>" + list.map((n) => "<li>" + esc(n) + "</li>").join("") + "</ul>" : "";
+}
+
+if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("[data-kb-code]");
+    if (!b) return;
+    Promise.all([import("./shell.js"), import("./learn.js")]).then(([sh, learn]) =>
+      learn.renderGlossary(sh.openHelp("learn", { render: false }), { code: b.dataset.kbCode }));
+  });
+}
+
 // One fix, as a row: the change and why, then Apply (a setting) or the link
 // (anything else). `n` numbers it; `primary` marks the one to try first.
 export function fixRowHtml(f, { tag, title, n = 0, primary = false } = {}) {
@@ -51,7 +102,7 @@ export function fixRowHtml(f, { tag, title, n = 0, primary = false } = {}) {
         "<div class='px-fix-what'>" + (f.label ? "<b>" + esc(f.label) + "</b>" : "") +
           "<span class='px-chg'><code>" + esc(f.var) + "</code> <span class='px-from'>" + esc(f.from || "unset") + "</span>" +
           icon("chevron", { size: 11 }) + "<span class='px-to'>" + esc(f.to) + "</span></span></div>" +
-        "<div class='px-fix-why'>" + esc(f.why) + "</div>" +
+        "<div class='px-fix-why'>" + sureHtml(f.sure) + esc(f.why) + "</div>" +
         "<div class='px-fix-at' title='The first step of the flow that reads " + esc(f.var) + "'>" + icon("refresh", { size: 11 }) + " " + esc(resumeText(r)) + "</div>" +
       "</div>" +
       "<button class='btn " + (primary ? "btn-primary" : "btn-ghost") + " btn-sm' data-fix-tag='" + esc(tag) + "' data-fix-var='" + esc(f.var) +

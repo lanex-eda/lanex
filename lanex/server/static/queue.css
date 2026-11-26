@@ -1,0 +1,169 @@
+/* queue.css — the run queue (queue.js): the top-bar chip and its popover,
+   and the stage-segmented progress bar (.q-bar) any page can reuse.
+   Built from the plate's own parts: the square via + word (.rn-v), mono caps
+   lanes (.menu-lane), the menu surface (.menu), met1 for "going". */
+
+.q-wrap { position: relative; display: inline-flex; }
+.q-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 32px; padding: 0 9px 0 10px; max-width: 420px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  color: var(--text); font-size: 13.5px; font-weight: 500; cursor: pointer; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.12s ease, box-shadow 0.15s ease;
+}
+.q-chip[hidden] { display: none; }
+.q-chip:hover, .q-chip[aria-expanded="true"] { border-color: var(--accent); }
+.q-chip .chev { color: var(--text-muted); flex: none; }
+.q-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.q-short { display: none; }
+.q-via { width: 9px; height: 9px; border-radius: 2px; background: var(--text-muted); flex: none; }
+.q-chip[data-tone="run"] .q-via { background: var(--met1); box-shadow: 0 0 8px var(--accent-glow); animation: rn-pulse 1.4s ease-in-out infinite; }
+.q-chip[data-tone="run"] { box-shadow: 0 0 0 1px color-mix(in srgb, var(--met1) 18%, transparent) inset; }
+.q-chip[data-tone="warn"] { border-color: color-mix(in srgb, var(--warn) 60%, var(--border-strong)); }
+.q-chip[data-tone="warn"] .q-via { background: var(--warn); }
+.q-chip[data-tone="fail"] .q-via { background: var(--fail); }
+@media (prefers-reduced-motion: reduce) { .q-chip[data-tone="run"] .q-via { animation: none; } }
+/* A narrow top bar: the numbers only, the full line in the tooltip. */
+@container topbar (max-width: 1500px) {
+  .q-chip { max-width: 240px; }
+  .q-text { display: none; }
+  .q-short { display: inline; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+}
+
+/* ------------------------------------------------------------ the popover */
+.q-pop {
+  right: 0; left: auto; width: 460px; max-width: min(520px, calc(94vw / var(--ll-zoom, 1)));
+  padding: 4px 6px 6px; max-height: calc(100vh / var(--ll-zoom, 1) - 96px); overflow-y: auto;
+  overscroll-behavior: contain;
+}
+@container topbar (max-width: 1500px) { .q-pop { width: 420px; } }
+@container topbar (min-width: 2100px) { .q-pop { width: 520px; } }
+.q-head { display: flex; align-items: center; gap: 10px; padding: 4px 4px 2px; }
+.q-head .menu-lane { flex: 1; padding-left: 6px; }
+.q-par { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); white-space: nowrap; flex: none; }
+.q-par select {
+  height: 28px; padding: 0 6px; background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; font-size: 13px;
+}
+.q-why { margin: 2px 10px 6px; font-size: 12.5px; line-height: 1.45; color: var(--text-muted); }
+.q-mem { display: flex; align-items: center; gap: 10px; margin: 0 10px 6px; }
+.q-mem-bar {
+  flex: 1; display: flex; height: 6px; border-radius: 2px; overflow: hidden;
+  background: var(--surface-3, var(--surface-2)); border: 1px solid var(--border);
+}
+.q-mem-bar i { display: block; height: 100%; }
+.q-mem-bar .is-other { background: color-mix(in srgb, var(--text-muted) 45%, transparent); }
+.q-mem-bar .is-runs { background: var(--met1); }
+.q-mem-bar .is-res { background: repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--text-muted) 35%, transparent) 3px 5px); }
+.q-mem-t { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+
+.q-list { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.q-row {
+  padding: 7px 10px 8px; border-radius: var(--r-sm); border: 1px solid transparent;
+  background: transparent;
+}
+.q-row:hover { background: var(--hover); }
+.q-row:focus-visible { outline: 2px solid var(--met1); outline-offset: -2px; }
+.q-row.is-run { background: color-mix(in srgb, var(--met1) 6%, transparent); border-color: color-mix(in srgb, var(--met1) 18%, transparent); }
+.q-row.is-int { background: color-mix(in srgb, var(--warn) 8%, transparent); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.q-row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.q-row-top .rn-v { font-weight: 600; flex: none; }
+.q-tag { font-family: var(--mono); font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.q-where { margin-left: auto; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 55%; }
+.q-badge {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 3px; color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+}
+.q-row-meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-family: var(--mono); font-size: 12px; color: var(--text-muted); }
+.q-row-meta > span:first-child { flex: 1; min-width: 0; }
+.q-acts { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.q-move .iconbtn { width: 26px; height: 26px; font-size: 13px; opacity: 0.0; }
+.q-row.is-wait:hover .q-move .iconbtn, .q-row.is-wait:focus-within .q-move .iconbtn { opacity: 1; }
+@media (hover: none) { .q-move .iconbtn { opacity: 1; } }
+.q-n { font-family: var(--mono); font-size: 12px; color: var(--text-muted); width: 18px; text-align: right; flex: none; }
+.q-lbl { flex: 1; min-width: 0; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-lbl b { font-weight: 600; color: var(--text-strong); }
+.q-est { font-family: var(--mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.q-note { margin: 4px 0 0 26px; font-size: 12.5px; line-height: 1.4; color: var(--text-muted); }
+.q-row.is-run .q-note, .q-row.is-int .q-note, .q-row.is-paused .q-note, .q-row.is-end .q-note { margin-left: 17px; }
+.q-note.is-warn { margin: 4px 10px; color: var(--warn); }
+.q-hint { margin: 6px 0 0 17px; font-size: 12px; line-height: 1.4; color: var(--text-muted); }
+.q-empty { margin: 10px; font-size: 13.5px; line-height: 1.5; color: var(--text-muted); }
+.q-ended { margin: 2px 4px 4px; }
+.q-ended summary { cursor: pointer; padding: 6px 6px; font-size: 13px; color: var(--text-muted); }
+.q-foot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  margin-top: 4px; padding: 8px 8px 2px; border-top: 1px solid var(--seal);
+  font-size: 13px; color: var(--text-muted);
+}
+.q-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; white-space: nowrap; }
+.q-keep { flex: 1 1 auto; min-width: 0; font-size: 12.5px; text-align: right; }
+.q-keep.is-on::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 1px; background: var(--pass); vertical-align: 1px; }
+.q-foot-acts { display: flex; gap: 4px; flex: 1 0 100%; justify-content: flex-end; }
+
+/* ------------------------------------------------------------ the run menu */
+/* What / How / When, each a mono caps lane, rows of label + control, then the
+   live command and the two ways to start. */
+.run-menu.rm {
+  width: 480px; max-width: min(540px, calc(94vw / var(--ll-zoom, 1)));
+  max-height: calc(100vh / var(--ll-zoom, 1) - 96px); overflow-y: auto; overscroll-behavior: contain;
+  padding: 2px 8px 0;
+}
+@container topbar (max-width: 1500px) { .run-menu.rm { width: 440px; } }
+@container topbar (min-width: 2100px) { .run-menu.rm { width: 540px; } }
+.rm-sec { display: flex; align-items: center; gap: 8px; margin-top: 6px; border-top: 1px solid var(--seal); padding-top: 2px; }
+.rm-sec:first-child { border-top: 0; margin-top: 0; }
+.rm-sec .menu-lane { flex: 1; padding-left: 2px; }
+.rm-row { display: grid; grid-template-columns: 62px minmax(0, 1fr); align-items: start; gap: 10px; padding: 4px 2px; }
+.rm-k { padding-top: 7px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+.rm-v { min-width: 0; }
+.rm-row .menu-note { margin: 4px 0 0; }
+.rm-row > .menu-note.rm-v { margin: 0; padding-top: 6px; font-size: 13px; color: var(--text); }
+.rm .menu-field select { width: 100%; }
+.rm-narrow select { width: 92px !important; }
+.rm-inline { display: flex; align-items: center; gap: 10px; }
+.rm-inline .menu-note { margin: 0; }
+.rm-seg { display: flex; gap: 4px; }
+.rm-seg .menu-item { flex: 1; padding: 7px 8px; border: 1px solid var(--border); background: var(--surface-2); }
+.rm-seg .menu-item.mode-btn-active, .rm-seg .menu-item.engine-btn-active { border-color: color-mix(in srgb, var(--met1) 55%, var(--border)); background: color-mix(in srgb, var(--met1) 8%, var(--surface-2)); }
+.rm-checks { display: flex; flex-direction: column; gap: 4px; padding-top: 3px; }
+.rm-check { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; cursor: pointer; color: var(--text); }
+.rm-check input { margin-top: 3px; flex: none; }
+.rm-check b { font-weight: 600; color: var(--text-strong); }
+.rm-check small { display: block; font-size: 12.5px; color: var(--text-muted); line-height: 1.35; }
+.rm-skip summary { cursor: pointer; padding: 6px 0 2px; font-size: 13.5px; color: var(--text); }
+.rm-skip-list { display: grid; grid-template-columns: 1fr; gap: 1px; max-height: 180px; overflow-y: auto; margin-top: 4px; padding: 4px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
+.rm-skip-list label { display: flex; align-items: center; gap: 6px; padding: 2px 4px; font-size: 12.5px; cursor: pointer; }
+.rm-skip-list label small { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.rm-cmd-head .btn { margin-left: auto; }
+.rm-cmd {
+  margin: 4px 2px 0; padding: 8px 10px; max-height: 150px; overflow-y: auto;
+  background: var(--bg, var(--wafer)); border: 1px solid var(--border); border-radius: var(--r-sm);
+  font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--text);
+  word-break: normal; overflow-wrap: anywhere;
+}
+.rm-cmd .a { display: inline-block; margin-right: 0.6em; white-space: nowrap; }
+.rm-cmd .a.is-exe { color: var(--met1); font-weight: 600; }
+.rm-cmd .a.is-flag { color: var(--text-strong); }
+.rm-cmd .a.is-sized { text-decoration: underline dotted color-mix(in srgb, var(--text-muted) 70%, transparent); text-underline-offset: 3px; }
+.rm-cmd .a.is-ph { color: var(--text-muted); font-style: italic; }
+.rm-cmd .a.is-hot { background: var(--accent-soft); border-radius: 2px; }
+.rm-cmd-note { margin: 4px 2px 0 !important; font-size: 12px !important; }
+.rm-foot {
+  position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px;
+  margin: 8px -8px 0; padding: 10px 10px; background: var(--die); border-top: 1px solid var(--seal);
+}
+.rm-slot { margin: 0 0 0 auto !important; font-size: 12.5px !important; text-align: right; }
+
+/* ------------------------------------------------------------ the stage bar */
+/* One cell per stage, sized by its steps; done cells are met1, the running
+   one fills with a glow. Reusable: segBar(stageSegments(stepIds), done). */
+.q-bar { display: flex; gap: 2px; height: 5px; margin-top: 7px; }
+.q-seg { position: relative; display: block; min-width: 4px; height: 100%; border-radius: 1px; background: var(--surface-3, var(--border)); overflow: hidden; }
+.q-seg i { position: absolute; inset: 0 auto 0 0; background: var(--met1); }
+.q-seg.is-done i { width: 100% !important; }
+.q-seg.is-now { box-shadow: 0 0 6px var(--accent-glow); }
+.q-seg.is-now i { background: linear-gradient(90deg, var(--met1), color-mix(in srgb, var(--met1) 60%, white)); }
+body.theme-light .q-seg.is-now { box-shadow: none; }

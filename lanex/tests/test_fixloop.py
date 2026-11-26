@@ -633,9 +633,14 @@ def test_antenna_diodes_on_ports_only_when_a_port_violates(tmp_path, monkeypatch
 
 
 def test_antenna_repair_turned_off_is_named_first(tmp_path, monkeypatch):
-    monkeypatch.setattr(problems, "_cfg", lambda run_dir: {"GRT_REPAIR_ANTENNAS": False, "GRT_ANTENNA_REPAIR_ITERS": 3})
-    p = problems.check_problems(tmp_path, _antenna_rep(["net1"]), set())[0]
-    assert p["fixes"][0]["var"] == "GRT_REPAIR_ANTENNAS"
+    # LibreLane 3.0.4 names it RUN_ANTENNA_REPAIR (GRT_REPAIR_ANTENNAS is the
+    # deprecated alias): a fix under the old name would be dropped by finish().
+    for cfg in ({"RUN_ANTENNA_REPAIR": False, "GRT_ANTENNA_REPAIR_ITERS": 3},
+                {"GRT_REPAIR_ANTENNAS": False, "GRT_ANTENNA_REPAIR_ITERS": 3}):
+        monkeypatch.setattr(problems, "_cfg", lambda run_dir, cfg=cfg: cfg)
+        p = problems.check_problems(tmp_path, _antenna_rep(["net1"]), set())[0]
+        assert p["fixes"][0]["var"] == "RUN_ANTENNA_REPAIR"
+        assert "GRT_ANTENNA_REPAIR_ITERS" not in {f.get("var") for f in p["fixes"]}, "repair off: turn it on first"
 
 
 def test_xor_outline_layers_come_from_each_pdks_layer_file(monkeypatch):

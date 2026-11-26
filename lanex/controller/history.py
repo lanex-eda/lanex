@@ -400,15 +400,25 @@ def _live_key() -> Any:
         return _NO_PROBE
     if not live:
         return None
-    try:
-        st = os.stat(live)
-    except OSError:
+    # Several runs can be live at once (the job queue): the probe may name a list.
+    keys = set()
+    for one in ([live] if isinstance(live, (str, os.PathLike)) else list(live)):
+        try:
+            st = os.stat(one)
+        except OSError:
+            continue
+        keys.add((st.st_dev, st.st_ino))
+    if not keys:
         return None
-    return (st.st_dev, st.st_ino)
+    return next(iter(keys)) if len(keys) == 1 else frozenset(keys)
 
 
 def _is_live(st: os.stat_result, live_key: Any) -> bool:
-    return live_key is _NO_PROBE or live_key == (st.st_dev, st.st_ino)
+    if live_key is _NO_PROBE:
+        return True
+    if isinstance(live_key, frozenset):
+        return (st.st_dev, st.st_ino) in live_key
+    return live_key == (st.st_dev, st.st_ino)
 
 
 # A run another program is writing (``librelane`` typed into the Console, a

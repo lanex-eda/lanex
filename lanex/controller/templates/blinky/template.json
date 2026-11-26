@@ -2,6 +2,7 @@
   "name": "blinky",
   "title": "Blinky (LED blinker)",
   "description": "A counter whose top bit blinks an LED. The 'hello world' of chip design, and the fastest run.",
+  "teaches": "Verilog all the way to a GDS: the whole flow on the smallest design, in about 40 seconds.",
   "top": "blinky",
   "clock_port": "clk",
   "clock_period": 10.0,

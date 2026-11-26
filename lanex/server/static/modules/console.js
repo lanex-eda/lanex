@@ -130,7 +130,9 @@ function ensure() {
           "<button class='btn btn-ghost btn-sm' id='cn-stop' disabled>" + icon("stop", { size: 12 }) + " Stop</button>" +
         "</div>" +
         "<p class='cn-allow'>Allowed: <code>librelane</code>, <code>openroad</code>, <code>yosys</code>, <code>magic</code>, <code>klayout</code>, <code>netgen</code>, <code>iverilog</code>, <code>vvp</code>, <code>verilator</code>, <code>dot</code>, <code>ciel</code>, <code>docker</code>/<code>podman</code>. " +
-          "No pipes, redirects or <code>sudo</code>: this is not a shell. Use a terminal for those. <kbd>↑</kbd> <kbd>↓</kbd> step through earlier commands.</p>" +
+          "No pipes, redirects or <code>sudo</code>: this is not a shell. Use a terminal for those. <kbd>↑</kbd> <kbd>↓</kbd> step through earlier commands. " +
+          "<span title='The list keeps the Console to the flow&#39;s own tools. It is not a safety fence: these tools run scripts. What keeps other programs and websites out is LanEx&#39;s key and its same-page check.'>" +
+          "These tools run scripts, so run only commands you trust.</span></p>" +
         "<pre id='cn-out' class='cn-out' aria-live='polite'></pre>" +
       "</div>" +
     "</div>";
