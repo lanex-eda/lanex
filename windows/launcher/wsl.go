@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,12 +164,14 @@ func decodeUTF16LE(b []byte) string {
 // window: `--no-browser` prevents the Linux process from declaring success after
 // merely spawning Edge, before Windows has proved that /api/health is reachable.
 // tray.waitReady opens exactly one app window only after that Windows-side probe.
-func startServer() (*exec.Cmd, error) {
+func startServer(sw *startWin) (*exec.Cmd, error) {
 	cmd := hiddenCmd(wslExe, startServerArgs()...)
 	// The appliance's stdout/stderr is the only diagnostic that exists when a
-	// launch fails, and the failure dialogs point the user at this file.
+	// launch fails, and the failure dialogs point the user at this file. The
+	// writer also watches for the two lines that move the start window on.
 	if f, err := openLogFile(); err == nil {
-		cmd.Stdout, cmd.Stderr = f, f
+		mw := &markerWriter{out: f, sw: sw}
+		cmd.Stdout, cmd.Stderr = mw, mw
 	} else {
 		logf("could not open the log file: %v", err)
 	}
@@ -189,16 +192,56 @@ func startKeepalive() (*exec.Cmd, error) {
 	return cmd, nil
 }
 
+// The lines the start window waits for: the first comes from bash (the distro
+// is up), the second from lanex once its server has bound its port
+// (cli.py _print_url). PYTHONUNBUFFERED makes the second arrive at once
+// instead of when Python's output buffer fills.
+const (
+	markerLinux  = "LANEX-START linux"
+	markerServer = "LanEx is running at"
+)
+
 func startServerArgs() []string {
 	return []string{"-d", distroName, "-u", appUser, "--", "env",
 		"-u", "WAYLAND_DISPLAY",
 		"GDK_BACKEND=x11",
 		"QT_QPA_PLATFORM=xcb",
+		"PYTHONUNBUFFERED=1",
 		"LANEX_INSTANCE_ID=" + activeConfig.InstallID,
 		"LANEX_SOURCE_SHA=" + activeConfig.SourceSHA,
 		"LANEX_MANIFEST_HASH=" + activeConfig.Manifest,
 		"bash", "-ic",
-		"cd ~ 2>/dev/null; exec lanex --no-browser"}
+		"printf '" + markerLinux + "\\n'; cd ~ 2>/dev/null; exec lanex --no-browser"}
+}
+
+// markerWriter passes the server's output to launcher.log and moves the start
+// window on when it sees the marker lines.
+type markerWriter struct {
+	out     io.Writer
+	sw      *startWin
+	pending []byte
+	seen    int
+}
+
+func (m *markerWriter) Write(p []byte) (int, error) {
+	n, err := m.out.Write(p)
+	if m.seen < 2 {
+		m.pending = append(m.pending, p...)
+		if len(m.pending) > 64<<10 {
+			m.pending = m.pending[len(m.pending)-4096:]
+		}
+		text := string(m.pending)
+		if m.seen < 1 && strings.Contains(text, markerLinux) {
+			m.seen = 1
+			m.sw.step(1)
+		}
+		if m.seen < 2 && strings.Contains(text, markerServer) {
+			m.seen = 2
+			m.sw.step(2)
+			m.pending = nil
+		}
+	}
+	return n, err
 }
 
 // terminateDistro shuts the appliance VM down. Killing wsl.exe on the Windows
