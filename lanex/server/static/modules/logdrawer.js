@@ -8,6 +8,7 @@ import { openOverlay, releaseOverlay, isOverlayOpen } from "./shell.js";
 
 let _el = null;
 let _unseen = 0;
+const DRAWER_MAX = 20000;   // lines the Logs panel keeps
 
 function body() {
   return _el ? _el.querySelector(".log-panel-body") : null;
@@ -86,7 +87,13 @@ export function appendDrawer(line) {
   const d = ensure();
   const b = d.querySelector(".log-panel-body");
   const stick = b.scrollTop + b.clientHeight >= b.scrollHeight - 4;
-  b.textContent += line + "\n";
+  // One text node per line: `textContent +=` re-serialised the whole panel
+  // for every line (quadratic on a long image pull). The newest lines stay.
+  b.appendChild(document.createTextNode(line + "\n"));
+  if (b.childNodes.length > DRAWER_MAX) {
+    const drop = b.childNodes.length - Math.floor(DRAWER_MAX * 0.8);
+    for (let i = 0; i < drop; i++) b.firstChild.remove();
+  }
   if (stick) b.scrollTop = b.scrollHeight;
   if (d.hidden) _unseen += 1;
   syncBtn();

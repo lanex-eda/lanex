@@ -43,3 +43,27 @@ import tempfile  # noqa: E402
 _test_home = tempfile.mkdtemp(prefix="lanex-test-home-")
 os.environ["LANEX_HOME"] = _test_home
 os.environ["LIBRELANE_GUI_HOME"] = _test_home
+
+
+# The job queue (controller/jobs.py) is process-wide. Each test gets a fresh
+# one that keeps nothing on disk, and a run a test starts uses the runner the
+# test put in place (tests swap ``app.get_runner``): the queue makes one
+# runner per job through ``app.make_runner``.
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_job_queue(monkeypatch):
+    try:
+        from lanex.controller import jobs
+        from lanex.server import app as _app
+        from lanex.server import routes
+    except Exception:
+        yield
+        return
+    sched = jobs.Scheduler(persist=False)
+    sched._facts_override = {"cores": 32, "free_gb": 40.0, "total_gb": 46.0}
+    monkeypatch.setattr(jobs, "scheduler", sched)
+    monkeypatch.setattr(_app, "make_runner", lambda job=None: _app.get_runner())
+    routes.wire_jobs()
+    yield

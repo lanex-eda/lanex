@@ -19,7 +19,7 @@ export const LINT_INFO = {
   DEFPARAM: "defparam is deprecated. Pass parameters with #( .NAME(value) ).",
   EOFNEWLINE: "The file doesn't end with a newline.",
   GENUNNAMED: "A generate block has no label. Add one (begin : gen_name).",
-  IMPLICIT: "A wire is used without being declared, so Verilog made a 1-bit one. Declare it.",
+  IMPLICIT: "A wire is used without being declared, so Verilog made a 1-bit one. Simulation carries on, but Yosys stops synthesis on it, so a run fails at the first step. Declare it.",
   INITIALDLY: "A delayed assignment (<=) in an initial block. Use = there.",
   LATCH: "Not every path assigns this signal, so synthesis builds a latch. Assign it in every branch or give it a default.",
   MULTIDRIVEN: "Two always blocks drive the same signal. Drive it from one place.",

@@ -193,6 +193,8 @@ def test_broken_config_blocks_with_librelanes_words(tmp_path: Path, monkeypatch)
     assert r["problems"][0]["code"] == "config"
     assert "LibreLane can't load config.json" in r["problems"][0]["message"]
     assert "FP_CORE_UTIL" in r["problems"][0]["message"] and "one-off settings" in r["problems"][0]["fix"]
+    # LibreLane's words, then the failure card's plain ones.
+    assert r["problems"][0]["message"].endswith("FP_CORE_UTIL is a number, and the config gives it 'abc'.")
     # The run's own -c values reach the loader.
     assert "FP_CORE_UTIL=abc" in probe.calls[0]["overrides"]
 
@@ -204,6 +206,24 @@ def test_resolved_names_from_librelane_feed_the_top_check(tmp_path: Path, monkey
     r = _check(tmp_path, cf)
     assert r["blocking"] is False and [p["code"] for p in r["problems"]] == ["top"]
     assert r["design_name"] == "spmx"
+
+
+def test_an_unknown_key_asks_first_and_names_the_nearest(tmp_path: Path, monkeypatch):
+    # LibreLane 3.0.4 only warns ("An unknown key 'FP_CORE_UTL' was provided.")
+    # and runs on: forced on Blinky, the run finished and the setting did nothing.
+    from lanex.controller import introspect
+    monkeypatch.setattr(introspect, "known_var_names", lambda: {"FP_CORE_UTIL", "FP_SIZING", "CLOCK_PERIOD"})
+    cf = _project(tmp_path)
+    monkeypatch.setattr(cc, "_run_probe", _Probe({
+        "ok": True, "design_name": "spm", "clock_port": "clk", "verilog_files": [str(tmp_path / "src" / "spm.v")],
+        "config_warnings": ["An unknown key 'FP_CORE_UTL' was provided.",
+                            "Key 'PL_ROUTABILITY_DRIVEN' provided is unused by the current flow."]}))
+    r = _check(tmp_path, cf)
+    assert r["blocking"] is False and r["ok"] is False
+    a, b = r["problems"][:2]
+    assert a["code"] == "unknown-key" and a["near"] == ["FP_CORE_UTIL"] and "ignored" in a["message"]
+    assert "Rename it to FP_CORE_UTIL" in a["fix"]
+    assert b["key"] == "PL_ROUTABILITY_DRIVEN" and "no step of this flow reads" in b["message"]
 
 
 def test_a_check_that_cannot_run_never_blocks(tmp_path: Path, monkeypatch):

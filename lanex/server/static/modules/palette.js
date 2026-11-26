@@ -96,6 +96,8 @@ function actions() {
     const base = contextBaseline();
     if (base) list.push(A("ctx-compare", "Compare " + run + " with " + base, "Analytics", "diff", () => tab("analytics", { section: "analytics-compare" })));
     list.push(A("ctx-gds", "Open " + run + " in Layout", "Layout", "grid", () => tab("layout")));
+    list.push(A("ctx-read", "How to read a chip (a five-step lesson on " + run + ")", "Layout", "bulb",
+      () => { tab("layout"); import("./layout.js").then((m) => m.startReadingLesson()); }));
     list.push(A("ctx-cmd", "Copy the command of " + run, "Console › Command", "command", () => copyRunCommand(run)));
     list.push(A("ctx-verify", "Sign-off checks of " + run + " (DRC, LVS)", "Verify", "check", () => tab("verify")));
   }
@@ -199,7 +201,7 @@ function recentPlaceItems() {
 async function loadData() {
   const jobs = [];
   if (!_glossary) jobs.push(fetch("/static/glossary.json", { headers: { "X-Requested-With": "XMLHttpRequest" } })
-    .then((r) => r.json()).then((g) => { _glossary = g || {}; }).catch(() => { _glossary = {}; }));
+    .then((r) => r.json()).then((g) => import("./term.js").then((t) => { _glossary = t.flatGlossary(g); })).catch(() => { _glossary = {}; }));
   if (state.designDir && _filesFor !== state.designDir) jobs.push(api.projectFiles()
     .then((r) => { _files = ((r && r.files) || []).filter((f) => !/^runs\//.test(f.rel)); _filesFor = state.designDir; }).catch(() => { _files = []; }));
   if (!(state.variables || []).length) jobs.push(api.variables().then((v) => { if (Array.isArray(v) && !(state.variables || []).length) state.variables = v; }).catch(() => {}));

@@ -301,6 +301,15 @@ export function verdictCopy(rep) {
       short: failed ? "failed" : "not checked",
       sub: (stop ? (stop.id || stop.dir) + " didn't finish. " : "") + ran + " of " + v.total + " checks ran before it stopped. The run log has the reason." };
   }
+  if (v.state === "incomplete" && (by.get("setup") || {}).no_clock) {
+    // LibreLane passed a run that timed nothing: never "clean" (LibreLane #1028).
+    const nc = by.get("setup").no_clock;
+    return { tone: "warn", title: "Timing was never checked", short: "timing not checked", no_clock: nc,
+      sub: "No clock reached the registers, so OpenSTA timed no path in any corner and \"0 violations\" means nothing. " +
+        "LibreLane passed the run because its checkers count violations and there were none to count. " +
+        (nc.clock_port ? "CLOCK_PORT is \"" + nc.clock_port + "\": set it to the clock input of the top module" : "Set CLOCK_PORT to the clock input of the top module") +
+        " and run again." };
+  }
   if (v.state === "incomplete") {
     const miss = v.missing_core.map((id) => id === "drc" ? "DRC" : ((by.get(id) || {}).name || id));
     const off = (v.skipped_core || []).map((id) => (by.get(id) || {}).name || id);

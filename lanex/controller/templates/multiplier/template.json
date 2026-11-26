@@ -1,7 +1,8 @@
 {
   "name": "multiplier",
   "title": "Registered Multiplier",
-  "description": "An N×N multiplier with registered outputs. A small datapath where synthesis trades area against timing, so it's a good one to sweep (Runs › New sweep).",
+  "description": "An N×N multiplier whose product is registered (the inputs are not), so its slowest path starts at an input pin. A small datapath where synthesis trades area against timing: a good one to sweep (Runs › New sweep).",
+  "teaches": "A datapath where synthesis trades area for speed: a good one to sweep (Runs, New sweep).",
   "top": "mult",
   "clock_port": "clk",
   "clock_period": 15.0,
@@ -9,7 +10,7 @@
     "src/mult.v"
   ],
   "testbench": "verify/mult_tb.v",
-  "order": 5,
+  "order": 11,
   "config": {
     "FP_CORE_UTIL": 40,
     "PL_TARGET_DENSITY_PCT": 55

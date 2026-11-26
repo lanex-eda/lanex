@@ -5,6 +5,7 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { openLayer, closeLayer } from "./overlay.js";
+import { mountClockField, freqText } from "./clockfield.js";
 
 let _overlay = null;
 let _templates = [];
@@ -67,25 +68,31 @@ export async function openWizard({ template = "" } = {}) {
   if (pre) renderStep2(body, pre); else renderStep1(body);
 }
 
-function tplCard(t, cls) {
+function tplCard(t, cls, n = 0) {
   return "<button class='wiz-tpl " + cls + "' data-name='" + fmt.escape(t.name) + "' title='" + fmt.escape(t.description) + "'>" +
-    "<span class='wiz-tpl-title'>" + fmt.escape(t.title) + "</span>" +
-    "<span class='wiz-tpl-desc'>" + fmt.escape(t.description) + "</span>" +
-    (t.has_testbench ? "<span class='wiz-tpl-tag'>Includes a testbench</span>" : "") +
+    "<span class='wiz-tpl-title'>" + (n ? "<span class='wiz-tpl-n'>" + String(n).padStart(2, "0") + "</span>" : "") + fmt.escape(t.title) + "</span>" +
+    "<span class='wiz-tpl-desc'>" + fmt.escape(t.teaches || t.description) + "</span>" +
+    (t.has_testbench ? "<span class='wiz-tpl-tag'>Self-checking testbench</span>" : "") +
     "</button>";
+}
+
+// The examples in the order they teach (template.json "order"): each one adds
+// one idea to the one before. Pure (tested).
+export function ladder(templates) {
+  return (templates || []).filter((t) => t.kind !== "blank").slice().sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || String(a.name).localeCompare(b.name));
 }
 
 function renderStep1(body) {
   // A new project usually starts blank; the examples are there to learn from
   // or to try the flow on something that is known to work.
   const blank = _templates.filter((t) => t.kind === "blank");
-  const examples = _templates.filter((t) => t.kind !== "blank");
+  const examples = ladder(_templates);
   body.innerHTML = steps(1) +
     blank.map((t) => tplCard(t, "wiz-tpl-blank")).join("") +
     (examples.length
-      ? "<div class='wiz-lane'><span class='lane-label'>Or start from an example</span>" +
-        "<span class='wiz-lane-note'>Working designs with a testbench. Good for a first run.</span></div>" +
-        "<div class='wiz-templates'>" + examples.map((t) => tplCard(t, "")).join("") + "</div>"
+      ? "<div class='wiz-lane'><span class='lane-label'>Or learn from an example</span>" +
+        "<span class='wiz-lane-note'>Working designs in the order they teach: each runs clean to a GDS on sky130, and each bench prints PASS.</span></div>" +
+        "<div class='wiz-templates'>" + examples.map((t, i) => tplCard(t, "", i + 1)).join("") + "</div>"
       : "");
   body.querySelectorAll(".wiz-tpl").forEach((b) =>
     b.addEventListener("click", () => {
@@ -232,8 +239,8 @@ function renderStep2(body, tpl) {
     "<option value='verilog'>Verilog .v</option>" +
     "<option value='systemverilog'>SystemVerilog .sv</option></select></span>" +
     "<span class='wiz-help' id='wiz-top-help'></span></div>" +
-    "<label class='wiz-field'><span>Clock period</span>" +
-    "<span class='wiz-unit' data-unit='ns'><input id='wiz-clk' type='number' min='0.1' step='0.1' value='" + fmt.escape(clk) + "' /></span>" +
+    "<label class='wiz-field'><span>Clock</span>" +
+    "<span class='wiz-unit wiz-clock'><input id='wiz-clk' type='text' value='" + fmt.escape(clk) + "' /><em>ns</em></span>" +
     "<span class='wiz-help' id='wiz-clk-help'></span></label>" +
     "<label class='wiz-field'><span>PDK</span><select id='wiz-pdk'>" + (pdkOpts || "<option value=''>No PDK installed</option>") + "</select>" +
     "<span class='wiz-help' id='wiz-pdk-help'></span></label>" +
@@ -243,6 +250,7 @@ function renderStep2(body, tpl) {
       ? "<label class='nf-use span-2'><input type='checkbox' id='wiz-tb' checked/> <span>Write a testbench too, in <code>verify/</code>, " +
         "wired to the top module's ports, so you can simulate before the first run.</span></label>"
       : "") +
+    "<div class='wiz-fp' id='wiz-fp' hidden></div>" +
     "</div>" +
     "<div class='wiz-actions'>" +
     "<button class='btn btn-ghost' id='wiz-back'>Back</button>" +
@@ -254,6 +262,16 @@ function renderStep2(body, tpl) {
   const $ = (id) => body.querySelector("#" + id);
   const pdkSel = $("wiz-pdk");
   pdkSel.value = startPdk;
+  // The clock helper (clockfield.js): a period or a frequency, ns stored.
+  const clkHelp = document.createElement("span");
+  clkHelp.className = "wiz-clk-other";
+  clkHelp.id = "wiz-clk-other";
+  if ($("wiz-clk")) {
+    const box = $("wiz-clk").parentElement;
+    mountClockField($("wiz-clk"), { unitEl: box.querySelector("em"), otherEl: clkHelp,
+      onInput: () => { clkTyped = true; paintClk(); } }).set(clk);
+    box.appendChild(clkHelp);      // [period][ns] = 100 MHz
+  }
   // The clock follows the PDK (gf180's cells are slower) until it's typed in.
   let clkTyped = false;
   const paintScl = () => {
@@ -269,7 +287,24 @@ function renderStep2(body, tpl) {
       : p.ready === false
         ? p.name + " isn't installed: its folder has no standard-cell libraries. Install it in Tools, or pick another PDK."
         : "The foundry process to build for. sky130A is the usual first choice.";
-    if (!clkTyped && $("wiz-clk")) { $("wiz-clk").value = clockFor(tpl, pdkSel.value); paintClk(); }
+    if (!clkTyped && $("wiz-clk")) { $("wiz-clk")._clock.set(clockFor(tpl, pdkSel.value)); paintClk(); }
+    paintFp();
+  };
+  // A template with a fixed die draws its floorplan here (fppreview.js);
+  // one sized from the design says the size comes with the first run.
+  const paintFp = async () => {
+    const el = $("wiz-fp");
+    if (!el) return;
+    const size = tpl.size || {};
+    if (size.FP_SIZING !== "absolute" || !size.DIE_AREA) { el.hidden = true; return; }
+    try {
+      const fp = await import("./fppreview.js");
+      const k = await fp.estimateInputs({ pdk: pdkSel.value, scl: $("wiz-scl").value, project: false });
+      if (!el.isConnected) return;
+      const margins = { ...(k.margins || {}) };
+      for (const m of ["LEFT_MARGIN_MULT", "RIGHT_MARGIN_MULT", "TOP_MARGIN_MULT", "BOTTOM_MARGIN_MULT"]) if (size[m] != null) margins[m] = size[m];
+      fp.mountFloorplan(el, { values: size, inputs: { ...k, margins }, compact: true });
+    } catch (_e) { el.hidden = true; }
   };
   pdkSel.addEventListener("change", paintScl);
 
@@ -303,8 +338,10 @@ function renderStep2(body, tpl) {
   });
   const paintClk = () => {
     if (!$("wiz-clk")) return;
-    const f = mhz($("wiz-clk").value);
-    $("wiz-clk-help").textContent = f ? "Target speed: " + f + ". A smaller period is a faster chip and harder to meet." : "Enter a period in nanoseconds.";
+    const ns = $("wiz-clk")._clock ? $("wiz-clk")._clock.get() : parseFloat($("wiz-clk").value);
+    const f = ns > 0 ? freqText(ns) : "";
+    $("wiz-clk-help").textContent = f ? "A period in ns or a frequency such as 100 MHz. A shorter period is a faster chip and harder to meet."
+      : "A positive number of ns, such as 10 (100 MHz), or a frequency such as 100 MHz.";
   };
   const paintTop = () => {
     const h = $("wiz-top-help");
@@ -333,7 +370,7 @@ function renderStep2(body, tpl) {
   paintScl();
   readParent();
   $("wiz-name").addEventListener("input", () => { nameTyped = true; $("wiz-err").textContent = ""; paintWhere(); });
-  $("wiz-clk")?.addEventListener("input", () => { clkTyped = true; paintClk(); });
+  $("wiz-scl")?.addEventListener("change", paintFp);
   $("wiz-change").addEventListener("click", async () => {
     const { pickFolder } = await import("./fs.js");
     const dir = await pickFolder({ title: "Where should the project folder go?", use: "Put it here", seed: projectsDir() });
@@ -375,7 +412,9 @@ async function doCreate(body, tpl) {
   const pdk = $("wiz-pdk").value || "";
   const scl = $("wiz-scl").value || "";
   const clkRaw = $("wiz-clk") ? $("wiz-clk").value.trim() : "";
-  const clk = clkRaw === "" ? NaN : Number(clkRaw);
+  // The clock helper reads "100 MHz" as 10 ns; the server gets ns.
+  const clkNs = $("wiz-clk") && $("wiz-clk")._clock ? $("wiz-clk")._clock.get() : NaN;
+  const clk = clkRaw === "" ? NaN : (clkNs > 0 ? clkNs : NaN);
   const sv = $("wiz-lang") && $("wiz-lang").value === "systemverilog";
   const withTb = !!($("wiz-tb") && $("wiz-tb").checked);
   // Settings that can't build are refused here, in plain words, before any
