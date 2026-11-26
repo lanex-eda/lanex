@@ -23,7 +23,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
-import { openLayer, closeLayer } from "./overlay.js";
+import { openLayer, closeLayer, wireMenu } from "./overlay.js";
 import { icon } from "./icons.js";
 import * as ctx from "./context.js";
 import { mountRunBar } from "./runbar.js";
@@ -39,6 +39,9 @@ import { NET_COLORS, POWER_COLORS, CLOCK_COLOR, PATH_COLOR, cleanName, normalise
   placePoints, drawNets, drawPath, drawClock, flattenMarkers, stepMarker } from "./layoutoverlays.js";
 import { startCoach } from "./coach.js";
 import { getPref, setPref as setAppPref } from "./prefs.js";
+import * as MF from "./metricfmt.js";
+import { showEmpty, setRunBarActions } from "./empty.js";
+import { cornerWords } from "./cornergrid.js";
 
 const BG = { dark: "#06080d", light: "#ffffff" };
 // The census uses the Cells tab's categories (one taxonomy: the server's
@@ -200,9 +203,13 @@ async function loadRuns() {
   if (!runs.length && ctx.runsLoadFailed()) return;
   const tag = ctx.contextRun();
   const empty = !runs.length || !tag;
-  $("lx-empty").hidden = !empty;
+  if (empty) showEmpty($("lx-empty"), state.designDir ? "noRuns" : "noProject", { icon: "grid", body: {
+    noRuns: "Run the flow once and your chip shows up here: the floorplan, the placed cells, the clock tree, the routed wires and the final GDS, layer by layer.",
+    noProject: "Layout shows the chip of the project you have open, layer by layer: the floorplan, the placed cells, the clock tree, the routed wires and the final GDS." } });
+  else $("lx-empty").hidden = true;
   $("lx-page").hidden = empty;
-  for (const id of ["lx-openin", "lx-save", "lx-cmd"]) { const el = $(id); if (el) el.closest(".lx-split").hidden = empty; }
+  // The run-bar actions (3D view, Open in, Save image, Command) act on a run: off while there is none.
+  setRunBarActions(document.querySelector("#sec-layout .an-runbar"), !empty);
   if (empty) {
     S.tag = ""; S.design = "";
     setRunFilesTag("");
@@ -1018,8 +1025,8 @@ function renderCells(filter) {
   }).join("");
   const keepQ = host.querySelector("#lx-cell-q")?.value || "";
   host.innerHTML =
-    "<div class='lx-census'><div class='lx-census-n'><b>" + total.toLocaleString() + "</b> cells placed" +
-    (logic !== total ? "<span class='muted'> · " + logic.toLocaleString() + " doing logic</span>" : "") + "</div>" +
+    "<div class='lx-census'><div class='lx-census-n'><b>" + MF.num(total) + "</b> cells placed" +
+    (logic !== total ? "<span class='muted'> · " + MF.num(logic) + " doing logic</span>" : "") + "</div>" +
     "<div class='lx-census-bar'>" + bar + "</div></div>" +
     "<div class='lx-find'><input type='search' id='lx-cell-q' placeholder='Filter cells' value='" + esc(keepQ) + "' aria-label='Filter cells' spellcheck='false'/></div>" +
     (S.hl ? "<div class='lx-hl'><span>Highlighting <b>" + S.hl.total + "</b> × " + esc(shortCell(S.hl.cell)) + "</span><button class='btn btn-ghost btn-sm' data-hl-clear>Clear</button></div>" : "") +
@@ -1029,7 +1036,7 @@ function renderCells(filter) {
       const n = list.reduce((a, c) => a + c.count, 0);
       const hint = k === "other" ? "Cells this library doesn't sort, and macros." : CATEGORY_TIPS[k] || "";
       return "<details class='lx-kind'" + (q || k !== "physical" ? " open" : "") + "><summary><i style='background:" + KINDS[k].color + "'></i>" +
-        "<b>" + esc(label(k)) + "</b><span class='lx-n'>" + n.toLocaleString() + "</span></summary>" +
+        "<b>" + esc(label(k)) + "</b><span class='lx-n'>" + MF.num(n) + "</span></summary>" +
         (hint ? "<p class='lx-kind-hint'>" + esc(hint) + "</p>" : "") +
         list.map((c) => "<button class='lx-cell" + (S.hl && S.hl.cell === c.name ? " is-on" : "") + "' data-cell='" + esc(c.name) + "' title='" +
           esc(c.name + (words(c) ? " — " + words(c) : "") + ". " + c.w + " × " + c.h + " µm. Click to highlight every one.") + "'>" +
@@ -1229,7 +1236,7 @@ async function addNet(name, { zoom = false, color = null, preset = false, quiet 
     S.nets = S.nets.filter((n) => n !== entry);
   }
   renderFind();
-  if (g.found && g.truncated && !quiet) toast.show(name + " has " + g.total.toLocaleString() + " shapes; the first " + g.boxes.length.toLocaleString() + " are drawn.", "info");
+  if (g.found && g.truncated && !quiet) toast.show(name + " has " + MF.num(g.total) + " shapes; the first " + MF.num(g.boxes.length) + " are drawn.", "info");
   if (zoom && g.found) zoomToNet(name);
   paintKey();
   S.canvas && S.canvas.paintOverlay();
@@ -1349,7 +1356,7 @@ function renderChecks() {
     srcs.map((s, si) => {
       if (s.ok === false) return "";
       if (!s.total) return "<div class='lx-mk-src is-clean'><span class='vf-mark is-" + (s.disagree ? "warn" : "pass") + "'></span><b>" + esc(s.label) + "</b><span class='lx-n'>0</span></div>" + disagree(s);
-      const capped = s.truncated ? "<p class='lx-kind-hint lx-pad lx-disagree'>Showing the first " + (s.items || []).length.toLocaleString() + " of " + s.total.toLocaleString() +
+      const capped = s.truncated ? "<p class='lx-kind-hint lx-pad lx-disagree'>Showing the first " + MF.num((s.items || []).length) + " of " + MF.num(s.total) +
         " markers. The report file has them all; KLayout's marker browser opens it.</p>" : "";
       return "<div class='lx-mk-src'><label class='lx-check'><input type='checkbox' data-mk-src='" + si + "'" + (s.hidden ? "" : " checked") + "/>" +
         "<span class='vf-mark is-" + (s.disagree ? "warn" : "fail") + "'></span><b>" + esc(s.label) + "</b></label><span class='lx-n'>" + s.total + "</span></div>" + disagree(s) + capped +
@@ -1363,8 +1370,8 @@ function renderChecks() {
             items.slice(0, shown).map((it, ii) => "<button class='lx-res" + (it === S.activeMarker ? " is-on" : "") + (S.visited.has(it) ? " is-seen" : "") +
               "' data-mk='" + si + ":" + (s.items.indexOf(it)) + "'><span class='lx-res-t'>#" + (ii + 1) +
               "</span><span class='lx-res-s'>at " + it.bbox[0].toFixed(2) + ", " + it.bbox[1].toFixed(2) + " µm</span></button>").join("") +
-            (left > 0 ? "<button class='btn btn-ghost btn-sm lx-mk-more' data-mk-more='" + esc(k) + "'>Show " + Math.min(PAGE, left) + " more <span class='muted'>(" + left.toLocaleString() + " left)</span></button>" : "") +
-            (items.length < c.count ? "<p class='muted lx-pad'>" + (c.count - items.length).toLocaleString() + " more of this kind are past the first " + (s.cap || 4000).toLocaleString() + " read; they are in the report file.</p>" : "") +
+            (left > 0 ? "<button class='btn btn-ghost btn-sm lx-mk-more' data-mk-more='" + esc(k) + "'>Show " + Math.min(PAGE, left) + " more <span class='muted'>(" + MF.num(left) + " left)</span></button>" : "") +
+            (items.length < c.count ? "<p class='muted lx-pad'>" + MF.num(c.count - items.length) + " more of this kind are past the first " + MF.num(s.cap || 4000) + " read; they are in the report file.</p>" : "") +
             "</details>";
         }).join("") +
         "<p class='lx-pad'><a class='btn btn-ghost btn-sm' href='" + api.runFileUrl(S.tag, s.path) + "' download>" + esc(s.path.split("/").pop()) + "</a></p>";
@@ -1434,7 +1441,7 @@ function paintStepper() {
   const m = list[i];
   el.innerHTML = "<button class='lx-tb' data-step='-1' title='Previous marker (P)' aria-label='Previous marker'>" +
     "<svg viewBox='0 0 24 24' width='16' height='16' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M15 6l-6 6 6 6'/></svg></button>" +
-    "<span class='lx-stepper-t'><b>Marker " + (i + 1).toLocaleString() + " of " + list.length.toLocaleString() + "</b><span>" + esc(m.label) + " · <code>" + esc(m.cat) + "</code></span></span>" +
+    "<span class='lx-stepper-t'><b>Marker " + MF.num(i + 1) + " of " + MF.num(list.length) + "</b><span>" + esc(m.label) + " · <code>" + esc(m.cat) + "</code></span></span>" +
     "<button class='lx-tb' data-step='1' title='Next marker (N)' aria-label='Next marker'>" +
     "<svg viewBox='0 0 24 24' width='16' height='16' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M9 6l6 6-6 6'/></svg></button>" +
     "<button class='lx-tb lx-stepper-x' data-step='x' title='Stop stepping (Esc)' aria-label='Stop stepping through markers'>×</button>";
@@ -1607,7 +1614,7 @@ function paintKey() {
   const hc = el.querySelector("canvas.lx-heat-hist");
   if (hc) {
     const m = heatMap();
-    if (m) paintHistogram(hc, histogram(m.v, 48, 0, scaleTop(m)), rampName(), light);
+    if (m) paintHistogram(hc, histogram(m.v, 48, 0, scaleTop(m)), rampName(), light, { lo: 0, hi: scaleTop(m), unit: m.unit || "", what: "tiles" });
   }
 }
 
@@ -1686,9 +1693,9 @@ function fillOvlMenu() {
   if (!menu) return;
   const item = (k) => {
     const meta = OVL[k], why = ovlReason(k);
-    return "<button role='menuitemradio' aria-checked='" + (S.ovl === k) + "' data-ovl-pick='" + k + "'" + (why ? " disabled" : "") + ">" +
-      "<span class='lx-ovl-mi'><i class='lx-ovl-dot" + (S.ovl === k ? " is-on" : "") + "'></i>" + esc(meta.label) + "</span>" +
-      "<span>" + esc(why || meta.unit) + "</span></button>";
+    // A radio item with the square via (the Run menu's mode picker), not a round dot.
+    return "<button class='menu-item menu-radio' role='menuitemradio' aria-checked='" + (S.ovl === k) + "' data-ovl-pick='" + k + "'" + (why ? " disabled" : "") + ">" +
+      "<span class='radio' aria-hidden='true'></span><span class='mi-text'><b>" + esc(meta.label) + "</b><small>" + esc(why || meta.unit) + "</small></span></button>";
   };
   const an = S.an && S.an.key === anKey() ? S.an : null;
   const foot = !an || an.state === "none" ? "Measured by OpenROAD the first time you pick one (about a second), then kept with the run."
@@ -1696,8 +1703,8 @@ function fillOvlMenu() {
     : an.state === "running" ? "Measuring with OpenROAD…" : an.state === "failed" ? "The last measurement failed; pick one to try again." : "";
   menu.innerHTML = "<div class='lx-menu-h'>Overlays <span>from OpenROAD</span></div>" +
     ["Routing", "Placement", "RUDY", "clock", "paths"].map(item).join("") +
-    (S.ovl ? "<button role='menuitem' data-ovl-pick=''><span class='lx-ovl-mi'>Hide the overlay</span><span>V shows it again</span></button>" : "") +
-    "<p class='lx-menu-foot'>" + esc(foot) + "</p>";
+    (S.ovl ? "<div class='menu-sep'></div>" + menuItemHtml({ ic: "eye", title: "Hide the overlay", sub: "V shows it again", attrs: "data-ovl-pick=''" }) : "") +
+    "<p class='menu-note'>" + esc(foot) + "</p>";
 }
 
 function paintOvlButton() {
@@ -1856,7 +1863,9 @@ function ovlSectionHtml() {
     "<p class='lx-key-p'>" + esc(meta.unit) + (m.xs && m.xs.length > 1 ? ", " + fmtNum(m.xs[1] - m.xs[0], 2) + " µm tiles" : "") + ".</p>" +
     (layers.length ? "<label class='lx-key-sel'><span>Layer</span><select id='lx-heat-layer'><option value=''>All layers</option>" +
       layers.map((l) => "<option value='" + esc(l) + "'" + (l === S.ovlLayer ? " selected" : "") + ">" + esc(l) + "</option>").join("") + "</select></label>" : "") +
-    "<div class='lx-key-scale'><canvas class='lx-heat-hist' width='480' height='36' aria-hidden='true'></canvas>" +
+    // The histogram says what it counts and in which unit; a bar's hover gives its range and count.
+    "<div class='lx-key-scale'><span class='lx-hist-cap'>Tiles by value" + (m.unit ? " (" + esc(m.unit) + ")" : "") + " · point at a bar for its count</span>" +
+    "<canvas class='lx-heat-hist' width='480' height='36' aria-hidden='true'></canvas>" +
     "<div class='lx-ramp' style='background:" + rampGradient(rampName(), light) + "'></div>" +
     "<div class='lx-ramp-t'><span>0</span><span>" + fmtNum(top / 2) + "</span><span>" + fmtNum(top) + " " + esc(m.unit || "") + "</span></div></div>" +
     (m.unit === "%" ? "<p class='lx-key-over'><i class='lx-hatch' style='background-color:" + rampCss(rampName(), 1, light) + "'></i>" + esc(overWords) + "</p>" : "") +
@@ -1904,14 +1913,15 @@ function renderFocus() {
 
 function slackWord(s) {
   if (s == null) return "";
-  return "<span class='lx-slack " + (s < 0 ? "is-neg" : "is-pos") + "'>" + (s >= 0 ? "+" : "") + s.toFixed(3) + " ns</span>";
+  return "<span class='lx-slack " + (s < 0 ? "is-neg" : "is-pos") + "'>" + MF.slack(s) + " ns</span>";
 }
 
 // Which corner and constraints the stage's path list was timed with: one
 // corner only (sign-off times them all; Verify shows each).
 function pathsCornerNote(d) {
   const t = (d && d.timing) || {};
-  const corner = t.corner ? "<code>" + esc(t.corner) + "</code>" : "the default corner";
+  // A corner in words (cornergrid.js), with LibreLane's name beside it.
+  const corner = t.corner ? esc(cornerWords(t.corner) || t.corner) + " (<code>" + esc(t.corner) + "</code>)" : "the default corner";
   const all = t.corners > 1 ? " Sign-off times " + t.corners + " corners; Verify's Timing shows every one and the worst." : "";
   if (stageId() === "final") {
     return "<p class='muted lx-focus-l'>Timed in one corner, " + corner + ", with " +
@@ -1933,8 +1943,9 @@ function pathFocusHtml() {
     const timed = placed.some((q) => q.arrival != null);
     const miss = (p.missing && p.missing.insts) || [];
     html += "<div class='lx-focus-h'><span class='lx-focus-k'>" + esc(p.kind === "cells" ? "Cells" : p.delay_type === "min" ? "Hold path" : "Setup path") +
-      (p.corner ? " · " + esc(p.corner) : "") + "</span><button class='btn btn-ghost btn-sm' data-path-clear>Clear</button></div>" +
+      "</span><button class='btn btn-ghost btn-sm' data-path-clear>Clear</button></div>" +
       "<p class='lx-focus-t'><b>" + esc(p.startpoint || "?") + "</b> → <b>" + esc(p.endpoint || "?") + "</b></p>" +
+      (p.corner ? "<p class='muted lx-focus-l'>" + esc(cornerWords(p.corner) || p.corner) + " <code>" + esc(p.corner) + "</code></p>" : "") +
       (p.slack != null ? "<p class='lx-focus-s'>Slack " + slackWord(p.slack) + " <span class='muted'>" + (p.slack >= 0 ? "meets timing" : "fails timing") + "</span></p>" : "") +
       (p.from === "link" && p.label ? "<p class='muted lx-focus-l'>" + esc(p.label) + "</p>" : "") +
       ((p.clockInsts || []).length || (p.clockNets || []).length
@@ -1997,26 +2008,23 @@ async function paintClockChart() {
   if (!arr.length) { el.innerHTML = "<p class='muted'>No arrival times (the stage has no constraints).</p>"; return; }
   if (typeof window.echarts === "undefined") await import("./loading.js").then((m) => m.loadECharts()).catch(() => null);
   if (typeof window.echarts === "undefined" || !el.isConnected) { el.innerHTML = "<p class='muted'>The chart needs ECharts.</p>"; return; }
-  const { chartTheme, chartInk } = await import("./theme-echarts.js");
+  // The one histogram (barchart.js histogramOption, Verify's slack chart): a
+  // value axis with its unit, hover per bin, in the clock tree's colour.
+  const { followTheme } = await import("./theme-echarts.js");
+  const { histogramOption } = await import("./barchart.js");
   const lo = Math.min(...arr), hi = Math.max(...arr);
   const n = Math.max(1, Math.min(24, Math.round(Math.sqrt(arr.length) * 2)));
   const w = Math.max((hi - lo) / n, 0.001);
   const counts = new Array(n).fill(0);
   for (const a of arr) counts[Math.min(n - 1, Math.floor((a - lo) / w))] += 1;
-  const k = chartInk();
-  const chart = window.echarts.getInstanceByDom(el) || window.echarts.init(el, null, { renderer: "canvas" });
-  chart.setOption({
-    ...chartTheme(),
-    animation: false,
-    grid: { left: 36, right: 10, top: 10, bottom: 34 },
-    tooltip: { ...chartTheme().tooltip, trigger: "axis", axisPointer: { type: "shadow" },
-      formatter: (ps) => { const i = ps[0].dataIndex; return (lo + i * w).toFixed(3) + "–" + (lo + (i + 1) * w).toFixed(3) + " ns: <b>" + counts[i] + "</b> flip-flops"; } },
-    xAxis: { type: "category", data: counts.map((_c, i) => (lo + (i + 0.5) * w).toFixed(3)), name: "clock arrival (ns)", nameLocation: "middle", nameGap: 22,
-      axisLabel: { color: k.text, fontSize: 10.5, interval: Math.max(0, Math.floor(n / 4) - 1) }, axisTick: { show: false } },
-    yAxis: { type: "value", minInterval: 1, name: "flip-flops", nameTextStyle: { color: k.text, fontSize: 10.5 }, axisLabel: { color: k.text, fontSize: 10.5 },
-      splitLine: { lineStyle: { color: k.grid } } },
-    series: [{ type: "bar", data: counts, barCategoryGap: "12%", itemStyle: { color: CLOCK_COLOR } }],
-  }, true);
+  const edges = Array.from({ length: n + 1 }, (_c, i) => lo + i * w);
+  const opt = histogramOption({ edges, counts, unit: "ns", what: "flip-flops", xname: "clock arrival", color: CLOCK_COLOR });
+  if (!opt) return;
+  opt.animation = false;
+  opt.grid = { left: 4, right: 12, top: 26, bottom: 24, containLabel: true };
+  let chart = window.echarts.getInstanceByDom(el);
+  if (!chart) { chart = window.echarts.init(el, null, { renderer: "canvas" }); followTheme(chart, () => paintClockChart()); }
+  chart.setOption(opt, true);
   chart.resize();
 }
 
@@ -2477,10 +2485,11 @@ function paintOpenMain() {
   const main = $("lx-open-main");
   if (main && S.info) main.title = "Open " + openWhat(t.key) + " in " + t.name;
   const menu = $("lx-open-menu");
+  const ICON = { klayout: "layers", openroad: "cpu", magic: "beaker", gds3d: "cube" };
   if (menu) menu.innerHTML = DESK.map((d) => {
     const r = (_routes || {})[d.key] || { where: "install" };
-    return "<button role='menuitem' data-open='" + d.key + "'>" + d.name + "<span>" + d.for +
-      (r.where === "install" ? " · not installed" : r.where === "nodisplay" ? " · no display" : " · opens " + esc(openWhat(d.key))) + "</span></button>";
+    return menuItemHtml({ ic: ICON[d.key] || "popout", title: d.name, attrs: "data-open='" + d.key + "'",
+      sub: d.for + (r.where === "install" ? " · not installed" : r.where === "nodisplay" ? " · no display" : " · opens " + openWhat(d.key)) });
   }).join("");
 }
 
@@ -2526,22 +2535,14 @@ async function openTool(tool) {
 }
 
 // ------------------------------------------------------------------ menus
-function wireMenu(btnId, menuId, onPick, onOpen) {
-  const btn = $(btnId), menu = $(menuId);
-  if (!btn || !menu) return;
-  // A menu on the overlay stack (overlay.js): Esc, arrows, an outside press
-  // and focus return are the same as every menu in the app.
-  const hide = () => { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); };
-  btn.setAttribute("aria-expanded", "false");
-  btn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    if (!menu.hidden) { closeLayer(menu); return; }
-    if (onOpen) await onOpen(menu);
-    menu.hidden = false;
-    openLayer(menu, { kind: "menu", owner: btn, onClose: hide });
-  });
-  menu.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { closeLayer(menu); onPick(b); } });
+// Layout's menus are the app's (overlay.js wireMenu, the .menu look of
+// Verify's Export): an icon, a bold line and a muted line per item.
+function lxMenu(btnId, menuId, onPick, onOpen) {
+  wireMenu($(btnId), $(menuId), { onPick, onOpen: onOpen ? (m) => onOpen(m) : null });
 }
+const menuItemHtml = ({ ic = "", title, sub = "", attrs = "", code = "" }) =>
+  "<button class='menu-item' role='menuitem' " + attrs + ">" + (ic ? icon(ic, { size: 16 }) : "") +
+  "<span class='mi-text'><b>" + esc(title) + "</b>" + (sub ? "<small>" + esc(sub) + "</small>" : "") + (code ? "<code class='lx-mi-code'>" + esc(code) + "</code>" : "") + "</span></button>";
 
 async function fillCommands(menu) {
   if (!S.commands && S.tag) {
@@ -2554,8 +2555,8 @@ async function fillCommands(menu) {
     ["klayout", "KLayout directly", "The final GDS with the PDK's technology and layer colours"],
   ].filter(([k]) => c[k]);
   menu.innerHTML = rows.length
-    ? rows.map(([k, t, s]) => "<button role='menuitem' data-copy='" + esc(c[k]) + "'>" + esc(t) + "<span>" + esc(s) + "</span><code>" + esc(c[k]) + "</code></button>").join("")
-    : "<p class='muted lx-pad'>No commands for this run.</p>";
+    ? rows.map(([k, t, s]) => menuItemHtml({ ic: "command", title: t, sub: s, code: c[k], attrs: "data-copy='" + esc(c[k]) + "'" })).join("")
+    : "<p class='menu-note'>No commands for this run.</p>";
 }
 
 async function copy(text) { return copyText(text, "Command copied"); }
@@ -2747,7 +2748,7 @@ function wireOnce() {
     if (b.dataset.step === "x") clearSelection();
     else stepMarkers(+b.dataset.step);
   });
-  wireMenu("lx-ovl", "lx-ovl-menu", (b) => { if (b.matches("[data-ovl-pick]") && !b.disabled) pickOverlay(b.dataset.ovlPick); }, () => fillOvlMenu());
+  lxMenu("lx-ovl", "lx-ovl-menu", (b) => { if (b.matches("[data-ovl-pick]") && !b.disabled) pickOverlay(b.dataset.ovlPick); }, () => fillOvlMenu());
   document.addEventListener("g:pref", (e) => {
     const id = e.detail && e.detail.id;
     if (id === "layoutRamp") { S.heat = null; paintKey(); S.canvas && S.canvas.paintOverlay(); }
@@ -2766,9 +2767,9 @@ function wireOnce() {
   // desktop viewers
   $("lx-desk").addEventListener("click", (e) => { const b = e.target.closest("[data-desk]"); if (b) openTool(b.dataset.desk); });
   $("lx-open-main").addEventListener("click", () => openTool(pref("tool", "klayout")));
-  wireMenu("lx-open-pick", "lx-open-menu", (b) => openTool(b.dataset.open), () => paintOpenMain());
-  wireMenu("lx-save", "lx-save-menu", (b) => saveImage(b.dataset.save));
-  wireMenu("lx-cmd", "lx-cmd-menu", (b) => { if (b.dataset.copy) copy(b.dataset.copy); }, fillCommands);
+  lxMenu("lx-open-pick", "lx-open-menu", (b) => openTool(b.dataset.open), () => paintOpenMain());
+  lxMenu("lx-save", "lx-save-menu", (b) => saveImage(b.dataset.save));
+  lxMenu("lx-cmd", "lx-cmd-menu", (b) => { if (b.dataset.copy) copy(b.dataset.copy); }, fillCommands);
   document.addEventListener("fullscreenchange", () => $("lx-ws").classList.toggle("is-full", document.fullscreenElement === $("lx-ws")));
 }
 

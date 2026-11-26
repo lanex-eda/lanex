@@ -130,6 +130,8 @@ function onKey(e) {
     // A field with its own use for Esc (the editor's find box, a search with
     // text in it) may have taken it already.
     if (e.defaultPrevented) return;
+    const tg = e.target;
+    if (tg && tg.matches && tg.matches("input[type=search]") && tg.value) return;   // Esc clears it first
     e.preventDefault();
     e.stopPropagation();
     remove(t, "esc");
@@ -196,20 +198,22 @@ if (typeof document !== "undefined") setupOverlays();
 
 // ---------------------------------------------------------------- a menu on a button
 // The usual case: a button that opens a .menu beside it.
-//   wireMenu(button, menu, { onOpen })
-// A press on an item closes the menu, unless the item keeps it open
-// (data-keep, a tick box, a field).
-export function wireMenu(btn, menu, { onOpen = null } = {}) {
+//   wireMenu(button, menu, { onOpen, onPick })
+// `onOpen(menu)` may fill it first (it may return a promise); `onPick(item)`
+// runs after a press on an item has closed the menu. A press on an item
+// closes the menu, unless the item keeps it open (data-keep, a tick box, a field).
+export function wireMenu(btn, menu, { onOpen = null, onPick = null } = {}) {
   if (!btn || !menu || btn._menuWired) return;
   btn._menuWired = true;
   if (!btn.hasAttribute("aria-haspopup")) btn.setAttribute("aria-haspopup", "menu");
   btn.setAttribute("aria-expanded", "false");
   const hide = () => { menu.hidden = true; };
-  btn.addEventListener("click", (e) => {
+  btn.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (isLayerOpen(menu)) { closeLayer(menu); return; }
     menu.hidden = false;
-    if (onOpen) onOpen();
+    if (onOpen) { const r = onOpen(menu); if (r && typeof r.then === "function") await r; }
+    if (menu.hidden) return;   // closed while it filled
     openLayer(menu, { kind: "menu", owner: btn, onClose: hide });
   });
   menu.addEventListener("click", (e) => {
@@ -217,5 +221,6 @@ export function wireMenu(btn, menu, { onOpen = null } = {}) {
     if (!item || item.disabled) return;
     if (item.matches("[data-keep], .menu-check") || item.closest("[data-keep]")) return;
     closeLayer(menu, "api");
+    if (onPick) onPick(item);
   });
 }

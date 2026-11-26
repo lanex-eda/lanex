@@ -64,6 +64,9 @@
   <link rel="modulepreload" href="/static/modules/reportcard.js" />
   <link rel="modulepreload" href="/static/modules/verify-model.js" />
   <link rel="modulepreload" href="/static/modules/problems.js" />
+  <link rel="modulepreload" href="/static/modules/verdict.js" />
+  <link rel="modulepreload" href="/static/modules/metricfmt.js" />
+  <link rel="modulepreload" href="/static/modules/intlcache.js" />
   <link rel="modulepreload" href="/static/modules/logs.js" />
   <link rel="modulepreload" href="/static/modules/loading.js" />
   <link rel="modulepreload" href="/static/modules/wizard.js" />
@@ -948,19 +951,19 @@
         <div class="lx-split" id="lx-openin">
           <button class="btn btn-primary btn-sm lx-split-main" id="lx-open-main" title="Open this run in a desktop viewer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M10 5H5v14h14v-5"/></svg> <span id="lx-open-label">Open in KLayout</span></button>
           <button class="btn btn-primary btn-sm lx-split-pick" id="lx-open-pick" aria-haspopup="menu" aria-expanded="false" aria-label="Choose a desktop viewer"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
-          <div class="lx-menu" id="lx-open-menu" role="menu" hidden></div>
+          <div class="menu lx-menu" id="lx-open-menu" role="menu" aria-label="Open in a desktop viewer" hidden></div>
         </div>
         <div class="lx-split">
           <button class="btn btn-ghost btn-sm" id="lx-save" aria-haspopup="menu" aria-expanded="false" title="Save a picture of the layout"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> Save image</button>
-          <div class="lx-menu" id="lx-save-menu" role="menu" hidden>
-            <button role="menuitem" data-save="view">This view<span>PNG at screen resolution</span></button>
-            <button role="menuitem" data-save="chip4k">Whole chip, 4K<span>3840 px, smoothed: good for slides and posts</span></button>
-            <button role="menuitem" data-save="chip8k">Whole chip, 8K<span>7680 px, for printing</span></button>
+          <div class="menu lx-menu" id="lx-save-menu" role="menu" aria-label="Save image" hidden>
+            <button class="menu-item" role="menuitem" data-save="view"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v14H3zM8 10h.01M21 15l-5-5-8 9"/></svg><span class="mi-text"><b>This view</b><small>PNG at screen resolution</small></span></button>
+            <button class="menu-item" role="menuitem" data-save="chip4k"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg><span class="mi-text"><b>Whole chip, 4K</b><small>3840 px, smoothed: good for slides and posts</small></span></button>
+            <button class="menu-item" role="menuitem" data-save="chip8k"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg><span class="mi-text"><b>Whole chip, 8K</b><small>7680 px, for printing</small></span></button>
           </div>
         </div>
         <div class="lx-split">
           <button class="btn btn-ghost btn-sm" id="lx-cmd" aria-haspopup="menu" aria-expanded="false" title="The terminal commands that open this run, as in a plain LibreLane workflow"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg> Command</button>
-          <div class="lx-menu lx-menu-wide" id="lx-cmd-menu" role="menu" hidden></div>
+          <div class="menu lx-menu lx-menu-wide" id="lx-cmd-menu" role="menu" aria-label="Viewer commands" hidden></div>
         </div>
       </div>
 
@@ -1016,7 +1019,7 @@
               <span class="lx-tb-sep"></span>
               <span class="lx-ovl-wrap">
                 <button class="lx-tb lx-tb-wide" id="lx-ovl" aria-haspopup="menu" aria-expanded="false" aria-pressed="false" title="Overlays measured by OpenROAD: routing congestion, cell density, the clock tree, timing paths (V shows or hides the last one)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 12.5l9 5 9-5"/><path d="M3 16.5l9 5 9-5" opacity="0.55"/></svg><span>Overlays</span></button>
-                <div class="lx-menu lx-ovl-menu" id="lx-ovl-menu" role="menu" hidden></div>
+                <div class="menu lx-menu lx-ovl-menu" id="lx-ovl-menu" role="menu" aria-label="Overlays" hidden></div>
               </span>
               <span class="lx-tb-sep"></span>
               <button class="lx-tb" data-lx="full" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
@@ -1139,7 +1142,7 @@
   <!-- Wafer edge: run state, what the run will use, logs, and the honest notice. -->
   <footer class="status" aria-label="Status">
     <span class="st-run">
-      <span class="pill pill-pending" id="run-pill">idle</span>
+      <span class="pill pill-pending" id="run-pill">Idle</span>
       <span class="status-progress" id="overall-progress"></span>
     </span>
     <button class="st-item st-problems" id="st-problems" data-go="verify" data-go-filter="problems" hidden>

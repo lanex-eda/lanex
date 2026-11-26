@@ -26,16 +26,19 @@ import { wireExport } from "./signoff.js";
 import { toast } from "./toast.js";
 import * as AM from "./analytics-model.js";
 import * as V from "./verify-model.js";
+import { slack as mfSlack, bytes as mfBytes } from "./metricfmt.js";
 import { wireTips } from "./analytics-charts.js";
 import { problemsOf, onProblems, problemForCheck, fixListHtml } from "./problems.js";
 import { timingDiagHtml, drcDiagHtml } from "./verify-diag.js";
 import "./fixsheet.js";
+import { showEmpty, setRunBarActions } from "./empty.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
 let _tag = "";
 let _baseTag = "";
 let _rep = null;          // this run's /api/verify payload
+let _cause = null;        // a failed run's failure card (run-explain), the one Flow shows
 let _base = null;         // baseline's payload (or null)
 let _diff = null;         // V.statusDiff(_rep, _base)
 let _filter = "all";      // all | problems | passed | unchecked
@@ -51,8 +54,7 @@ function n(v) { return AM.num(v); }
 
 function ns(v) {
   if (!V.isNum(v)) return AM.num(v);
-  if (Math.abs(v) >= 1e12) return "no path";
-  return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(3);
+  return mfSlack(v);
 }
 
 function mark(status) {
@@ -164,13 +166,18 @@ async function render() {
   // as it is; context.js retries and the page repaints when runs arrive.
   if (!runs.length && ctx.runsLoadFailed()) return;
   const empty = document.getElementById("vf-empty");
+  const bar = document.querySelector("#sec-verify .an-runbar");
   if (!runs.length || !ctx.contextRun()) {
     body.classList.add("is-empty");
-    empty.hidden = false;
+    showEmpty(empty, state.designDir ? "noRuns" : "noProject", { icon: "check", body: {
+      noRuns: "Run the flow once and this page shows whether the layout passes sign-off: timing in every corner, design rules, LVS, antenna and power, each judged the way LibreLane judges it.",
+      noProject: "Verify shows whether a run's layout passes sign-off, for the project you have open: timing in every corner, design rules, LVS, antenna and power." } });
+    setRunBarActions(bar, false);
     return;
   }
   body.classList.remove("is-empty");
   empty.hidden = true;
+  setRunBarActions(bar, true);
   if (ctx.contextRun() !== _tag) _open.clear();
   await selectRun(ctx.contextRun());
 }
@@ -263,6 +270,16 @@ async function selectRun(tag) {
   try { rep = await api.verify(tag); } catch (_e) { rep = null; }
   if (my !== _token) return;
   _rep = rep;
+  _cause = null;
+  // A run that failed reads as Flow reads it: the same cause, then the fix in Flow.
+  if (rep && rep.run_verdict && rep.run_verdict.state === "failed" && rep.verdict && rep.verdict.state === "stopped") {
+    api.runExplain(tag).then((rx) => {
+      if (my !== _token || !rx || !rx.card || !rx.card.title) return;
+      _cause = rx.card;
+      renderOverview();
+      wireProvBtns(document.getElementById("vf-overview"));
+    }).catch(() => {});
+  }
   if (_px && _px.tag !== tag) _px = null;
   // The diagnosis arrives after the checks: the rows and sections fill in.
   const paintPx = (px) => {
@@ -348,7 +365,7 @@ function jumpTo(id, openCheck) {
 
 // The verdict's words come from verify-model.js, so Flow and the end-of-run
 // toast say the same thing about the same run.
-const verdictCopy = () => V.verdictCopy(_rep);
+const verdictCopy = () => V.verdictCopy(_rep, { cause: _cause });
 
 function renderOverview() {
   const el = document.getElementById("vf-overview");
@@ -377,11 +394,11 @@ function renderOverview() {
   }
   if (_rep.metrics_from) flowNote += "<p class='vf-note'>This run has no final metrics, so the values are the ones LibreLane saved after step " + esc(_rep.metrics_from.n + " (" + (_rep.metrics_from.id || _rep.metrics_from.dir) + ")") + ", the last step that finished.</p>";
   if (_rep.has_config === false) flowNote += "<p class='vf-note'>This run has no resolved.json, so LibreLane's defaults were assumed for which checks fail the run.</p>";
-  const acts = (f.state === "stopped" ? btn("Open the run log", "data-go='runs'") : "") +
+  const acts = (cp.flowFix ? btn("The fix, in Flow", "data-go='pipeline'", { primary: true }) : f.state === "stopped" ? btn("Open the run log", "data-go='runs'") : "") +
     (v.blocker_ids.length ? btn("Go to first problem", "data-vf-jump='vf-checks' data-vf-open='" + esc(v.blocker_ids[0]) + "'", { primary: true }) : "");
   const verdict =
     "<div class='an-verdict vf-verdict is-" + cp.tone + "'>" +
-      "<div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(_rep.tag) + "</div>" +
+      "<div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(_rep.tag) + (cp.eyebrow ? " · " + esc(cp.eyebrow) : "") + "</div>" +
         "<h2 class='an-title'>" + esc(cp.title) + "</h2>" +
         "<p class='an-lede'>" + esc(cp.sub) + "</p>" +
         "<div class='an-runmeta'>" + meta + "</div>" + flowNote +
@@ -470,7 +487,7 @@ function pillar(p) {
       ["Worst IR drop", worstIr ? worstIr.pct + " % of supply" : "—", null,
         worstIr ? mprov("design_powergrid__drop__worst__net:" + worstIr.net, "Show the worst drop on " + worstIr.net + " in this run's metrics.json") : ""]];
   }
-  const stLabel = ({ pass: "Clean", partial: "Clean so far", fail: "Failing", warn: "Warnings", not_run: "Not checked", skipped: "Turned off" }[st] || "") + drcFlag;
+  const stLabel = ({ pass: "Clean", partial: "Clean so far", fail: "Failed", warn: "Warnings", not_run: "Not checked", skipped: "Turned off" }[st] || "") + drcFlag;
   // A card that jumps to its section; its title is the keyboard target, so
   // the source buttons inside can be real buttons too.
   return "<div class='vf-pillar is-" + esc(st) + "' data-vf-jump='" + p.jump + "'>" +
@@ -595,14 +612,14 @@ function detailHtml(c) {
   ].filter(Boolean);
   let table = "";
   if (c.breakdown && c.breakdown.length) {
-    table += "<table class='vf-mini'><tbody>" + c.breakdown.map((b) =>
+    table += "<table class='data-table vf-mini'><tbody>" + c.breakdown.map((b) =>
       "<tr" + (V.isNum(b.value) && b.value > 0 && c.id !== "antenna" && !/iteration|diodes|all, incl/.test(b.label) ? " class='is-bad'" : "") + "><th scope='row'>" + esc(b.label) + "</th><td>" + esc(n(b.value)) +
       mprov(b.metric) + "</td></tr>").join("") + "</tbody></table>";
   }
   if (c.corners && c.corners.length) {
     // "Fails the run?" is the corner matched against the checker's corner
     // rule (Decides above), so its source is that setting.
-    table += "<table class='vf-mini'><thead><tr><th>Corner</th><th>Count</th><th>Fails the run?</th></tr></thead><tbody>" +
+    table += "<table class='data-table vf-mini'><thead><tr><th>Corner</th><th>Count</th><th>Fails the run?</th></tr></thead><tbody>" +
       [...c.corners].sort((a, b) => V.cornerSortKey(a.corner) - V.cornerSortKey(b.corner)).map((r) =>
         "<tr" + (V.isNum(r.value) && r.value > 0 ? " class='is-" + (r.gating ? "bad" : "warnrow") + "'" : "") + "><th scope='row'><span data-an-tip='" + esc(AM.cornerLabel(r.corner)) + "' tabindex='0'>" + esc(r.corner) + "</span></th><td>" + esc(n(r.value)) +
         (r.value != null && c.metric ? mprov(c.metric + "__corner:" + r.corner) : "") + "</td><td>" + (r.gating ? "yes" : "<span class='muted'>warns</span>") + "</td></tr>").join("") +
@@ -685,7 +702,7 @@ function renderTiming() {
       cell(r, "slew", { gate: false }) + cell(r, "cap", { gate: false }) + cell(r, "fanout", { gate: false }) +
       "</tr>";
   }).join("");
-  const table = "<div class='vf-tscroll'><table class='an-ttable vf-ttable'><thead>" +
+  const table = "<div class='vf-tscroll'><table class='data-table an-ttable vf-ttable'><thead>" +
     "<tr><th rowspan='2' scope='col'>Corner</th><th colspan='4' class='vf-th-grp'>Setup <small>(max delay)</small></th><th colspan='4' class='vf-th-grp'>Hold <small>(min delay)</small></th><th colspan='3' class='vf-th-grp'>Electrical <small>(violations)</small></th></tr>" +
     "<tr><th class='vf-gcol'><span class='has-tip' tabindex='0' data-an-tip='● this corner fails the run on a violation; ○ it only warns'>gate</span></th><th><span class='has-tip' tabindex='0' data-an-tip='Worst slack (ns). Negative means a path misses the clock.'>WNS</span></th><th><span class='has-tip' tabindex='0' data-an-tip='Total negative slack (ns): the sum over every failing endpoint.'>TNS</span></th><th>Viol.</th>" +
     "<th class='vf-gcol'>gate</th><th>WHS</th><th>THS</th><th>Viol.</th><th>Slew</th><th>Cap</th><th>Fanout</th></tr>" +
@@ -808,22 +825,22 @@ function renderLvs() {
         : rprov(lv.json, "", "Open Netgen's comparison (JSON)");
       return "<tr" + (same ? "" : " class='is-bad'") + "><th scope='row'><span class='has-tip' tabindex='0' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span></th><td>" + esc(n(a)) + "</td><td>" + esc(n(b)) + "</td><td>" + (same ? mark("pass") : mark("fail")) + src + "</td></tr>";
     };
-    lvsBody = "<table class='an-ttable vf-lvs-t'><thead><tr><th></th><th>Layout <small>(extracted)</small></th><th>Netlist <small>(from synthesis)</small></th><th></th></tr></thead><tbody>" +
+    lvsBody = "<table class='data-table an-ttable vf-lvs-t'><thead><tr><th></th><th>Layout <small>(extracted)</small></th><th>Netlist <small>(from synthesis)</small></th><th></th></tr></thead><tbody>" +
       row("Devices", "devices", "Cell instances, including fill, tap and decap cells.", "Number of devices:") +
       row("Nets", "nets", "Distinct electrical nodes.", "Number of nets:") +
       row("Pins", "pins", "Top-level ports, power included.", "") +
       "</tbody></table>";
     if (lv.device_diffs && lv.device_diffs.length) {
-      lvsBody += "<p class='vf-k'>Device counts that differ</p><table class='vf-mini'><thead><tr><th>Layout</th><th></th><th>Netlist</th><th></th></tr></thead><tbody>" +
+      lvsBody += "<p class='vf-k'>Device counts that differ</p><table class='data-table vf-mini'><thead><tr><th>Layout</th><th></th><th>Netlist</th><th></th></tr></thead><tbody>" +
         lv.device_diffs.map((r) => "<tr class='is-bad'><td><code>" + esc(r.layout) + "</code></td><td>" + esc(n(r.layout_n)) + "</td><td><code>" + esc(r.netlist) + "</code></td><td>" + esc(n(r.netlist_n)) + "</td></tr>").join("") + "</tbody></table>";
     }
     if (lv.pin_diffs && lv.pin_diffs.length) {
-      lvsBody += "<p class='vf-k'>Pins that don't match</p><table class='vf-mini'><tbody>" +
+      lvsBody += "<p class='vf-k'>Pins that don't match</p><table class='data-table vf-mini'><tbody>" +
         lv.pin_diffs.map((r) => "<tr class='is-bad'><td><code>" + esc(r.layout) + "</code></td><td>↔</td><td><code>" + esc(r.netlist) + "</code></td></tr>").join("") + "</tbody></table>";
     }
   }
   if (c && c.breakdown && c.breakdown.length) {
-    lvsBody += "<table class='vf-mini'><tbody>" + c.breakdown.map((b) => "<tr" + (V.isNum(b.value) && b.value > 0 ? " class='is-bad'" : "") + "><th scope='row'>" + esc(b.label) + "</th><td>" + esc(n(b.value)) + mprov(b.metric) + "</td></tr>").join("") + "</tbody></table>";
+    lvsBody += "<table class='data-table vf-mini'><tbody>" + c.breakdown.map((b) => "<tr" + (V.isNum(b.value) && b.value > 0 ? " class='is-bad'" : "") + "><th scope='row'>" + esc(b.label) + "</th><td>" + esc(n(b.value)) + mprov(b.metric) + "</td></tr>").join("") + "</tbody></table>";
   }
   const result = lv && lv.result
     ? "<p class='vf-lvs-result is-" + (c && c.status === "pass" ? "pass" : "fail") + "'>" + mark(c && c.status === "pass" ? "pass" : "fail") + "Netgen: <b>" + esc(lv.result) + "</b>" +
@@ -863,7 +880,7 @@ function renderRel() {
     antBody = "<dl class='vf-dl vf-dl-compact'>" + an.breakdown.map((b) => "<div><dt>" + esc(b.label) + "</dt><dd><b>" + esc(n(b.value)) + "</b>" + mprov(b.metric) + "</dd></div>").join("") + "</dl>";
   }
   if (ant && ant.rows && ant.rows.length) {
-    antBody += "<div class='vf-tscroll'><table class='vf-mini'><thead><tr><th>Net</th><th>Pin</th><th>Layer</th><th><span class='has-tip' tabindex='0' data-an-tip='Partial antenna ratio over the required ratio. Over 1 is a violation.'>Ratio</span></th></tr></thead><tbody>" +
+    antBody += "<div class='vf-tscroll'><table class='data-table vf-mini'><thead><tr><th>Net</th><th>Pin</th><th>Layer</th><th><span class='has-tip' tabindex='0' data-an-tip='Partial antenna ratio over the required ratio. Over 1 is a violation.'>Ratio</span></th></tr></thead><tbody>" +
       ant.rows.map((r) => "<tr class='is-bad'><td><code>" + esc(r.net) + "</code></td><td><code>" + esc(r.pin) + "</code></td><td>" + esc(r.layer) + "</td><td>" + esc(r.partial) + " / " + esc(r.required) + rprov(ant.report, r.net + " ", "Show this net in the antenna summary") + "</td></tr>").join("") +
       "</tbody></table></div>" + (ant.more ? "<p class='an-foot'>" + ant.more + " more in the report.</p>" : "");
   } else if (an && an.status === "pass") {
@@ -885,7 +902,7 @@ function renderRel() {
   const pdnBody = (pd && pd.breakdown && pd.breakdown.length
       ? "<dl class='vf-dl vf-dl-compact'>" + pd.breakdown.map((b) => "<div><dt>Unconnected, " + esc(b.label) + "</dt><dd><b>" + esc(n(b.value)) + "</b>" + mprov(b.metric) + "</dd></div>").join("") + "</dl>"
       : (pd && pd.status === "pass" ? "<p class='vf-clean'>" + mark("pass") + "Every cell reaches the power grid.</p>" : "")) +
-    (irRows ? "<p class='vf-k'>IR drop" + (ir[0] && ir[0].corner ? " · " + esc(ir[0].corner) : "") + "</p><table class='vf-mini vf-ir'><thead><tr><th>Net</th><th>Worst</th><th>Average</th><th><span class='has-tip' tabindex='0' data-an-tip='Worst drop as a share of the supply voltage. The bar is full at 10 %.'>Of supply</span></th></tr></thead><tbody>" + irRows + "</tbody></table>" +
+    (irRows ? "<p class='vf-k'>IR drop" + (ir[0] && ir[0].corner ? " · " + esc(ir[0].corner) : "") + "</p><table class='data-table vf-mini vf-ir'><thead><tr><th>Net</th><th>Worst</th><th>Average</th><th><span class='has-tip' tabindex='0' data-an-tip='Worst drop as a share of the supply voltage. The bar is full at 10 %.'>Of supply</span></th></tr></thead><tbody>" + irRows + "</tbody></table>" +
       "<p class='an-foot'>LibreLane reports IR drop but doesn't judge it; a few percent of the supply is a common budget.</p>" : "");
   const pdnCard = "<div class='an-card vf-tool is-" + esc(pd ? pd.status : "not_run") + "'>" +
     "<div class='vf-tool-h'><div><span class='an-kpi-t'>Power grid · OpenROAD</span><small>Connections and IR drop</small></div><span class='vf-pillar-st'>" + mark(pd ? pd.status : "not_run") + esc(pd ? (V.STATUS[pd.status] || {}).label : "") + "</span></div>" +
@@ -1076,13 +1093,14 @@ async function openKlayout(btnEl) {
 async function copySummary() {
   if (!_rep) return;
   const cp = verdictCopy();
-  const sym = { pass: "PASS", fail: "FAIL", warn: "WARN", info: "INFO", not_run: "----", skipped: "OFF " };
+  // The check words every page uses (verdict.js): Passed, Failed, Warning, …
+  const sym = (st) => (V.STATUS[st] || {}).label || st;
   const lines = ["Sign-off: " + cp.title + " (" + _rep.tag + (_rep.design ? ", " + _rep.design : "") + (_rep.pdk ? ", " + _rep.pdk : "") + ")", ""];
   for (const g of _rep.groups || []) {
     lines.push((V.GROUPS[g.id] || g).title);
     for (const id of g.checks) {
       const c = _rep.checks.find((x) => x.id === id);
-      if (c) lines.push("  [" + sym[c.status] + "] " + c.name + ": " + valueText(c));
+      if (c) lines.push("  [" + sym(c.status) + "] " + c.name + ": " + valueText(c));
     }
   }
   lines.push("", "Judged by LibreLane's checkers with this run's settings (LanEx).");

@@ -10,19 +10,24 @@
 //   with why) · Incomplete (LanEx closed while it ran).
 // The state comes from the queue job while there is one (lane 1's jobs:
 // queued, running, skipped, stopped, interrupted), else from the run's
-// verdict and numbers.
+// verdict and numbers. The words a run also has (Clean, Warnings, Failed,
+// Stopped, Running, Incomplete) are verdict.js's.
 
+import { runVerdict, failedWhere, TIMING_MISSED } from "./verdict.js";
+import { mhz as mfMhz } from "./metricfmt.js";
+
+const W = (st) => runVerdict(st).word;
 export const POINT = {
   queued: { word: "Queued", tone: "muted", mark: "hollow" },
-  running: { word: "Running", tone: "live", mark: "pulse" },
-  clean: { word: "Clean", tone: "pass", mark: "fill" },
-  warnings: { word: "Warnings", tone: "warn", mark: "fill" },
-  missed: { word: "Timing missed", tone: "warn", mark: "bang" },
-  failed: { word: "Failed", tone: "fail", mark: "cross" },
-  stopped: { word: "Stopped", tone: "warn", mark: "half" },
+  running: { word: W("running"), tone: "live", mark: "pulse" },
+  clean: { word: W("passed"), tone: "pass", mark: "fill" },
+  warnings: { word: W("warning"), tone: "warn", mark: "fill" },
+  missed: { word: TIMING_MISSED, tone: "warn", mark: "bang" },
+  failed: { word: W("failed"), tone: "fail", mark: "cross" },
+  stopped: { word: W("stopped"), tone: "warn", mark: "half" },
   pruned: { word: "Stopped early", tone: "warn", mark: "half" },
   skipped: { word: "Skipped", tone: "muted", mark: "dash" },
-  interrupted: { word: "Incomplete", tone: "warn", mark: "half" },
+  interrupted: { word: W("incomplete"), tone: "warn", mark: "half" },
 };
 
 const fin = (v) => typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 1e20;
@@ -64,7 +69,8 @@ export function pointWords(key, { run = null, job = null, stageLabel = (s) => s,
   let word = P.word, detail = "";
   const v = (run && run.verdict) || {};
   const m = (run && run.key_metrics) || {};
-  if (key === "failed" && v.stage) word = "Failed at " + stageLabel(v.stage);
+  // "Failed at Clock tree (step 35)": the same words as Runs and the run bar.
+  if (key === "failed" && (v.stage || v.label)) word = failedWhere(v);
   if (key === "failed" && v.no_clock) word = "Not timed: no clock";
   if (key === "failed" && code && !word.endsWith(code)) detail = code;
   if (key === "running") {
@@ -73,13 +79,16 @@ export function pointWords(key, { run = null, job = null, stageLabel = (s) => s,
   }
   if (key === "missed") {
     const ws = m.timing__setup__ws, hs = m.timing__hold__ws;
-    detail = fin(ws) && ws < 0 ? "setup " + ws.toFixed(2) + " ns" : fin(hs) && hs < 0 ? "hold " + hs.toFixed(2) + " ns" : "";
+    detail = fin(ws) && ws < 0 ? "setup " + slack3(ws) + " ns" : fin(hs) && hs < 0 ? "hold " + slack3(hs) + " ns" : "";
   }
   if (key === "queued" && job && job.reason) detail = job.reason;
   if ((key === "skipped" || key === "pruned") && (reason || (job && job.reason))) detail = reason || job.reason;
-  if (key === "clean" && fin(m.timing__setup__ws)) detail = (m.timing__setup__ws >= 0 ? "+" : "") + m.timing__setup__ws.toFixed(2) + " ns slack";
+  if (key === "clean" && fin(m.timing__setup__ws)) detail = slack3(m.timing__setup__ws) + " ns slack";
   return { word, detail, tone: P.tone, mark: P.mark };
 }
+
+// Slack as every page shows it: signed, three decimals, U+2212 (metricfmt.signed).
+function slack3(v) { return v === 0 ? "0.000" : (v > 0 ? "+" : "−") + Math.abs(v).toFixed(3); }
 
 // "Met timing": finished, setup and hold slack not negative.
 export function metTiming(key, run) {
@@ -125,8 +134,7 @@ export function sameFailure(ended) {
 export function clockText(ns) {
   const n = Number(ns);
   if (!(n > 0)) return String(ns);
-  const mhz = 1000 / n;
-  return n + " ns (" + (mhz >= 100 ? Math.round(mhz) : mhz.toPrecision(3)) + " MHz)";
+  return n + " ns (" + mfMhz(n) + ")";
 }
 
 // Strip of squares, one per point in value order: the mark says the state,

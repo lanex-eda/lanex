@@ -8,6 +8,7 @@ import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { icon } from "./icons.js";
 import { fileActionsHtml, wireFileActions } from "./fileview.js";
+import { bytes } from "./metricfmt.js";
 
 const _CAT_ICON = { Layout: "grid", Netlist: "plug", Timing: "clock", Reports: "chart", Other: "box" };
 const DL_SVG = "<svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg>";
@@ -18,12 +19,8 @@ let _pane = "outputs";
 let _wired = false;
 let _epoch = 0;
 
-function fmtBytes(n) {
-  if (!n) return "0 B";
-  if (n < 1024) return n + " B";
-  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
-  return (n / 1048576).toFixed(1) + " MB";
-}
+// The one size formatter (metricfmt.bytes): 1000-based, "kB".
+function fmtBytes(n) { return n ? bytes(n) : "0 B"; }
 
 function root() { return document.getElementById("lx-files"); }
 
@@ -164,7 +161,7 @@ async function renderDiagrams(tag, ep) {
   for (const d of diags) {
     const card = document.createElement("figure");
     card.className = "diagram-card";
-    const sizeKb = d.size ? " · " + Math.round(d.size / 1000) + " KB" : "";
+    const sizeKb = d.size ? " · " + bytes(d.size) : "";
     card.innerHTML =
       "<figcaption><strong>" + fmt.escape(d.label) + "</strong> <span class='muted'>" + fmt.escape(d.step) +
       " · " + fmt.escape(d.name) + sizeKb + "</span></figcaption><div class='diagram-body muted'></div>" +

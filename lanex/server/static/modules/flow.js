@@ -28,6 +28,8 @@ import * as ctx from "./context.js";
 import { mountRunBar } from "./runbar.js";
 import * as FS from "./flowstages.js";
 import * as AM from "./analytics-model.js";
+import * as MF from "./metricfmt.js";
+import { EMPTY_WORDS } from "./empty.js";
 import { LogView } from "./logview.js";
 import { fileActionsHtml, wireFileActions } from "./fileview.js";
 import { liveLines, liveRows, onLiveLog, droppedLines } from "./logs.js";
@@ -421,12 +423,13 @@ function emptyHtml() {
   const has = (ctx.contextRuns() || []).length;
   return "<div class='an-verdict fl-hero is-idle'><div class='an-verdict-main'>" +
     "<div class='an-eyebrow'>Flow</div>" +
-    "<h2 class='an-title'>" + (state.designDir ? (has ? "Pick a run to see it here" : "No run yet") : "Open a project first") + "</h2>" +
+    // Flow keeps its hero (its identity); the words are the one empty table's (empty.js).
+    "<h2 class='an-title'>" + (state.designDir ? (has ? "Pick a run to see it here" : EMPTY_WORDS.noRuns.title) : EMPTY_WORDS.noProject.title) + "</h2>" +
     "<p class='an-lede'>A run turns the Verilog into a chip in seven stages. Each stage fills in below as it goes: " +
     "the time it took, its key number, and a picture of the chip at that point.</p></div>" +
     "<div class='an-verdict-act'>" + (state.designDir
       ? "<button class='btn btn-primary' data-fl='run'>" + icon("play", { size: 14 }) + " Run the flow</button>"
-      : "<button class='btn btn-primary' data-go='setup'>Go to Setup</button>") + "</div></div>";
+      : "<button class='btn btn-primary' data-go='setup'>" + EMPTY_WORDS.noProject.action.label + "</button>") + "</div></div>";
 }
 
 // The head while a Run click's start request is out, or after the server
@@ -597,7 +600,8 @@ function failHtml(rx, stages) {
   const ev = ((c.evidence && c.evidence.length ? c.evidence : rx.errors) || []).slice(0, 3).join("\n") || (rx.at && rx.at.text) || "";
   const fixes = (c.fixes || []).length ? fixListHtml(c.fixes, { tag: F.tag, title }) : "";
   const layoutSrc = stageSource(rx.stage, true);
-  return "<div class='an-verdict fl-hero fl-fail is-fail'><div class='an-verdict-main" + (fixes ? " fl-split" : "") + "'>" +
+  // Stopped is amber on every page (verdict.js); a step that raised is red.
+  return "<div class='an-verdict fl-hero fl-fail is-" + (word === "Stopped" ? "warn" : "fail") + "'><div class='an-verdict-main" + (fixes ? " fl-split" : "") + "'>" +
     "<div class='fl-split-a'><div class='an-eyebrow'>" + word + " · " + esc(where) + "</div>" +
     "<h2 class='an-title'>" + esc(title) + "</h2>" + branchHtml() +
     "<p class='an-lede'>" + esc(plain) + "</p>" +
@@ -721,7 +725,8 @@ function keyNumber(st) {
       return st.status === "done" ? (nets.length ? nets.join(" / ") + " rails" : "power rails") : "";
     }
     case "placement": return n("design__instance__utilization") != null ? "core " + Math.round(n("design__instance__utilization") * 100) + " % full" : "";
-    case "cts": return n("clock__skew__worst_setup") != null ? "clock skew " + Math.abs(n("clock__skew__worst_setup") * 1000).toFixed(0) + " ps" : "";
+    // Skew in ps through the one formatter (metricfmt.skewText), the same number Analytics shows.
+    case "cts": return n("clock__skew__worst_setup") != null ? "clock skew " + MF.skewText(Math.abs(n("clock__skew__worst_setup"))).replace(/^\+/, "") + " ps" : "";
     case "routing": return n("route__wirelength") != null ? fmtWire(n("route__wirelength")) + " of wire" + (n("route__drc_errors") ? " · " + int(n("route__drc_errors")) + " route DRC" : "") : "";
     case "signoff": {
       if (st.status !== "done" && st.status !== "failed") return "";

@@ -28,6 +28,11 @@ import { fmtDur } from "./reportcard.js";
 import * as C from "./analytics-charts.js";
 import { localeNum, localeDateTime } from "./intlcache.js";
 import { loadingStart, skel } from "./loading.js";
+import { verdictOfRun } from "./verdict.js";
+import { showEmpty, setRunBarActions } from "./empty.js";
+import * as SM from "./studymodel.js";
+import * as MR from "./metricrows.js";
+import { cornerGridHtml, cornerWords, wireGridKeys } from "./cornergrid.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -43,7 +48,7 @@ let _token = 0;                 // guards against out-of-order loads
 let _job = null;                // the first load's skeleton (loading.js), until the first paint
 function loadDone() { if (_job) { _job.done(); _job = null; } }
 const _trendCache = new Map();  // design dir -> trends payload
-let _allFilter = "all";         // All metrics: all | problems | changed
+let _allFilter = "all";         // All metrics: all | problems | changed | worse (metricrows.js)
 let _partial = null;            // {n, name, dir} when values come from a step's state_out.json
 
 async function loadMeta() {
@@ -154,14 +159,20 @@ export async function renderAnalyticsFull() {
   // The list could not be loaded at all (LanEx busy or asleep): leave the page
   // as it is; context.js retries and the page repaints when runs arrive.
   if (!runs.length && ctx.runsLoadFailed()) { loadDone(); return; }
+  const bar = document.querySelector("#sec-analytics .an-runbar");
   if (!runs.length || !ctx.contextRun()) {
     loadDone();
     body.classList.add("is-empty");
-    document.getElementById("an-empty").hidden = false;
+    // One empty state (empty.js): its words say whether a project is open.
+    showEmpty(document.getElementById("an-empty"), state.designDir ? "noRuns" : "noProject", { icon: "chart", body: {
+      noRuns: "Run the flow once and this page shows how it went: timing, area, power, routing and every metric LibreLane recorded.",
+      noProject: "Analytics shows how each run of the project you have open went: timing, area, power, routing and every metric LibreLane recorded." } });
+    setRunBarActions(bar, false);
     return;
   }
   body.classList.remove("is-empty");
   document.getElementById("an-empty").hidden = true;
+  setRunBarActions(bar, true);
   await selectRun(ctx.contextRun());
 }
 
@@ -230,12 +241,15 @@ async function selectRun(tag) {
   body.classList.add("is-loading");
 
   const designDir = (row && row._design) || state.designDir;
-  const [view, stages, cells, trends, signoff] = await Promise.all([
+  // A failed run's cause is Flow's (run-explain's card): the same title on every page.
+  const failed = !!(row && row.verdict && row.verdict.state === "failed");
+  const [view, stages, cells, trends, signoff, rx] = await Promise.all([
     api.run(tag).catch(() => null),
     api.runStages(tag).catch(() => null),
     api.cellUsage(tag).then((r) => (r && r.cells) || []).catch(() => []),
     loadTrends(designDir),
     api.verify(tag).catch(() => null),
+    failed ? api.runExplain(tag).catch(() => null) : Promise.resolve(null),
   ]);
   if (my !== _token) return;
   _v = (view && view.metrics && view.metrics.values) || {};
@@ -250,7 +264,7 @@ async function selectRun(tag) {
     const last = [...steps].reverse().find((s) => s.status === "done" && s.metrics && Object.keys(s.metrics).length);
     if (last) { _v = last.metrics; _partial = { n: last.n, name: M.stepName(last), dir: last.dir }; }
   }
-  _ctx = { row: row || {}, view: view || {}, stages: stages || {}, steps, cells, trends, designDir, signoff };
+  _ctx = { row: row || {}, view: view || {}, stages: stages || {}, steps, cells, trends, designDir, signoff, cause: (rx && rx.card) || null };
   body.classList.remove("is-loading");
   loadDone();             // before drawing: the charts measure their boxes
   if (!view && !_partial) {
@@ -328,9 +342,10 @@ function renderOverview() {
   const stopped = stoppedStep();
   const completed = stages.completed !== undefined ? stages.completed : row.success;
 
-  let tone, title, lede;
+  let tone, title, lede, eyebrow = "", flowFix = false;
   if (!completed || stopped) {
-    tone = "fail";
+    // Stopped is amber everywhere (verdict.js); a step that raised is red.
+    tone = _ctx.row.verdict && _ctx.row.verdict.state === "failed" ? "fail" : "warn";
     title = stopped
       ? "Run stopped at " + esc(M.stepName(stopped)) + " <span class='an-title-sub'>step " + stopped.n + " · " + esc(stopped.stage || "") + "</span>"
       : "Run did not finish";
@@ -347,7 +362,7 @@ function renderOverview() {
     lede = "No errors. The amber checks are not fatal for LibreLane, but they are worth a look.";
   } else {
     tone = "pass";
-    title = "Clean run: all " + ran.length + " checks passed";
+    title = "Clean";
     lede = "Every check LibreLane ran on this layout came back at zero.";
   }
   // The headline is Verify's verdict whenever Verify answered: one verdict
@@ -356,9 +371,11 @@ function renderOverview() {
   const so = _ctx.signoff;
   const vTotal = so && so.verdict ? so.verdict.total : 0;
   if (so && so.verdict) {
-    const vc = V.verdictCopy(so);
+    const vc = V.verdictCopy(so, { cause: _ctx.cause });
     tone = vc.tone;
     title = esc(vc.title);
+    eyebrow = vc.eyebrow || "";
+    flowFix = !!vc.flowFix;
     const stopLede = (!completed || stopped) && _partial
       ? " The numbers below are the metrics LibreLane saved after step " + _partial.n + " (" + esc(_partial.name) + "), the last step that finished."
       : "";
@@ -396,7 +413,7 @@ function renderOverview() {
   if (row.pdk || stages.pdk) meta.push(esc((row.pdk || stages.pdk) + (row.scl || stages.scl ? " / " + (row.scl || stages.scl) : "")));
   if (row.started_at) {
     const d = new Date(row.started_at);
-    if (!Number.isNaN(d.getTime())) meta.push(esc(localeDateTime(d, undefined, { dateStyle: "medium", timeStyle: "short" })));
+    if (!Number.isNaN(d.getTime())) meta.push(esc(F.when(d)));
   }
   if (Number.isFinite(row.wall_time_s)) meta.push(esc(fmtDur(row.wall_time_s)) + " of step time");
   // Verify's step totals (V.stepTotals): the same "34 of 76" Flow shows.
@@ -406,10 +423,10 @@ function renderOverview() {
 
   el.innerHTML =
     "<div class='an-verdict is-" + tone + "'>" +
-      "<div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(_tag) + "</div>" +
+      "<div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(_tag) + (eyebrow ? " · " + esc(eyebrow) : "") + "</div>" +
       "<h2 class='an-title'>" + title + "</h2><p class='an-lede'>" + lede + "</p>" +
       "<div class='an-runmeta'>" + meta.join("<span class='sep'>·</span>") + "</div></div>" +
-      "<div class='an-verdict-act'>" + (stopped || !completed ? goBtn("runs", "Open the run log") : goBtn("verify", "Details in Verify")) +
+      "<div class='an-verdict-act'>" + (flowFix ? goBtn("pipeline", "The fix, in Flow") : stopped || !completed ? goBtn("runs", "Open the run log") : goBtn("verify", "Details in Verify")) +
       "<span class='an-disclaim'>LanEx shows what LibreLane's tools reported. It is not a sign-off.</span></div>" +
     "</div>" + strip + subsetNote +
     "<div class='an-kpis'>" + kpiTiming() + kpiArea() + kpiPower() + kpiRouting() + "</div>" +
@@ -563,7 +580,7 @@ function renderTiming() {
     ["TNS", "tns", "Total negative slack: all failing slack added up. 0 when nothing fails."],
     [nC > 1 ? "Violations, " + nC + " corners summed" : "Violations", "_vio__count", "Failing endpoints." + (nC > 1 ? " Summed over " + nC + " corners: " + F.CORNER_SUM_NOTE +
       (sumS ? " Setup: " + F.num(sumS.worst) + " in the worst corner (" + sumS.corner + ")." : "") + (sumH ? " Hold: " + F.num(sumH.worst) + " in the worst corner (" + sumH.corner + ")." : "") : "")],
-    ["Reg-to-reg slack", "_r2r__ws", "Worst slack between two flip-flops (ignores I/O paths). ∞ means there are no such paths."],
+    ["Reg-to-reg slack", "_r2r__ws", "Worst slack between two flip-flops (ignores I/O paths). \"no path\" means there are no such paths."],
   ];
   const cell = (kind, suf) => {
     const key = suf.startsWith("_") ? "timing__" + kind + suf : "timing__" + kind + "__" + suf;
@@ -575,7 +592,7 @@ function renderTiming() {
     return "<td" + (neg || (isCount && v > 0) ? " class='is-bad'" : "") + ">" + vh(key) + (suf === "ws" ? " " + deltaHtml(key, { short: true }) : "") + provBtn(key) +
       (cs && cs.n > 1 ? " <span class='an-u'>" + esc(F.num(cs.worst)) + " in the worst</span>" : "") + "</td>";
   };
-  const table = "<table class='an-ttable'><thead><tr><th></th><th>Setup <small>(max delay)</small></th><th>Hold <small>(min delay)</small></th></tr></thead><tbody>" +
+  const table = "<table class='data-table an-ttable'><thead><tr><th></th><th>Setup <small>(max delay)</small></th><th>Hold <small>(min delay)</small></th></tr></thead><tbody>" +
     rows.map(([label, suf, tip]) => "<tr><th scope='row'><span tabindex='0' class='has-tip' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span></th>" + cell("setup", suf) + cell("hold", suf) + "</tr>").join("") +
     "</tbody></table>";
 
@@ -589,22 +606,26 @@ function renderTiming() {
     });
     return list;
   };
-  const cornerChart = (base, cls, title) => {
+  // Corners: the one picture Verify draws (cornergrid.js, lane 4): process
+  // across, wire RC down, the worst marked. A cell opens its paths in Verify.
+  const cornerGrid = (base, kind, title) => {
     const list = corners(base);
-    if (!list.length) return "";
-    const fin = list.filter((x) => M.isNum(x.value));
-    const worst = fin.length ? fin.reduce((a, b) => (b.value < a.value ? b : a)) : null;
-    return "<div class='an-corner-col'><div class='an-sub'>" + esc(title) + "</div>" + C.divergingBars(list.map((x) => {
-      const s = F.show(base, x.value);
-      return {
-        label: M.cornerShort(x.corner), sub: x.corner, value: M.isNum(x.value) ? x.value : NaN,
-        text: esc(s.text) + provBtn(base + "__corner:" + x.corner), worst: worst && x.corner === worst.corner,
-        tip: title.replace(/ by corner$/, "") + ": " + s.text + " " + s.unit + "\n" + M.cornerLabel(x.corner) + (worst && x.corner === worst.corner ? " (worst corner)" : "") + "\n" + base + "__corner:" + x.corner,
-      };
-    }), { cls }) + "</div>";
+    if (list.length < 2) return "";
+    const rows = list.map((x) => ({ corner: x.corner, v: M.isNum(x.value) && Math.abs(x.value) < 1e12 ? x.value : null }));
+    const vals = rows.map((r) => r.v).filter(M.isNum);
+    const fail = vals.filter((v) => v < 0).length;
+    const worst = vals.length ? Math.min(...vals) : null;
+    const wr = rows.find((r) => r.v === worst);
+    const sum = !vals.length ? "not timed" : fail ? fail + " of " + rows.length + " corners fail · worst " + F.slack(worst) + " ns in " + (wr ? wr.corner : "")
+      : "all " + rows.length + " corners pass · worst " + F.slack(worst) + " ns";
+    return "<section class='an-card tx-gcard an-cgcard" + (fail ? " is-fail" : "") + "'>" +
+      "<div class='tx-gh'><span class='an-eyebrow'>" + esc(title) + "</span><span class='an-u'>ns</span></div>" +
+      cornerGridHtml(rows, { value: (r) => r.v, fmt: (v) => F.slack(v), kind, label: title,
+        tip: (r) => r.corner + " — " + cornerWords(r.corner) + "\n" + title + ": " + F.slack(r.v) + " ns\n" + base + "__corner:" + r.corner + "\nClick to list its paths in Verify" }) +
+      "<p class='tx-gsum" + (fail ? " is-fail" : "") + "'>" + esc(sum) + "</p></section>";
   };
-  const cset = cornerChart("timing__setup__ws", "s1", "Setup slack by corner");
-  const chold = cornerChart("timing__hold__ws", "s2", "Hold slack by corner");
+  const cset = cornerGrid("timing__setup__ws", "setup", "Setup · worst slack by corner");
+  const chold = cornerGrid("timing__hold__ws", "hold", "Hold · worst slack by corner");
   const ncorners = corners("timing__setup__ws").length;
 
   // Electrical checks per corner: only list corners with violations.
@@ -630,9 +651,23 @@ function renderTiming() {
       "<div class='an-card'><div class='an-card-h'>Summary <span class='muted'>worst over all corners</span></div>" + table +
         (other ? "<ul class='an-notes'>" + other + "</ul>" : "") + "</div>" +
       (cset || chold ? "<div class='an-card'><div class='an-card-h'>By corner <span class='muted'>" + ncorners + " PVT corners: process, temperature, voltage, wire RC</span></div>" +
-        "<div class='an-corners'>" + cset + chold + "</div>" +
-        "<p class='an-foot'>Bars grow right for positive slack; red bars left of the line fail. The outlined row is the worst corner.</p></div>" : "") +
+        "<div class='tx-grids an-cgrids'>" + cset + chold +
+        "<p class='tx-glegend'><span>◆ worst corner</span><span>red: fails</span><span>Click a corner to list its paths in Verify.</span></p></div></div>" : "") +
     "</div>" + flow;
+  wireCornerGrids(el);
+}
+
+// A corner cell opens that corner's paths in Verify's timing explorer.
+function wireCornerGrids(el) {
+  if (!el || el._cgWired) return;
+  el._cgWired = true;
+  wireGridKeys(el);
+  el.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(".cg-b");
+    if (!b) return;
+    import("./timing.js").then((m) => m.pickCorner(_tag, b.dataset.cgKind, b.dataset.cgCorner));
+    import("./nav.js").then((m) => m.go("verify", { section: "vf-timing" }));
+  });
 }
 
 // Setup/hold slack at each STA checkpoint the flow ran (pre-PnR, mid-PnR …,
@@ -767,7 +802,7 @@ function renderPower() {
     return "<tr><th scope='row'>" + esc(net) + "</th><td>" + (has(wk) ? vh(wk) + " " + deltaHtml(wk, { short: true }) + provBtn(wk) : "—") + "</td><td>" + (has(vk) ? vh(vk) + provBtn(vk) : "—") + "</td></tr>";
   }).join("");
   const ir = netRows ? "<div class='an-card'><div class='an-card-h'>IR drop <span class='muted'>" + (corner ? "at " + esc(corner) : "power grid") + "</span></div>" +
-    "<table class='an-ttable'><thead><tr><th>Net</th><th><span class='has-tip' tabindex='0' data-an-tip='The largest voltage lost across the power grid before reaching a cell on this net.'>Worst drop</span></th><th><span class='has-tip' tabindex='0' data-an-tip='Supply net: the lowest voltage any cell sees. Ground net: the highest (ground bounce).'>Worst voltage</span></th></tr></thead><tbody>" + netRows + "</tbody></table>" +
+    "<table class='data-table an-ttable'><thead><tr><th>Net</th><th><span class='has-tip' tabindex='0' data-an-tip='The largest voltage lost across the power grid before reaching a cell on this net.'>Worst drop</span></th><th><span class='has-tip' tabindex='0' data-an-tip='Supply net: the lowest voltage any cell sees. Ground net: the highest (ground bounce).'>Worst voltage</span></th></tr></thead><tbody>" + netRows + "</tbody></table>" +
     "<dl class='an-facts'>" + fact("Power-grid violations", "design__power_grid_violation__count", { tip: "Cells not connected to the power grid." }) + "</dl>" +
     "<p class='an-foot'>From OpenROAD's static IR-drop analysis. A few millivolts on a small design is typical.</p></div>"
     : (has("ir__drop__worst") ? "<div class='an-card'><div class='an-card-h'>IR drop</div><dl class='an-facts'>" + fact("Worst IR drop", "ir__drop__worst") + fact("Average IR drop", "ir__drop__avg") + fact("Worst voltage", "ir__voltage__worst") + "</dl></div>" : "");
@@ -875,7 +910,7 @@ function renderFlow() {
     return "<tr><th scope='row'>" + (tip ? "<span class='has-tip' tabindex='0' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span>" : esc(label)) + "</th>" + cells.join("") + "</tr>";
   }).join("");
   const qor = "<div class='an-card an-card-wide'><div class='an-card-h'>Quality by stage <span class='muted'>value at the end of each stage, as the steps wrote it; · = unchanged in that stage</span></div>" +
-    "<div class='an-scrollx'><table class='an-ttable an-qor'><thead>" + thead + "</thead><tbody>" + tbody + "</tbody></table></div></div>";
+    "<div class='an-scrollx'><table class='data-table an-ttable an-qor'><thead>" + thead + "</thead><tbody>" + tbody + "</tbody></table></div></div>";
 
   // Runtime by stage + slowest steps + peak memory.
   const timed = steps.filter((s) => M.isNum(s.runtime_s));
@@ -1007,29 +1042,25 @@ async function drawHistoryBy(by, t, runs, xOf) {
     // A run that isn't clean but has the number (it finished and missed
     // timing, or has warnings) is plotted; one with no number is a cross.
     const key = r.success ? "clean" : y == null ? "failed" : unitK === "ns" && y < 0 ? "missed" : "warnings";
+    // The study words (studymodel.js / verdict.js); a cross says how that run ended.
     return { x: xOf(r, _histX), y: y == null ? null : y * k, key, tag: r.tag,
-      word: key === "clean" ? "Clean" : key === "failed" ? "Failed or stopped" : key === "missed" ? "Timing missed" : "Not clean" };
+      word: key === "failed" ? verdictOfRun(r).word : SM.POINT[key].word };
   }).filter((p) => p.x != null);
   const opt = SC.byValueOption({ xvar: _histX, xunit: _histX === "CLOCK_PERIOD" ? "ns" : "", clock: _histX === "CLOCK_PERIOD",
     metric: { key: _histM, label, unit, dir: M.directionOf(_meta, _histM) }, points: pts, line: false });
   if (!opt) { host.innerHTML = notReached("No run has both a value of " + _histX + " and of " + label + "."); return; }
   _histChart = window.echarts.init(host, null, { renderer: "canvas" });
   _histChart.setOption(opt);
+  // A theme switch draws it again with the new tokens.
+  import("./theme-echarts.js").then((m) => m.followTheme(_histChart, () => { if (host.isConnected) drawHistoryBy(by, t, runs, xOf); }));
   _histChart.on("click", (e) => { const p = e.data && e.data.p; if (p && p.tag) ctx.setRun(p.tag); });
 }
 
 // ---------- 8. All metrics -----------------------------------------------------------------
 
+// The one reading of "a problem" (metricrows.js), the same as Compare's.
 function statusOf(key, v) {
-  const { base } = M.parseKey(key);
-  if (/(_vio__count|error[s]?__count|__errors$|_violation__count|drc_errors|illegal_overlap__count|unmatched_|_difference__count|disconnected_pin__count|inferred_latch__count|unmapped__count|property_fail__count|violating__)/.test(base)) {
-    const n = Number(v);
-    if (n === 0) return "pass";
-    const m = _meta.get(base);
-    return m && m.critical ? "fail" : (/drc_error|drc_errors/.test(base) ? "fail" : "warn");
-  }
-  if (/^timing__.*__(ws|wns|tns)$/.test(base) && M.isNum(v)) return v < 0 ? "fail" : "";
-  return "";
+  return MR.statusOf(key, v, (base) => { const m = _meta.get(base); return !!(m && m.critical); });
 }
 
 function renderAll() {
@@ -1037,11 +1068,10 @@ function renderAll() {
   if (!el) return;
   const total = Object.keys(_v).length;
   el.innerHTML = "<div class='an-all-bar'>" +
+    // The one "every metric" view (metricrows.js): Compare's Every metric has the same filter and row.
+    "<span id='an-all-filter'></span>" +
     "<input type='search' id='an-all-search' class='an-search' placeholder='Filter by name or key, e.g. slack, area, lvs' aria-label='Filter metrics' value='" + esc(document.getElementById("an-all-search")?.value || "") + "'/>" +
-    "<div class='seg' role='group' aria-label='Show'>" +
-      [["all", "All"], ["problems", "Problems"], ["changed", "Changed"]].map(([id, l]) =>
-        "<button class='seg-btn" + (_allFilter === id ? " is-active" : "") + "' data-an-filter='" + id + "'" + (id === "changed" && !_b ? " disabled title='Pick a run under Compare with first'" : "") + ">" + l + "</button>").join("") +
-    "</div><span class='muted' id='an-all-count'></span></div>" +
+    "<span class='muted' id='an-all-count'></span></div>" +
     "<div id='an-all-rows'></div>" +
     "<p class='an-foot'>" + total + " values from " + (_partial ? esc(_partial.dir) + "/state_out.json (the last step that finished)" : "this run's metrics.json") + ". The magnifier opens the raw file at that line. Directions (higher or lower is better) come from LibreLane's metric registry.</p>";
   renderAllRows();
@@ -1050,8 +1080,12 @@ function renderAll() {
 function renderAllRows() {
   const host = document.getElementById("an-all-rows");
   if (!host) return;
-  if (_allFilter === "changed" && !_b) _allFilter = "all";
+  if ((_allFilter === "changed" || _allFilter === "worse") && !_b) _allFilter = "all";
   const q = (document.getElementById("an-all-search")?.value || "").trim().toLowerCase();
+  const isProblem = (k) => { const s = statusOf(k, _v[k]); return s === "fail" || s === "warn"; };
+  const isChanged = (k) => !!_b && JSON.stringify(_b[k]) !== JSON.stringify(_v[k]);
+  const isWorse = (k) => { if (!_b) return false; const d = F.delta(k, _v[k], _b[k], null, { dir: M.directionOf(_meta, k) }); return !!(d && d.cls === "is-worse"); };
+  const TEST = { all: () => true, problems: isProblem, changed: isChanged, worse: isWorse };
   // Group keys by base metric; modifier variants hang under their base.
   const fams = new Map();
   for (const k of Object.keys(_v).sort()) {
@@ -1060,13 +1094,12 @@ function renderAllRows() {
     const f = fams.get(base);
     if (!Object.keys(mods).length) f.main = k; else f.kids.push(k);
   }
-  const keep = (k) => {
-    const v = _v[k];
-    if (q && !(k.toLowerCase().includes(q) || (M.labelOf(k) || "").toLowerCase().includes(q))) return false;
-    if (_allFilter === "problems") { const s = statusOf(k, v); return s === "fail" || s === "warn"; }
-    if (_allFilter === "changed") { const b = _b[k]; return JSON.stringify(b) !== JSON.stringify(v); }
-    return true;
-  };
+  const keep = (k) => MR.matches(k, q) && (TEST[_allFilter] || TEST.all)(k);
+  // Counts per filter, by metric (a metric and its corners count once), as Compare counts.
+  const famKeys = (f) => (f.main ? [f.main] : []).concat(f.kids);
+  const counts = Object.fromEntries(Object.entries(TEST).map(([id, t]) => [id, [...fams.values()].filter((f) => famKeys(f).some(t)).length]));
+  const fh = document.getElementById("an-all-filter");
+  if (fh) fh.innerHTML = MR.filterHtml(counts, _allFilter, { attr: "data-an-filter", noRef: !_b });
   const byCat = new Map(M.CATEGORIES.map(([id, title]) => [id, { title, rows: [], n: 0 }]));
   byCat.set("other", { title: "Other", rows: [], n: 0 });
   let shown = 0;
@@ -1089,33 +1122,29 @@ function renderAllRows() {
   if (cnt) cnt.textContent = shown + " of " + Object.keys(_v).length + " shown";
   const body = [...byCat.values()].filter((c) => c.rows.length).map((c) =>
     "<details class='an-cat' open><summary>" + esc(c.title) + " <span class='muted'>" + c.n + "</span></summary>" +
-    "<table class='an-mtable'><thead><tr><th>Metric</th><th>Value</th>" + (_b ? "<th>" + esc(_baseTag) + "</th><th>Change</th>" : "") + "<th class='an-src'><span class='sr-only'>Source</span></th></tr></thead><tbody>" + c.rows.join("") + "</tbody></table></details>").join("");
+    "<table class='data-table an-mtable'><thead><tr><th>Metric</th><th class='is-num'><span class='mr-run'>" + esc(_tag) + "</span></th>" + (_b ? "<th class='is-num'><span class='mr-run'>" + esc(_baseTag) + "</span></th><th class='is-num'>Change</th>" : "") + "<th class='an-src'><span class='sr-only'>Source</span></th></tr></thead><tbody>" + c.rows.join("") + "</tbody></table></details>").join("");
   host.innerHTML = body || "<div class='an-none'>Nothing matches. Clear the filter to see every metric.</div>";
   wireProvBtns(host);
 }
 
-function kidNoun(keys) {
-  const m = M.parseKey(keys[0]).mods;
-  if (m.corner) return keys.length === 1 ? "corner" : "corners";
-  if (m.net) return keys.length === 1 ? "net" : "nets";
-  if (m.iter !== undefined) return keys.length === 1 ? "iteration" : "iterations";
-  if (m.class) return keys.length === 1 ? "cell type" : "cell types";
-  return keys.length === 1 ? "variant" : "variants";
-}
+// "corners", "nets": the words Compare uses too (metricrows.countWords).
+function kidNoun(keys) { return MR.countWords(keys).replace(/^\d+ /, ""); }
 
+// One row of the every-metric view (metricrows.js): the name cell Compare
+// draws too, then the numbers at the table precision in the row's unit.
 function rowHtml(key, base, toggle, kid, famId, hidden, count = "") {
-  const label = key ? M.labelOf(key) : (M.LABELS[base] || null);
   const v = key ? _v[key] : undefined;
   const st = key ? statusOf(key, v) : "";
   const m = _meta.get(base);
-  const tag = m && m.critical ? "<span class='an-crit' data-an-tip='LibreLane marks this metric critical: a non-zero count fails the flow.' tabindex='0'>critical</span>" : "";
-  const name = kid
-    ? "<span class='an-kidname'>" + esc(key.slice(base.length).replace(/^__/, "").replace(/__/g, " · ")) + "</span>"
-    : (label ? "<span class='an-mlabel'>" + esc(label) + "</span>" + tag + "<code>" + esc(key || base) + (count ? "<span class='an-mcount'> · " + esc(count) + "</span>" : "") + "</code>"
-      : "<code class='an-mkey'>" + esc(key || base) + "</code>" + tag + (count ? "<span class='an-mcount'> · " + esc(count) + "</span>" : ""));
-  const val = key ? "<td class='an-mval" + (st === "fail" ? " is-bad" : st === "warn" ? " is-warn" : "") + "'>" + (st ? "<i class='an-dot is-" + st + "' aria-hidden='true'></i>" : "") + vh(key, v) + "</td>" : "<td class='muted'>" + (toggle ? "" : "—") + "</td>";
+  const k0 = key || base;
+  const scale = key ? MR.rowScale(key, [v, _b ? _b[key] : undefined]) : null;
+  const unit = kid ? "" : MR.rowUnit(k0, scale);
+  const dir = kid ? 0 : M.directionOf(_meta, k0);
+  const name = MR.nameHtml({ key: key || "", base, kid, critical: !!(m && m.critical), count, unit, dir });
+  const num = (x) => { const s = MR.valueShown(key, x, scale); return "<span class='an-v' title='" + esc(s.title) + "'>" + esc(s.text) + "</span>"; };
+  const val = key ? "<td class='is-num an-mval" + (st === "fail" ? " is-bad" : st === "warn" ? " is-warn" : "") + "'>" + (st ? "<i class='an-dot is-" + st + "' aria-hidden='true'></i>" : "") + num(v) + "</td>" : "<td class='is-num muted'>" + (toggle ? "" : "—") + "</td>";
   let bcells = "";
-  if (_b) bcells = key ? "<td class='an-mval an-mbase'>" + (_b[key] !== undefined ? vh(key, _b[key]) : "—") + "</td><td>" + deltaHtml(key, { short: true }) + "</td>" : "<td></td><td></td>";
+  if (_b) bcells = key ? "<td class='is-num an-mval an-mbase'>" + (_b[key] !== undefined ? num(_b[key]) : "—") + "</td><td class='is-num'>" + deltaHtml(key, { short: true }) + "</td>" : "<td></td><td></td>";
   return "<tr class='" + (kid ? "an-kid" : "an-fam") + "'" + (kid ? " data-fam='" + famId + "'" + (hidden ? " hidden" : "") : "") + ">" +
     "<th scope='row'><div class='an-mname'>" + (kid ? "" : "<span class='an-exp-slot'>" + toggle + "</span>") + "<div>" + name + "</div></div></th>" + val + bcells + "<td class='an-src'>" + (key ? provBtn(key) : "") + "</td></tr>";
 }

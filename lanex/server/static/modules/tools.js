@@ -22,6 +22,8 @@ import { icon } from "./icons.js";
 // "LanEx and this computer": version and updates, storage, network, WSL
 // memory, clean-up, and the doctor's problems for the verdict band.
 import { paintSystem, sysAttention, diagnosticsBundle, fmtBytes } from "./toolsys.js";
+import { openLayer, closeLayer, isLayerOpen } from "./overlay.js";
+import { bytes } from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -191,10 +193,11 @@ export function shortVersion(v) {
 }
 const shortHash = (h) => (h ? String(h).replace(/^sha256:/, "").slice(0, 8) : "");
 
+// A size the server gives in MiB (docker's bytes / 2^20), shown 1000-based like
+// every other size in LanEx (metricfmt.bytes, toolsys's storage bar).
 function sizeStr(mb, { approx = false } = {}) {
   if (mb == null) return "";
-  const s = mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : Math.round(mb) + " MB";
-  return (approx ? "~" : "") + s;
+  return (approx ? "~" : "") + bytes(mb * 1048576);
 }
 
 function kvHtml(rows) {
@@ -537,20 +540,30 @@ function wireStatic() {
       toast.show("Could not change the PDK folder: " + ex.message, "error");
     }
   });
-  // One open "More" menu at a time; a click elsewhere closes it.
-  document.addEventListener("click", (e) => {
-    if (!e.target.closest || !e.target.closest(".tl-more")) closeMenus();
-  });
+  // A "More" menu is a menu on the overlay stack (overlay.js): one open at a
+  // time, Esc and an outside press close it, arrows move, focus goes back.
   sec.addEventListener("toggle", (e) => {
     const d = e.target;
-    if (d.classList && d.classList.contains("tl-more") && d.open)
-      sec.querySelectorAll(".tl-more[open]").forEach((o) => { if (o !== d) o.open = false; });
+    if (!d.classList || !d.classList.contains("tl-more")) return;
+    const menu = d.querySelector(".tl-menu");
+    if (!menu) return;
+    if (d.open && !isLayerOpen(menu)) openLayer(menu, { kind: "menu", owner: d.querySelector("summary"), onClose: () => { d.open = false; } });
+    else if (!d.open && isLayerOpen(menu)) closeLayer(menu);
   }, true);
+  // An item does its work and the menu closes.
+  sec.addEventListener("click", (e) => {
+    const it = e.target.closest && e.target.closest(".tl-menu .tl-menu-item");
+    const m = it && it.closest(".tl-menu");
+    if (m && isLayerOpen(m)) closeLayer(m);
+  });
 }
 
 function closeMenus() {
   if (typeof document === "undefined" || !document.querySelectorAll) return;
-  document.querySelectorAll("#sec-tools .tl-more[open]").forEach((d) => { d.open = false; });
+  document.querySelectorAll("#sec-tools .tl-more[open]").forEach((d) => {
+    const m = d.querySelector(".tl-menu");
+    if (m && isLayerOpen(m)) closeLayer(m); else d.open = false;
+  });
 }
 
 function showSkeletonSummary() {

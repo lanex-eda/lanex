@@ -136,7 +136,7 @@ function _sentRows(model) {
     return "<tr><td><code>" + fmt.escape(s.name) + "</code></td><td><b>" +
       fmt.escape(s.value) + "</b></td><td>" + vs + "</td></tr>";
   }).join("");
-  return "<table class='cc-table'><thead><tr><th>Variable</th><th>Value sent</th>" +
+  return "<table class='data-table cc-table'><thead><tr><th>Variable</th><th>Value sent</th>" +
     "<th>vs your config file</th></tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
@@ -159,7 +159,7 @@ function _configRows(model) {
       provBtnHtml({ kind: "input", key: c.name },
         "Open " + (model.rel || "the config") + " at this line") + "</td></tr>";
   }).join("");
-  return "<table class='cc-table'><thead><tr><th>Variable</th><th>Value in file</th>" +
+  return "<table class='data-table cc-table'><thead><tr><th>Variable</th><th>Value in file</th>" +
     "<th>Where / when it applies</th></tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
@@ -170,10 +170,10 @@ function _settingsTable(host, rows, cols, csvName) {
   const esc = fmt.escape;
   host.innerHTML =
     "<div class='fs-tablebar'><input type='search' class='inp fs-filter' " +
-    "placeholder='filter by variable or source…'/> " +
+    "placeholder='Filter by variable or source' aria-label='Filter by variable or source'/> " +
     "<span class='muted fs-count'></span><span class='fv-spacer'></span>" +
     "<button class='btn btn-ghost fs-csv'>Export CSV</button></div>" +
-    "<div class='fs-tablewrap'><table class='cc-table'><thead><tr>" +
+    "<div class='fs-tablewrap'><table class='data-table cc-table'><thead><tr>" +
     cols.headers.map((h) => "<th>" + esc(h) + "</th>").join("") +
     "</tr></thead><tbody></tbody></table></div>";
   const tbody = host.querySelector("tbody");
@@ -257,7 +257,7 @@ export async function openFinalSettings(payload = null) {
       : "<p class='muted'>The full variable registry isn't available here " +
         "(LibreLane is not installed locally on the host; container runtime active), so the " +
         "cumulative pre-run table can't be built. After a run, <code>resolved.json</code> " +
-        "and the Analytics tab's <b>Final settings used</b> give the complete record.</p>") +
+        "and the run bar's <b>Settings used</b> give the complete record.</p>") +
     srcNote + macroNote +
     "<p class='fs-note'>This preview is assembled from the run request itself plus your " +
     "config file. After execution, <code>resolved.json</code> records every exact value used by the flow." +
@@ -309,7 +309,7 @@ export async function openResolvedSettings(tag) {
   try { r = await api.provenance({ kind: "resolved-map", tag }); }
   catch (ex) {
     const { toast } = await import("./toast.js");
-    toast.show("Could not load the run's resolved settings: " + (ex.message || ex), "error");
+    toast.show("Couldn't load the settings this run used: " + (ex.message || ex), "error");
     return;
   }
   if (!r || r.ok === false) {
@@ -319,7 +319,7 @@ export async function openResolvedSettings(tag) {
   }
   const note = r.note ? "<p class='fs-note'>" + fmt.escape(r.note) + "</p>" : "";
   await customDialog({
-    title: "Final settings used by run '" + tag + "' (" + r.rows.length + " variables)",
+    title: "Settings this run used · " + tag + " · " + r.rows.length,
     wide: true,
     bodyHtml:
       "<p>Values are loaded directly from <b>resolved.json</b>, LibreLane's complete execution record. " +

@@ -17,6 +17,7 @@ import { state, safeStorage } from "./state.js";
 import { toast } from "./toast.js";
 import { icon } from "./icons.js";
 import { LogView } from "./logview.js";
+import { openLayer, closeLayer, isLayerOpen } from "./overlay.js";
 import { liveLines, onLiveLog } from "./logs.js";
 import { contextRun, onContext } from "./context.js";
 import { pickCommand, commandScript, journalScript, configDiffLines, History, makesRun, runTagOf } from "./consolemodel.js";
@@ -49,12 +50,21 @@ export function openConsole(tab) {
     document.getElementById("app")?.classList.add("has-console");
     applyHeight(readHeight());
   }
+  // On the overlay stack, as a drawer that is not modal and stays on an
+  // outside press: Esc closes the top layer first (a dialog over it, then it).
+  if (!isLayerOpen(C.el)) openLayer(C.el, { kind: "sheet", modal: false, outside: false, focus: false, label: "Console", onClose: () => hideConsole() });
   syncBtn();
   refreshTab();
   if (C.tab === "run") requestAnimationFrame(() => C.el.querySelector("#cn-cmd")?.focus());
 }
 
 export function closeConsole() {
+  if (!C.el || C.el.hidden) return;
+  if (isLayerOpen(C.el)) { closeLayer(C.el); return; }   // its onClose hides it
+  hideConsole();
+}
+
+function hideConsole() {
   if (!C.el || C.el.hidden) return;
   const hadFocus = C.el.contains(document.activeElement);
   C.el.hidden = true;
@@ -154,15 +164,8 @@ function ensure() {
   wireGrip(el.querySelector(".cn-grip"));
   wireRunner();
   el.addEventListener("click", onAction);
-  // Esc closes the drawer from anywhere inside it (a tab, a Copy button, the
-  // log), not only from the command input; a filter box with text clears first.
-  el.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || e.defaultPrevented) return;
-    const t = e.target;
-    if (t && t.matches && t.matches("input[type=search]") && t.value) return;
-    closeConsole();
-    e.stopPropagation();
-  });
+  // Esc is the overlay stack's (overlay.js): it closes the drawer when the
+  // drawer is the top layer; a filter box with text clears first.
   window.addEventListener("resize", () => { if (isConsoleOpen()) applyHeight(readHeight()); });
 
   C.log = new LogView(el.querySelector("#cn-log"), { follow: true });

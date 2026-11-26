@@ -22,10 +22,11 @@
 import { fmt } from "./api.js";
 import { icon } from "./icons.js";
 import { fixListHtml } from "./problems.js";
+import { slack } from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
-const ns = (v, d = 2) => (isNum(v) ? (v < 0 ? "−" : v > 0 ? "+" : "") + Math.abs(v).toFixed(d) : "—");
+const ns = (v) => slack(v);
 
 const KIND = {
   "reg-reg": { label: "register → register", short: "reg → reg", c: "var(--chart-1)" },
@@ -168,7 +169,7 @@ function pathHtml(d) {
   const end = b.end === "out" ? "output " : "register ";
   return "<section class='dx-sec dx-path'><div class='dx-k'>The worst path · " + esc(start + "→ " + end) +
       "<span class='dx-path-pins'>" + esc((p.startpoint || "") + " → " + (p.endpoint || "")) + "</span></div>" +
-    "<div class='dx-bud' role='img' aria-label='" + esc("Arrives at " + b.arrival.toFixed(2) + " ns, needed by " + b.required.toFixed(2) + " ns") + "'>" +
+    "<div class='dx-bud' role='img' aria-label='" + esc("Arrives at " + b.arrival.toFixed(3) + " ns, needed by " + b.required.toFixed(3) + " ns") + "'>" +
       "<div class='dx-bud-bar'>" + segs +
         "<span class='dx-bud-req' style='left:" + pct(b.required).toFixed(2) + "%' data-an-tip='" + esc("Needed by " + b.required.toFixed(3) + " ns: the clock period " +
           (b.period != null ? b.period : "") + " ns, minus " + reserve.toFixed(2) + " ns (output delay, setup, uncertainty)") + "'></span>" +

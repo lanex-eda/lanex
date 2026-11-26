@@ -658,6 +658,10 @@ body.theme-light .sr-k { color: var(--accent); }
 .sr-row { display: grid; grid-template-columns: 150px minmax(120px, 220px) minmax(110px, 170px) 64px minmax(0, 1fr) auto; column-gap: 14px; align-items: center;
   padding: 5px 12px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); cursor: pointer; font-size: 13px; }
 .sr-row:hover, .sr-row:focus-visible { background: var(--hover); outline: none; }
+.sr-row.sr-hrow { position: sticky; top: 0; z-index: 1; min-height: 32px; background: var(--bg-2); cursor: default;
+  font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); }
+.sr-row.sr-hrow:hover { background: var(--bg-2); }
+.sr-row.sr-hrow .sr-ms { text-align: right; }
 .sr-row.is-sel { background: var(--accent-soft); }
 .sr-v.is-ok, .sr-v.is-bad, .sr-v.is-warn, .sr-v.is-idle, .sr-v.is-run { display: inline-flex; align-items: center; gap: 8px; flex-wrap: nowrap;
   font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--text-muted); white-space: nowrap; }

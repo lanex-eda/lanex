@@ -81,7 +81,7 @@ def test_untouched_rows_pass_through_exactly(run_dir: Path) -> None:
     for label, key in (("Die area", "design__die__area"),
                        ("Core area", "design__core__area"),
                        ("Cell count", "design__instance__count"),
-                       ("Wirelength", "route__wirelength")):
+                       ("Routed wirelength", "route__wirelength")):
         if label in rows:
             assert rows[label]["value"] == m[key], f"{label} altered in display"
 

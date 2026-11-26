@@ -10,7 +10,7 @@
 // `__net:VPWR`, `__class:fill_cell`, `__iter:3`). LanEx only converts units
 // (W -> mW, V -> mV, ratio -> %) and never derives a new silicon number.
 
-import { localeNum } from "./intlcache.js";
+import { localeNum, localeDate, localeTime } from "./intlcache.js";
 
 // ---------- key anatomy ----------------------------------------------------
 
@@ -40,6 +40,144 @@ export function parseKey(key) {
     }
   }
   return { base: base.join("__"), mods };
+}
+
+// ---------- names -------------------------------------------------------------
+
+// The one list of metric names (rank 5 of the consistency plan): Analytics'
+// plain names, which Runs, studies, Compare, the reports and the server's
+// summary rows (history.run_summary) use too. Unknown keys fall back to the
+// raw key (experts recognise those; nothing is invented).
+export const METRIC_NAMES = {
+  "timing__setup__ws": "Worst setup slack",
+  "timing__setup__wns": "Worst negative setup slack (WNS)",
+  "timing__setup__tns": "Total negative setup slack (TNS)",
+  "timing__setup_vio__count": "Setup violations",
+  "timing__setup_r2r__ws": "Reg-to-reg setup slack",
+  "timing__setup_r2r_vio__count": "Reg-to-reg setup violations",
+  "timing__hold__ws": "Worst hold slack",
+  "timing__hold__wns": "Worst negative hold slack (WNS)",
+  "timing__hold__tns": "Total negative hold slack (TNS)",
+  "timing__hold_vio__count": "Hold violations",
+  "timing__hold_r2r__ws": "Reg-to-reg hold slack",
+  "timing__hold_r2r_vio__count": "Reg-to-reg hold violations",
+  "timing__unannotated_net__count": "Nets without parasitics",
+  "timing__unannotated_net_filtered__count": "Nets without parasitics (filtered)",
+  "timing__drv__floating__nets": "Floating nets",
+  "timing__drv__floating__pins": "Floating pins",
+  "clock__skew__worst_setup": "Worst clock skew (setup)",
+  "clock__skew__worst_hold": "Worst clock skew (hold)",
+  "design__max_slew_violation__count": "Max slew violations",
+  "design__max_cap_violation__count": "Max capacitance violations",
+  "design__max_fanout_violation__count": "Max fanout violations",
+  "design__die__area": "Die area",
+  "design__die__bbox": "Die box",
+  "design__core__area": "Core area",
+  "design__core__bbox": "Core box",
+  "design__instance__utilization": "Utilization",
+  "design__instance__utilization__stdcell": "Utilization (std cells)",
+  "design__instance__count": "Cell count",
+  "design__instance__area": "Cell area (with fill)",
+  "design__instance__count__stdcell": "Std cells",
+  "design__instance__area__stdcell": "Std-cell area",
+  "design__instance__count__macros": "Macros",
+  "design__instance__area__macros": "Macro area",
+  "design__instance__count__padcells": "Pad cells",
+  "design__instance__area__padcells": "Pad-cell area",
+  "design__instance__count__cover": "Cover cells",
+  "design__instance__area__cover": "Cover-cell area",
+  "design__instance__count__setup_buffer": "Setup-repair buffers",
+  "design__instance__count__hold_buffer": "Hold-repair buffers",
+  "design__instance__displacement__max": "Max placement displacement",
+  "design__instance__displacement__mean": "Mean placement displacement",
+  "design__instance__displacement__total": "Total placement displacement",
+  "design__io": "I/O pins",
+  "design__io__hpwl": "I/O half-perimeter wirelength",
+  "floorplan__design__io": "I/O pins (floorplan)",
+  "design__rows": "Placement rows",
+  "design__sites": "Placement sites",
+  "design__lint_error__count": "Lint errors",
+  "design__lint_warning__count": "Lint warnings",
+  "design__lint_timing_construct__count": "Timing constructs in RTL",
+  "design__inferred_latch__count": "Inferred latches",
+  "design__instance_unmapped__count": "Unmapped cells",
+  "synthesis__check_error__count": "Synthesis check errors",
+  "design__disconnected_pin__count": "Disconnected pins",
+  "design__critical_disconnected_pin__count": "Critical disconnected pins",
+  "design__lvs_error__count": "LVS errors",
+  "design__lvs_device_difference__count": "LVS device differences",
+  "design__lvs_net_difference__count": "LVS net differences",
+  "design__lvs_property_fail__count": "LVS property failures",
+  "design__lvs_unmatched_device__count": "LVS unmatched devices",
+  "design__lvs_unmatched_net__count": "LVS unmatched nets",
+  "design__lvs_unmatched_pin__count": "LVS unmatched pins",
+  "design__xor_difference__count": "XOR differences (Magic vs KLayout GDS)",
+  "design__power_grid_violation__count": "Power-grid violations",
+  "design__violations": "Design violations",
+  "magic__drc_error__count": "DRC errors (Magic)",
+  "magic__illegal_overlap__count": "Illegal overlaps (Magic)",
+  "klayout__drc_error__count": "DRC errors (KLayout)",
+  "route__drc_errors": "Routing DRC errors",
+  "route__antenna_violation__count": "Antenna violations",
+  "antenna__violating__nets": "Antenna-violating nets",
+  "antenna__violating__pins": "Antenna-violating pins",
+  "antenna_diodes_count": "Antenna diodes inserted",
+  "route__wirelength": "Routed wirelength",
+  "route__wirelength__estimated": "Estimated wirelength (placement)",
+  "route__wirelength__max": "Longest net",
+  "global_route__wirelength": "Global-route wirelength",
+  "global_route__vias": "Global-route vias",
+  "route__vias": "Vias",
+  "route__vias__singlecut": "Single-cut vias",
+  "route__vias__multicut": "Multi-cut vias",
+  "route__net": "Routed nets",
+  "route__net__special": "Special (power) nets",
+  "power__total": "Total power",
+  "power__internal__total": "Internal power",
+  "power__switching__total": "Switching power",
+  "power__leakage__total": "Leakage power",
+  "ir__drop__worst": "Worst IR drop",
+  "ir__drop__avg": "Average IR drop",
+  "ir__voltage__worst": "Worst supply voltage",
+  "design_powergrid__drop__worst": "Worst IR drop (power grid)",
+  "design_powergrid__drop__average": "Average voltage (filed by the tool as drop__average)",
+  "design_powergrid__voltage__worst": "Worst voltage (power grid)",
+  "flow__errors__count": "Flow errors",
+  "flow__warnings__count": "Flow warnings",
+  "flow__warnings__type_count": "Warning types",
+};
+
+// A metric's short name for a table head or a chart axis: the names above,
+// cut to what fits a column ("Setup slack", "Std-cell area", "Util").
+export const METRIC_SHORT = {
+  timing__setup__ws: "Setup slack",
+  timing__hold__ws: "Hold slack",
+  timing__setup__tns: "Setup TNS",
+  timing__hold__tns: "Hold TNS",
+  design__die__area: "Die area",
+  design__core__area: "Core area",
+  design__instance__area__stdcell: "Std-cell area",
+  design__instance__count__stdcell: "Std cells",
+  design__instance__utilization: "Util",
+  power__total: "Power",
+  route__wirelength: "Wirelength",
+  runtime: "Runtime",
+};
+// "Worst setup slack", or the raw key when LanEx has no plain name for it.
+export function metricName(key) {
+  if (key === "runtime") return "Runtime";
+  const { base, mods } = parseKey(key);
+  let l = METRIC_NAMES[base];
+  if (!l) return null;
+  if (mods.class) l += " · " + mods.class.replace(/_/g, " ");
+  if (mods.net) l += " · " + mods.net;
+  if (mods.iter !== undefined) l += " · iteration " + mods.iter;
+  if (mods.code) l += " · " + mods.code;
+  if (mods.corner) l += " · " + mods.corner;
+  return l;
+}
+export function metricShort(key) {
+  return METRIC_SHORT[key] || metricName(key) || key;
 }
 
 // ---------- numbers -----------------------------------------------------------
@@ -131,6 +269,8 @@ export function show(key, v, { compact = false } = {}) {
   const title = v === null || v === undefined ? "" : String(v);
   if (!isNum(v)) {
     if (u === "µm" && typeof v === "string" && /__bbox$/.test(base)) return { text: v, unit: u, title };
+    // A slack of ±infinity (reg-to-reg with no register pairs) is OpenSTA's "no path".
+    if (u === "ns" && nonFinite(v) && !(v === "NaN" || Number.isNaN(v))) return { text: NO_PATH_WORD, unit: "", title: title + " (OpenSTA: no path to time)" };
     return { text: num(v), unit: nonFinite(v) && u !== "ratio" ? u : "", title };
   }
   if (u === "W") { const r = si(v, "W"); return { text: r.text, unit: r.unit, title: title + " W" }; }
@@ -140,9 +280,12 @@ export function show(key, v, { compact = false } = {}) {
     return { text: sig(v, 6), unit: "V", title: title + " V" };
   }
   // A reg-to-reg slack of 1e30 is OpenSTA's "no path", not a number of ns.
-  if (u === "ns" && Math.abs(v) >= NO_PATH) return { text: "no path", unit: "", title: title + " (OpenSTA: no path to time)" };
+  if (u === "ns" && Math.abs(v) >= NO_PATH) return { text: NO_PATH_WORD, unit: "", title: title + " (OpenSTA: no path to time)" };
   if (u === "ratio") return { text: fixed(v * 100, 1, false), unit: "%", title: title + " (ratio)" };
-  if (u === "ns") return { text: signed(v, compact ? 2 : 3), unit: "ns", title: title + " ns" };
+  // Clock skew is tens of ps: LibreLane writes ns, every page shows ps.
+  if (isSkew(base)) return { text: skewText(v), unit: "ps", title: title + " ns" };
+  // Slack: three decimals everywhere (Runs, Flow, Verify, Analytics, studies).
+  if (u === "ns") return { text: signed(v, 3), unit: "ns", title: title + " ns" };
   if (compact && (u === "µm²" || u === "µm") && Math.abs(v) >= 100 && Math.abs(v) < 1e12) {
     return { text: fixed(Math.round(v), 0, true), unit: u, title: title + " " + u };
   }
@@ -190,6 +333,97 @@ export function signed(v, d = 3) {
   if (!isNum(v) || Math.abs(v) >= 1e12) return (isNum(v) && v > 0 ? "+" : "") + num(v);
   if (v === 0) return fixed(0, d, false);
   return (v > 0 ? "+" : "−") + fixed(Math.abs(v), d, false);
+}
+
+// ---------- slack, skew, sizes, durations, dates, clocks ---------------------------------
+// One formatter for each, so a number reads the same on every page.
+
+// OpenSTA's word for a slack it had no path to time (it writes 1e30).
+export const NO_PATH_WORD = "no path";
+
+// Slack in ns: signed, three decimals, U+2212 (+2.362, −0.170, 0.000). A
+// negative slack that would round to −0.000 keeps its digits (it fails).
+export function slack(v, d = 3) {
+  if (!isNum(v)) return "—";
+  if (Math.abs(v) >= 1e12) return NO_PATH_WORD;
+  if (v < 0 && Math.abs(v) < 0.5 * Math.pow(10, -d)) return "−" + Math.abs(v).toFixed(6);
+  return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+}
+
+const isSkew = (base) => /^clock__skew/.test(base);
+// A skew given in ns, shown in ps: "+105 ps", "−6.7 ps" (no unit in the text).
+export function skewText(vNs) {
+  if (!isNum(vNs)) return "—";
+  const ps = vNs * 1000;
+  return signed(ps, Math.abs(ps) >= 100 ? 0 : 1);
+}
+
+// 85 B, 9.3 kB, 1.2 MB, 7.5 GB: 1000-based, like Docker, the disk and a file manager.
+export function bytes(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "";
+  if (n < 1000) return Math.round(n) + " B";
+  const units = ["kB", "MB", "GB", "TB"];
+  let v = n, i = -1;
+  do { v /= 1000; i++; } while (v >= 1000 && i < units.length - 1);
+  return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + " " + units[i];
+}
+
+// A duration in seconds: "4.2 s", "55 s", "1 min 26 s", "2 h 5 min".
+export function dur(s) {
+  if (s == null || !Number.isFinite(s)) return "";
+  if (s < 10) return (Math.round(s * 10) / 10) + " s";
+  s = Math.round(s);
+  if (s < 60) return s + " s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + " min" + (s % 60 ? " " + (s % 60) + " s" : "");
+  return Math.floor(m / 60) + " h " + (m % 60) + " min";
+}
+
+// When something happened, one shape everywhere: "today 12:38 am",
+// "yesterday 09:10 pm", "15 Nov 12:38 am", and the year only when it isn't
+// this one ("3 Mar 2025 12:38 am"). The time is in the person's own clock style.
+export function when(t, now = new Date()) {
+  if (t == null || t === "") return "";
+  const d = t instanceof Date ? t : new Date(typeof t === "number" && t < 1e12 ? t * 1000 : t);
+  if (Number.isNaN(d.getTime())) return String(t);
+  const hm = localeTime(d, [], { hour: "2-digit", minute: "2-digit" });
+  const days = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+  if (days === 0) return "today " + hm;
+  if (days === 1) return "yesterday " + hm;
+  return localeDate(d, [], { day: "numeric", month: "short", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) }) + " " + hm;
+}
+// The same moment in full, for a hover: "Wed 25 Oct 2026, 10:37:12 pm".
+export function whenFull(t) {
+  if (t == null || t === "") return "";
+  const d = t instanceof Date ? t : new Date(typeof t === "number" && t < 1e12 ? t * 1000 : t);
+  if (Number.isNaN(d.getTime())) return String(t);
+  return localeDate(d, [], { weekday: "short", day: "numeric", month: "short", year: "numeric" }) + ", " + localeTime(d, [], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+// A date alone, with its year: "15 Nov 2026" (the share card, a report).
+export function dateText(t) {
+  const d = t instanceof Date ? t : new Date(t);
+  return Number.isNaN(d.getTime()) ? "" : localeDate(d, [], { day: "numeric", month: "short", year: "numeric" });
+}
+// How long ago, for a fact that ages (a scan, a check): "just now", "5 min ago",
+// "3 h ago", "yesterday", "4 days ago". `sec` is a Unix time in seconds.
+export function ago(sec, nowMs = Date.now()) {
+  if (!sec) return "";
+  const s = Math.max(0, nowMs / 1000 - sec);
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 129600) return Math.round(s / 3600) + " h ago";
+  const d = Math.round(s / 86400);
+  return d === 1 ? "yesterday" : d + " days ago";
+}
+
+// A clock period in ns as a frequency: "100 MHz", "125 MHz", "1.25 GHz".
+export function mhz(ns) {
+  const n = parseFloat(ns);
+  if (!(n > 0)) return "";
+  const f = 1000 / n;
+  // Four significant digits (clockfield's round4): 66.67 MHz, 1.25 GHz.
+  const t = (x) => { const p = Math.pow(10, 4 - Math.ceil(Math.log10(Math.abs(x) || 1))); return String(Math.round(x * p) / p).replace(/\.0+$/, ""); };
+  return f >= 1000 ? t(f / 1000) + " GHz" : (f >= 100 ? f.toFixed(0) : t(f)) + " MHz";
 }
 
 // ---------- corner sums ---------------------------------------------------------------
@@ -305,7 +539,8 @@ export function delta(key, v, ref, meta, { scale = null, dir = null } = {}) {
   const sign = d > 0 ? "+" : "−";
   const a = Math.abs(d);
   let absText;
-  if (u === "ns") absText = sign + fixed(a, a < 0.1 ? 3 : 2, false);
+  if (u === "ns" && isSkew(base)) { absText = sign + skewText(a).replace(/^[+−]/, ""); out.unit = "ps"; }
+  else if (u === "ns") absText = sign + fixed(a, 3, false);
   else if (u === "ratio") absText = sign + fixed(a * 100, 1, false) + " pt";
   else if (u === "W") {
     const st = scale && /W$/.test(scale.unit) ? scale : scaleOf(key, [v, ref]);
@@ -331,12 +566,7 @@ export function delta(key, v, ref, meta, { scale = null, dir = null } = {}) {
   out.cls = !dd ? "" : (d > 0) === (dd > 0) ? "is-better" : "is-worse";
   return out;
 }
-function durText(s) {
-  if (s < 60) return Math.round(s) + " s";
-  const m = Math.floor(s / 60), r = Math.round(s % 60);
-  if (m < 60) return m + " min" + (r ? " " + r + " s" : "");
-  return Math.floor(m / 60) + " h " + (m % 60) + " min";
-}
+const durText = (s) => dur(s);
 // The words for a delta's hover: "−0.95 ns, worse than the baseline (higher is better)".
 export function deltaWords(dl, against = "the baseline") {
   if (!dl) return "";

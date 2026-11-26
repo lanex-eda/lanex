@@ -525,7 +525,7 @@ check("metricfmt: one direction by base name, with LibreLane's 'unknown' kept", 
 
 check("metricfmt: one delta: Δ always, Δ% only where a ratio means something", () => {
   const ws = MF.delta("timing__setup__ws", 1.41, 2.362, null);
-  assert.equal(ws.absText, "−0.95"); assert.equal(ws.pctText, "", "never a percent of slack"); assert.equal(ws.cls, "is-worse");
+  assert.equal(ws.absText, "−0.952"); assert.equal(ws.pctText, "", "never a percent of slack"); assert.equal(ws.cls, "is-worse");
   const die = MF.delta("design__die__area", 7180, 8769, null);
   assert.equal(die.text, "−1,589 −18%"); assert.equal(die.cls, "is-better");
   assert.equal(MF.delta("design__die__area", 8769.2, 8769, null).same, true, "within 0.05 % is the same");
@@ -558,7 +558,7 @@ check("metricfmt: power, utilisation and slack read the same on every page", () 
   assert.equal(u.unit, "%");
   assert.equal(Number(u.text), Math.round(m.design__instance__utilization * 1000) / 10);
   assert.equal(MF.show("timing__setup__ws", 4.10025980329734).text, "+4.100");
-  assert.equal(MF.show("timing__setup__ws", 4.10025980329734, { compact: true }).text, "+4.10");
+  assert.equal(MF.show("timing__setup__ws", 4.10025980329734, { compact: true }).text, "+4.100", "slack is three decimals in a table too");
   assert.equal(MF.show("design__die__area", 7214.42, { compact: true }).text, "7,214");
   assert.equal(MF.show("design__die__area", 7214.42).text, "7,214.42", "compact only rounds in tables");
   // A table reads down one prefix: the largest value's.
@@ -825,7 +825,7 @@ check("compare: a delta says how far a number moved, and whether that is better"
   // The one delta (metricfmt.delta): Δ always, Δ% only where a ratio means
   // something (never slack); the unit is in the row label, once.
   const ws = cmp.deltaOf(4.1, 2.362, up, "ns");
-  assert.equal(ws.text, "+1.74"); assert.equal(ws.cls, "is-better");
+  assert.equal(ws.text, "+1.738"); assert.equal(ws.cls, "is-better");
   const area = cmp.deltaOf(10367.1, 8769, down, "µm²");
   assert.equal(area.text, "+1,598 +18%"); assert.equal(area.cls, "is-worse");
   assert.equal(cmp.deltaOf(0.001553, 0.001528, down, "", "power__total").text, "+0.025 +1.6%", "power: the row's prefix, and a percent");
@@ -857,7 +857,9 @@ check("study: a point's state in plain words, from its job or its run", () => {
   assert.equal(SMod.pointKey({ run: { ...done, verdict: { state: "warning", timing_miss: { ws: -0.1 } }, key_metrics: {} } }), "missed");
   const w = SMod.pointWords("failed", { run: { verdict: { state: "failed", stage: "placement" } }, stageLabel: () => "Placement", code: "DPL-0036" });
   assert.equal(w.word, "Failed at Placement"); assert.equal(w.detail, "DPL-0036");
-  assert.equal(SMod.pointWords("missed", { run: { key_metrics: { timing__setup__ws: -0.42 } } }).detail, "setup -0.42 ns");
+  assert.equal(SMod.pointWords("missed", { run: { key_metrics: { timing__setup__ws: -0.42 } } }).detail, "setup −0.420 ns");
+  // The server's own words, and a step number, read the same as Runs and the run bar.
+  assert.equal(SMod.pointWords("failed", { run: { verdict: { state: "failed", stage: "cts", label: "Failed at step 35" } } }).word, "Failed at Clock tree (step 35)");
   assert.equal(SMod.clockText(8), "8 ns (125 MHz)");
 });
 check("study: fail fast fires on two of the first three failing the same way, never on timing missed", () => {
@@ -1068,6 +1070,139 @@ check("verdict: the server's words win, an unknown state is amber, never a guess
   assert.equal(VD.verdictOfRun({ verdict: { state: "brand-new" } }).cls, "warn");
   assert.equal(VD.verdictOfRun({ success: false }).cls, "fail");
   assert.equal(VD.verdictOfRun({ success: true }, { live: true }).cls, "run");
+});
+check("Z2 numbers: one formatter for slack, skew, sizes, durations, dates and clocks", () => {
+  // Slack: three decimals and U+2212 on every page; OpenSTA's 1e30 and +inf are "no path".
+  assert.equal(MF.slack(2.3621), "+2.362"); assert.equal(MF.slack(-0.17), "−0.170"); assert.equal(MF.slack(0), "0.000");
+  assert.equal(MF.slack(-0.0002), "−0.000200", "a failing slack never rounds to −0.000");
+  assert.equal(MF.slack(1e30), "no path"); assert.equal(MF.show("timing__setup_r2r__ws", "Infinity").text, "no path");
+  assert.equal(MF.show("timing__setup__ws", 2.3621, { compact: true }).text, "+2.362", "Runs and studies too");
+  // Skew: LibreLane's ns, shown in ps, with its delta in ps.
+  assert.deepEqual([MF.show("clock__skew__worst_setup", 0.105).text, MF.show("clock__skew__worst_setup", 0.105).unit], ["+105", "ps"]);
+  assert.equal(MF.show("clock__skew__worst_hold", -0.0067).text, "−6.7");
+  assert.equal(MF.delta("clock__skew__worst_setup", 0.03, 0.012, null).unit, "ps");
+  // Sizes: 1000-based, kB.
+  assert.equal(MF.bytes(85), "85 B"); assert.equal(MF.bytes(9300), "9.3 kB"); assert.equal(MF.bytes(1.2e6), "1.2 MB"); assert.equal(MF.bytes(7.52e9), "7.5 GB");
+  // Durations.
+  assert.equal(MF.dur(4.21), "4.2 s"); assert.equal(MF.dur(86), "1 min 26 s"); assert.equal(MF.dur(7500), "2 h 5 min");
+  // Dates: today/yesterday, then the date, the year only when it isn't this one; always the time.
+  const now = new Date(2026, 10, 26, 15, 0);
+  assert.match(MF.when(new Date(2026, 10, 26, 9, 5), now), /^today \S/);
+  assert.match(MF.when(new Date(2026, 10, 25, 9, 5), now), /^yesterday /);
+  assert.doesNotMatch(MF.when(new Date(2026, 9, 3, 9, 5), now), /2026|,/);
+  assert.match(MF.when(new Date(2025, 2, 3, 9, 5), now), /2025/);
+  assert.equal(MF.ago(Date.now() / 1000 - 30), "just now"); assert.equal(MF.ago(Date.now() / 1000 - 2 * 86400), "2 days ago");
+  // Clocks.
+  assert.equal(MF.mhz(10), "100 MHz"); assert.equal(MF.mhz(15), "66.67 MHz"); assert.equal(MF.mhz(0.8), "1.25 GHz");
+  // One name list: Runs, studies, Compare and Analytics say the same name.
+  assert.equal(MF.metricName("design__instance__area__stdcell"), "Std-cell area");
+  assert.equal(MF.metricShort("timing__setup__ws"), "Setup slack");
+  assert.equal(MF.metricName("timing__setup__ws__corner:max_ss_100C_1v60"), "Worst setup slack · max_ss_100C_1v60");
+  // No module keeps its own slack, size or date formatter.
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["timing.js", "verify.js", "verify-diag.js", "problems.js", "sharecard.js", "layout.js", "reportcard.js"]) {
+    assert.doesNotMatch(src(f), /Math\.abs\((v|a|d|ws|s)\)\.toFixed\(2\)/, f + " formats a slack by itself");
+  }
+  for (const f of ["runs.js", "runfiles.js", "uploader.js"]) assert.doesNotMatch(src(f), /1048576\)\.toFixed|" KB"/, f + " formats a size by itself");
+  for (const f of ["runbar.js", "runs.js", "toolsys.js", "palettemodel.js"]) assert.doesNotMatch(src(f), /toLocaleDateString|localeDate\(d/, f + " formats a date by itself");
+  assert.doesNotMatch(src("layout.js"), /\.toLocaleString\(\)/, "a bare toLocaleString() groups by the PC's locale");
+});
+
+check("Z2 menus: every menu, card and drawer is on the overlay stack", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["layout.js", "ide/main.js", "ide/waves.js", "guide.js", "console.js", "term.js"]) {
+    assert.match(src(f), /from "\.\.?\/overlay\.js"/, f + " opens its layers on the stack");
+  }
+  // Layout's menus are the app's: overlay.js wireMenu and the .menu look with icons.
+  assert.doesNotMatch(src("layout.js"), /^function wireMenu/m);
+  assert.match(src("layout.js"), /class='menu-item'/);
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  for (const id of ["lx-open-menu", "lx-save-menu", "lx-cmd-menu", "lx-ovl-menu"]) assert.match(html, new RegExp("class=\"menu lx-menu[^\"]*\" id=\"" + id + "\""), id);
+  // No menu keeps its own outside-press or Esc handler beside the stack.
+  assert.doesNotMatch(src("ide/main.js"), /document\.addEventListener\("pointerdown", \(e\) => \{ if \(!menu\.hidden/);
+  assert.doesNotMatch(src("ide/waves.js"), /if \(!el\.menu\.hidden && !el\.menu\.contains/);
+  assert.doesNotMatch(src("guide.js"), /function startKey|removeEventListener\("keydown", onKey/);
+  // wireMenu fills a menu before it opens and hands the picked item over.
+  assert.match(src("overlay.js"), /export function wireMenu\(btn, menu, \{ onOpen = null, onPick = null \}/);
+  // A search box with text keeps its Esc (it clears first).
+  assert.match(src("overlay.js"), /input\[type=search\]"\) && tg\.value\) return/);
+});
+check("Z2 charts: every ECharts chart follows a theme switch; the clock histogram is the one histogram", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["timing.js", "compare.js", "sweeps.js", "analytics.js", "layout.js"]) {
+    const s = src(f);
+    const inits = (s.match(/echarts\.init\(/g) || []).length;
+    assert.ok(inits > 0, f);
+    assert.equal((s.match(/followTheme\(/g) || []).length >= inits, true, f + ": every echarts.init redraws on a theme switch");
+  }
+  assert.match(src("theme-echarts.js"), /addEventListener\("g:theme_changed"/);
+  assert.match(src("theme.js"), /dispatchEvent\(new CustomEvent\("g:theme_changed"/);
+  assert.match(src("layout.js"), /histogramOption\(\{ edges, counts, unit: "ns", what: "flip-flops", xname: "clock arrival"/);
+  assert.match(src("layoutkey.js"), /cv\.title = cv\._histWords/, "the heat-map histogram has a hover per bar");
+});
+const MRw = await import(toUrl(resolve(MOD, "metricrows.js")));
+check("Z2 every metric: Analytics and Compare draw one row and one filter", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["analytics.js", "compare.js"]) assert.match(src(f), /from "\.\/metricrows\.js"/, f);
+  // The row: plain name, the key in mono with its corners, unit and direction.
+  const h = MRw.nameHtml({ key: "timing__setup__ws", count: MRw.countWords(["timing__setup__ws__corner:a", "timing__setup__ws__corner:b"]), unit: "ns", dir: 1 });
+  assert.match(h, /<span class='an-mlabel'>Worst setup slack<\/span>.*<small class='mr-u'[^>]*>ns ↑<\/small><code>timing__setup__ws<span class='an-mcount'> · 2 corners<\/span><\/code>/);
+  assert.match(MRw.nameHtml({ key: "timing__setup__ws__corner:max_ss_100C_1v60", kid: true }), /corner:max_ss_100C_1v60/);
+  // One reading of a problem.
+  assert.equal(MRw.statusOf("route__drc_errors", 3), "fail");
+  assert.equal(MRw.statusOf("design__max_slew_violation__count", 2), "warn");
+  assert.equal(MRw.statusOf("design__max_slew_violation__count", 2, () => true), "fail", "critical fails");
+  assert.equal(MRw.statusOf("timing__setup__ws", -0.1), "fail");
+  assert.equal(MRw.statusOf("design__die__area", 9000), "");
+  // The filter: four with counts; Changed and Worse need a run to compare with.
+  const f = MRw.filterHtml({ all: 94, problems: 1, changed: 39, worse: 14 }, "changed");
+  assert.match(f, /class='rn-seg mr-filter'/);
+  assert.match(f, /All <span class='rn-n'>94<\/span>.*Problems <span class='rn-n'>1<\/span>.*is-on' data-mf='changed' aria-pressed='true'.*Changed <span class='rn-n'>39/);
+  assert.match(MRw.filterHtml({ all: 3 }, "all", { noRef: true }), /data-mf='worse' aria-pressed='false' disabled/);
+  // The table precision, and a search on the plain name.
+  assert.equal(MRw.valueShown("design__die__area", 8769.48).text, "8,769");
+  assert.equal(MRw.matches("design__instance__area__stdcell", "std-cell"), true);
+});
+const EM = await import(toUrl(resolve(MOD, "empty.js")));
+check("Z2 empty states: one block and one word table on every page", () => {
+  const np = EM.pageEmpty("noProject", { icon: "chart", body: { noProject: "Analytics shows it.", noRuns: "Run it." } });
+  assert.match(np, /<div class='empty'><span class='ico'>.*<h3>Open a project first<\/h3><p>Analytics shows it\.<\/p><button class='btn btn-primary' data-go='setup'>Go to Setup<\/button><\/div>/);
+  // No Run button to press in node: "No runs yet" falls back to Setup rather than a dead Run.
+  assert.match(EM.pageEmpty("noRuns", { body: "x" }), /<h3>No runs yet<\/h3>.*Go to Setup/);
+  assert.match(EM.pageEmpty("runGone"), /This run&#39;s folder is gone/);
+  assert.doesNotMatch(EM.pageEmpty("noProject", { inner: true }), /^<div/, "inner: the block's content only");
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["analytics.js", "verify.js", "layout.js", "runs.js", "compare.js", "flow.js", "cells.js", "ide/main.js"]) {
+    assert.match(src(f), /from "\.\.?\/empty\.js"/, f + " draws its empty state with empty.js");
+  }
+  // The results pages turn their run-bar actions off while there is no run.
+  for (const f of ["analytics.js", "verify.js", "layout.js"]) assert.match(src(f), /setRunBarActions\(/, f);
+  assert.doesNotMatch(src("ide/main.js"), /<h3>No project open|No project open\. Open/);
+  assert.doesNotMatch(src("flow.js"), /: "No run yet"\)/, "Flow's hero takes its words from the table");
+});
+
+check("Z2 verdict: one failure sentence and one set of check words on every page", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  // Where a run failed: the stage by its flow name, the step in brackets.
+  assert.equal(VD.failedWhere({ state: "failed", stage: "cts", label: "Failed at step 35" }), "Failed at Clock tree (step 35)");
+  assert.equal(VD.failedWhere({ state: "failed", stage: "placement" }), "Failed at Placement");
+  assert.equal(VD.failedWhere({ state: "failed", label: "Failed at Clock tree (step 35)", stage: "cts" }), "Failed at Clock tree (step 35)", "the server's sentence stands");
+  assert.equal(VD.failedWhere({ state: "failed", label: "2 checks failed", stage: "signoff" }), "2 checks failed", "a finished run whose checks failed is not 'failed at Sign-off'");
+  assert.equal(VD.failedWhere({ state: "failed", label: "Failed at step 4" }), "Failed at step 4");
+  assert.equal(VD.verdictOfRun({ verdict: { state: "failed", stage: "routing", label: "Failed at step 44" } }).word, "Failed at Routing (step 44)");
+  // Stopped is amber everywhere.
+  assert.equal(VD.runVerdict("stopped").cls, "warn");
+  // Check words: Verify's, and verify-model's STATUS reads them.
+  assert.deepEqual(["pass", "fail", "warn", "info", "skipped", "not_run"].map((s) => VD.checkVerdict(s).word),
+    ["Passed", "Failed", "Warning", "Info", "Turned off", "Not checked"]);
+  for (const f of ["runs.js", "studymodel.js", "sweeps.js", "queue.js", "runend.js", "problems.js", "verify-model.js", "analytics.js"]) {
+    assert.match(src(f), /from "\.\/verdict\.js"/, f + " takes its words from verdict.js");
+  }
+  // The lowercase words are gone: the run pill, the Runs checks column, the queue.
+  assert.doesNotMatch(src("runend.js"), /textContent = "(idle|done|stopped)"/);
+  assert.doesNotMatch(src("runs.js"), /'rn-clean'>clean</);
+  assert.doesNotMatch(src("queue.js"), /"Finished" :/);
+  assert.doesNotMatch(src("verify.js"), /"Failing"|"PASS"/);
 });
 
 const PREFS_MOD = await import(toUrl(resolve(MOD, "prefs.js")));
@@ -1506,7 +1641,7 @@ check("tools: problems carry their fix; image and PDK drift are told apart", () 
   Object.assign(info.container, { ready: true });
   const img = toolsModule.attentionItems(info).find((x) => x.key === "image");
   assert.equal(img.fix.id, "btn-pull-image");
-  assert.match(img.detail, /~2\.9 GB/);
+  assert.match(img.detail, /~3\.1 GB/, "1000-based like docker and every other size in LanEx");
 });
 
 check("tools: the Local tools engine judges native tools, not the image", () => {
@@ -1584,7 +1719,9 @@ check("analytics: counts stay integers, units come from the metric", () => {
 check("analytics: OpenSTA's 1e30 'no path' sentinel and +inf are never spelled out", () => {
   // F3 (review R3): "no path", the words OpenSTA's 1e30 stands for, not "+1.00e+30 ns".
   assert.equal(AM.show("timing__setup_r2r__ws", 1e30).text, "no path");
-  assert.equal(AM.show("timing__setup_r2r__ws", "Infinity").text, "\u221e");
+  // Z2: one word for a slack with nothing to time, never "∞ ns".
+  assert.equal(AM.show("timing__setup_r2r__ws", "Infinity").text, "no path");
+  assert.equal(AM.show("timing__setup_r2r__ws", "Infinity").unit, "");
   assert.equal(AM.num(null), "\u2014", "absent stays an em-dash, never 0");
 });
 
@@ -1600,7 +1737,8 @@ check("analytics: metric keys split into base + modifiers", () => {
   assert.deepEqual(AM.parseKey("timing__setup__ws__corner:max_ss_100C_1v60"), { base: "timing__setup__ws", mods: { corner: "max_ss_100C_1v60" } });
   assert.deepEqual(AM.parseKey("flow__warnings__count:DRT-0349"), { base: "flow__warnings__count", mods: { code: "DRT-0349" } });
   assert.deepEqual(AM.parseKey("design__rows:unithd"), { base: "design__rows", mods: { code: "unithd" } });
-  assert.equal(AM.cornerShort("nom_tt_025C_1v80"), "TT 25 \u00b0C 1.80 V \u00b7 nom RC");
+  // Z2: one corner namer (cornergrid.js cornerWords) on every page.
+  assert.equal(AM.cornerShort("nom_tt_025C_1v80"), "typical process, 25 \u00b0C, 1.80 V, nominal wire RC");
   assert.equal(AM.cornerShort("odd-corner"), "odd-corner", "unknown corner names are shown raw");
 });
 
@@ -2272,7 +2410,7 @@ check("run report card: one summary for the toast, the title and the notificatio
   const rs = { steps: [{ runtime_s: 60, changed: { timing__setup__ws: 0.31, design__die__bbox: "0.0 0.0 57.0 68.2" } }, { runtime_s: 1, changed: {} }] };
   const clean = RC.runSummary({ tag: "try-2", design: "spm", rx: { kind: "clean" }, vf: null, rs });
   assert.equal(clean.title, "spm · try-2 is clean");
-  assert.equal(clean.body, "setup +0.31 ns · 57 × 68.2 µm · 1 min 1 s", "the numbers, not just 'done'");
+  assert.equal(clean.body, "setup +0.310 ns · 57 × 68.2 µm · 1 min 1 s", "the numbers, not just 'done'");
   const halted = RC.runSummary({ tag: "t", rx: { kind: "halted", step: { id: "OpenROAD.GlobalPlacement" },
     card: { title: "Placement ran out of room", plain: "The cells need 207 % of the core area, so they can't all be placed. The die is fixed." } }, rs });
   assert.match(halted.title, /failed at OpenROAD\.GlobalPlacement/);
@@ -2290,7 +2428,7 @@ check("one verdict: Verify and Flow say 'Clean', never 'tape-out ready'", () => 
   assert.equal(v.title, "Clean");
   assert.equal(v.short, "clean");
   const vjs = readFileSync(resolve(MOD, "verify.js"), "utf8");
-  assert.ok(/V\.verdictCopy\(_rep\)/.test(vjs) && !/Tape-out ready/.test(vjs), "Verify words its verdict through verify-model.js");
+  assert.ok(/V\.verdictCopy\(_rep[,)]/.test(vjs) && !/Tape-out ready/.test(vjs), "Verify words its verdict through verify-model.js");
   const blocked = VM.verdictCopy({ verdict: { state: "blocked", blocker_ids: ["setup", "hold"], warning_ids: [], missing_core: [], total: 23 },
     flow_state: { state: "deferred_errors" }, checks: [{ id: "setup", name: "Setup" }, { id: "hold", name: "Hold" }] });
   assert.equal(blocked.short, "2 checks failed");
@@ -2347,7 +2485,7 @@ check("status bar badge: counts and colour follow the shared run verdict", () =>
   assert.deepEqual(PX.badgeOf({ state: "failed", label: "2 checks failed", blockers: 2, warnings: 1 }, many), { tone: "fail", text: "2 checks failed" });
   assert.deepEqual(PX.badgeOf({ state: "passed", label: "Clean, 1 warning", blockers: 0, warnings: 1 }, many), { tone: "warn", text: "1 warning" });
   assert.equal(PX.badgeOf({ state: "passed", label: "Clean", blockers: 0, warnings: 0 }, many), null, "a clean run shows no badge");
-  assert.deepEqual(PX.badgeOf({ state: "warning", label: "Finished: timing misses", timing_miss: { kind: "setup" }, warnings: 1 }, many), { tone: "warn", text: "Timing misses" });
+  assert.deepEqual(PX.badgeOf({ state: "warning", label: "Finished: timing misses", timing_miss: { kind: "setup" }, warnings: 1 }, many), { tone: "warn", text: "Timing missed" });
   assert.equal(PX.badgeOf({ state: "stopped", label: "Stopped" }, many), null);
   assert.deepEqual(PX.badgeOf(null, { counts: { fail: 0, warn: 2 } }), { tone: "warn", text: "2 warnings" });
 });
@@ -3271,7 +3409,7 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.equal(rows.Die, "96.6 × 107.3 µm");
     assert.equal(rows["Logic cells"], "324 · 64 flip-flops");
     assert.equal(rows.Utilisation, "63 %");
-    assert.equal(rows.Setup, "WNS +4.10 ns · TNS 0.00");
+    assert.equal(rows.Setup, "WNS +4.100 ns · TNS 0.000");
     assert.equal(rows["Reg→reg Fmax"], "343 ss · 684 tt · 1035 ff MHz");
     assert.equal(rows.Checks, "DRC 0 · LVS match · antenna 0");
     assert.equal(d.word, "CLEAN");
@@ -4056,7 +4194,7 @@ await checkAsync("toasts: the Undo toast stays outside the cap and clear(); the 
   const AMf = await import(toUrl(resolve(MOD, "analytics-model.js")));
   const MPf = await import(toUrl(resolve(MOD, "macro-place.js")));
   // The number a delta text stands for, in base units, given the unit it reads in.
-  const FACTOR = { W: 1, mW: 1e-3, "µW": 1e-6, nW: 1e-9, pW: 1e-12, V: 1, mV: 1e-3, ns: 1, "µm²": 1, "µm": 1, "": 1 };
+  const FACTOR = { W: 1, mW: 1e-3, "µW": 1e-6, nW: 1e-9, pW: 1e-12, V: 1, mV: 1e-3, ns: 1, ps: 1e-3, "µm²": 1, "µm": 1, "": 1 };
   const valueOf = (txt, unit) => Number(txt.replace("−", "-").replace(/,/g, "").replace(/[^\d.+-].*$/, "")) * FACTOR[unit];
   check("F3 compare: a power delta reads in its row's prefix (0.500 mW -> 2.000 mW is +1.500, not +1,500.0)", () => {
     const k = "power__total", vals = [0.0005, 0.002];

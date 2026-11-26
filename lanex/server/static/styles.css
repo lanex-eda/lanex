@@ -703,3 +703,30 @@ body.density-compact .steps-3 { margin-bottom: var(--s-4); }
 .diagram-body.muted { background: transparent; padding: var(--s-2); }
 .diagram-actions { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
 .diagram-actions .btn { padding: 2px 10px; font-size: var(--t-sm); }
+
+/* ---- One table standard (consistency plan 1.1): the Runs table's head and
+   cells, for every data table. A mono-caps head with the unit as a muted
+   <small>, numbers right-aligned in tabular mono, 36 to 42 px rows, and the
+   head sticky inside its scroller. table.data-table outranks a table's own
+   single-class rules, so a page keeps only what is its own (widths, tints). */
+table.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+table.data-table th, table.data-table td {
+  padding: 9px 12px; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  text-align: left; vertical-align: middle;
+}
+table.data-table tbody tr:last-child > * { border-bottom: 0; }
+table.data-table thead th {
+  height: 36px; padding-top: 0; padding-bottom: 0;
+  background: var(--bg-2); border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-muted); white-space: nowrap;
+}
+table.data-table thead th small { font-size: 10.5px; font-weight: 500; letter-spacing: 0; text-transform: none; color: inherit; opacity: 0.75; }
+table.data-table th.is-num, table.data-table td.is-num { text-align: right; }
+table.data-table td.is-num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text-strong); white-space: nowrap; }
+table.data-table tbody th[scope=row] { font-weight: 400; }
+/* Sticky inside a scroller of its own (a page-level sticky head would slide under the page band). */
+:is(.fs-tablewrap, .tx-tscroll, .cmp-scroll, .sw-res-wrap) > table.data-table thead th { position: sticky; top: 0; z-index: 2; }
+/* A source button shows on the row you point at (Verify's rule), not on every row. */
+table.data-table tbody tr:not(:hover):not(:focus-within) .prov-btn { visibility: hidden; }
+@media (hover: none) { table.data-table tbody tr .prov-btn { visibility: visible; } }

@@ -19,8 +19,10 @@ import { api, fmt } from "./api.js";
 import { icon } from "./icons.js";
 import { toast } from "./toast.js";
 import { histogramOption } from "./barchart.js";
+import { followTheme } from "./theme-echarts.js";
 import { renderFileText } from "./fileview.js";
 import { cornerGridHtml, cornerWords, wireGridKeys } from "./cornergrid.js";
+import { slack as mfSlack } from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 // The time unit, from the payload (controller/timing.py TIME_UNIT; LibreLane's
@@ -60,12 +62,8 @@ function termTip(word) {
 }
 
 // A slack: signed, 3 decimals; a failure never rounds to 0.
-export function fmtSlack(v, d = 3) {
-  if (!isNum(v)) return "—";
-  if (Math.abs(v) >= 1e12) return "no path";
-  if (v < 0 && Math.abs(v) < 0.0005) return "−" + Math.abs(v).toFixed(6);
-  return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
-}
+// The one slack formatter (metricfmt.js), under the name this module exports.
+export function fmtSlack(v, d = 3) { return mfSlack(v, d); }
 
 const n3 = (v) => (isNum(v) ? v.toFixed(3) : "");
 
@@ -103,11 +101,21 @@ const ROW_H = 34;
 
 // The section's host; verify.js calls this whenever the run, the baseline or
 // the verify payload changes.
+// Another page (Analytics' corner grid) asks for one corner's paths: now,
+// when this run's explorer is up, else when it next draws.
+let _want = null;
+export function pickCorner(tag, kind, corner) {
+  if (S.tag === tag && S.rep && document.getElementById("vf-tx")?.isConnected) {
+    S.kind = kind; S.corner = corner; S.bin = null; S.sel = null; loadList();
+  } else _want = { tag, kind, corner };
+}
+
 export async function renderTimingExplorer({ tag, base, rep }) {
   const host = document.getElementById("vf-tx");
   if (!host) return;
   const runChanged = tag !== S.tag;
   if (runChanged) { S.corner = null; S.sel = null; S.bin = null; S.q = ""; S.only = ""; S.detail = null; }
+  if (_want && _want.tag === tag) { S.kind = _want.kind; S.corner = _want.corner; S.bin = null; S.sel = null; _want = null; }
   S.tag = tag; S.base = base || ""; S.rep = rep;
   wire(host);
   const t = (rep && rep.details && rep.details.timing) || {};
@@ -325,7 +333,8 @@ async function drawHist() {
   const ml = opt.series && opt.series[0] && opt.series[0].markLine;
   if (ml) ml.label = { show: false };
   let chart = window.echarts.getInstanceByDom(node);
-  if (!chart) chart = window.echarts.init(node);
+  // Drawn with this theme's tokens: a theme switch draws it again.
+  if (!chart) { chart = window.echarts.init(node); followTheme(chart, () => drawHist()); }
   chart.setOption(opt, true);
   chart.off("click");
   chart.on("click", (p) => {
@@ -450,7 +459,7 @@ export function pathDetailHtml(p) {
     budgetHtml(p) +
     "<div class='tx-sums'>" + sumHtml(hold ? "Must arrive after" : "Needed by", p.required, p.required_terms, "is-req") +
       sumHtml("Arrives at", p.arrival, p.arrival_terms, "is-arr") + "</div>" +
-    "<div class='tx-tscroll'><table class='tx-table'><thead><tr><th>Pin</th><th><span class='sr-only'>Edge</span></th><th class='n'>Fanout</th><th class='n'>Cap <small>fF</small></th>" +
+    "<div class='tx-tscroll'><table class='data-table tx-table'><thead><tr><th>Pin</th><th><span class='sr-only'>Edge</span></th><th class='n'>Fanout</th><th class='n'>Cap <small>fF</small></th>" +
       "<th class='n'>Slew <small>" + U + "</small></th><th class='n'>Incr <small>" + U + "</small></th><th class='n'>Arrival <small>" + U + "</small></th></tr></thead><tbody>" +
       foldRow("launch", p.launch || {}, scale) + stageRows((p.data && p.data.rows) || [], scale) + foldRow("capture", p.capture || {}, scale) +
     "</tbody></table></div>" +

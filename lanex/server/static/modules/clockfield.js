@@ -13,6 +13,7 @@
 //   mountClockField(input, {unitEl, otherEl, onCommit})
 
 import { safeStorage } from "./state.js";
+import { mhz } from "./metricfmt.js";
 
 const KEY = "ll.clockUnit";
 
@@ -39,12 +40,8 @@ export function parseClock(text, unit = "ns") {
 const trim = (x) => String(round4(x)).replace(/\.0+$/, "");
 
 // "100 MHz" / "1.25 GHz" for a period in ns.
-export function freqText(ns) {
-  const n = parseFloat(ns);
-  if (!(n > 0)) return "";
-  const f = 1000 / n;
-  return f >= 1000 ? trim(f / 1000) + " GHz" : (f >= 100 ? f.toFixed(0) : trim(f)) + " MHz";
-}
+// The one period-to-frequency formatter (metricfmt.mhz), under this module's name.
+export function freqText(ns) { return mhz(ns); }
 
 export function periodText(ns) {
   const n = parseFloat(ns);

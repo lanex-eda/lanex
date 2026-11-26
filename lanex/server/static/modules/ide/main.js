@@ -14,6 +14,9 @@ import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
 import { applyZoom, currentZoom, isAutoZoom } from "../zoom.js";
 import { getPref } from "../prefs.js";
+import { when as MFwhen } from "../metricfmt.js";
+import { emptyHtml, EMPTY_WORDS } from "../empty.js";
+import { openLayer, closeLayer, isLayerOpen } from "../overlay.js";
 import { refreshAction, conflictKind, lineDiff, isConfigFile } from "./filesync.js";
 import { addProjectFiles } from "../addfiles.js";
 import { initNav, noteRecent, declHover, refreshIndexStatus, quickOpen, pushHere } from "./nav.js";
@@ -253,7 +256,7 @@ function wireNavigation() {
     setPanel, note, appendLog, grow: () => growPanelFor(),
     scrollLogEnd: () => { const el = document.getElementById("ide-log"); if (el) el.scrollTop = el.scrollHeight; },
     showWave: (vcd, failTime, tb) => showWaveAt(vcd, failTime, tb),
-    setBusy: (on) => { byId("ide-sim", (b) => { b.disabled = !!on || !!state.simRunning; }); byId("ide-sim-pick", (b) => { b.disabled = !!on || !!state.simRunning; }); byId("ide-sim-stop", (b) => { b.hidden = !on && !state.simRunning; }); },
+    setBusy: (on) => { byId("ide-sim", (b) => { b.disabled = !!on || !!state.simRunning || !state.designDir; }); byId("ide-sim-pick", (b) => { b.disabled = !!on || !!state.simRunning || !state.designDir; }); byId("ide-sim-stop", (b) => { b.hidden = !on && !state.simRunning; }); },
     onBatchDone: (rows) => {
       state.lastBatch = { at: Date.now(), rows: rows.map((r) => ({ tb: r.tb, state: r.state })) };
       recordRtlStatus();
@@ -605,7 +608,7 @@ async function loadTree() {
   if (!tree) return;
   if (!state.designDir) {
     state.files = [];
-    tree.innerHTML = "<p class='muted'>No project open. Open or create one on the Setup tab.</p>";
+    tree.innerHTML = "<p class='muted'>Open a project first: its files appear here.</p>";
     renderStart();
     return;
   }
@@ -811,8 +814,7 @@ function fileMenu(rel, anchor, ev) {
     menu.className = "ide-sim-menu ide-file-menu";
     menu.setAttribute("role", "menu");
     document.querySelector(".ide-side")?.appendChild(menu);
-    menu.addEventListener("keydown", (e) => { if (e.key === "Escape") { menu.hidden = true; } });
-    document.addEventListener("pointerdown", (e) => { if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true; });
+    // Esc, arrows, an outside press and focus return: the overlay stack's (overlay.js).
   }
   const mods = Object.entries(state.moduleFiles || {}).filter(([, abs]) => abs === f.abspath).map(([m]) => m);
   const hdl = /\.s?v$/i.test(rel);
@@ -833,7 +835,7 @@ function fileMenu(rel, anchor, ev) {
   items.push(["delete", "Delete", "Del"]);
   menu.innerHTML = "<div class='ism-h'>" + fmt.escape(rel) + "</div>" +
     items.map(([k, label, key]) => (k === "rename" ? "<div class='ism-sep'></div>" : "") +
-      "<button data-fm='" + fmt.escape(k) + "'" + (k === "delete" ? " class='is-danger'" : "") + (k === "-" ? " disabled" : "") + ">" + fmt.escape(label) +
+      "<button role='menuitem' data-fm='" + fmt.escape(k) + "'" + (k === "delete" ? " class='is-danger'" : "") + (k === "-" ? " disabled" : "") + ">" + fmt.escape(label) +
       (key ? "<span class='ism-key'>" + key + "</span>" : "") + "</button>").join("");
   menu.hidden = false;
   const side = menu.parentElement.getBoundingClientRect();
@@ -843,11 +845,13 @@ function fileMenu(rel, anchor, ev) {
   menu.style.left = "8px";
   menu.style.right = "8px";
   menu.style.top = Math.min(y + 2, menu.parentElement.clientHeight - menu.offsetHeight - 8) + "px";
-  menu.querySelector("button")?.focus();
+  if (isLayerOpen(menu)) closeLayer(menu, "replaced");
+  menu.hidden = false;
+  openLayer(menu, { kind: "menu", owner: anchor, onClose: () => { menu.hidden = true; } });
   menu.onclick = async (e) => {
     const b = e.target.closest("[data-fm]");
     if (!b || b.disabled) return;
-    menu.hidden = true;
+    closeLayer(menu);
     const k = b.dataset.fm;
     if (k.startsWith("top:")) await makeTop(k.slice(4));
     else if (k === "in" || k === "out") await setBuilt(f, k === "in");
@@ -1180,7 +1184,7 @@ async function restoreDraft(t) {
   let d = null;
   try { d = JSON.parse(localStorage.getItem(DRAFT_PREFIX + t.abs) || "null"); } catch (_e) { d = null; }
   if (!d || typeof d.text !== "string" || d.text === t.saved) { if (d) dropDraft(t.abs); return; }
-  const when = new Date(d.at || Date.now()).toLocaleString();
+  const when = MFwhen(d.at || Date.now());
   if (d.base === textHash(t.saved)) {
     // The file is exactly as it was when the edits were made: nothing to lose.
     t.text = d.text;
@@ -1215,13 +1219,18 @@ function autoOpen() {
 function renderStart() {
   const el = document.getElementById("ide-start");
   if (!el) return;
+  // Check syntax and Simulate act on a project: off while none is open.
+  const none = !state.designDir;
+  byId("ide-lint", (b) => { if (!state.linting) b.disabled = none; });
+  document.querySelector("#ide-diags [data-pb='lint']")?.toggleAttribute("disabled", none && !state.linting);
+  for (const id of ["ide-sim", "ide-sim-pick"]) byId(id, (b) => { if (!state.simRunning) b.disabled = none; });
   el.hidden = state.tabs.length > 0;
   byId("ide-cursor", (c) => { c.hidden = !state.tabs.length; });
   if (!el.hidden) {
     const top = state.topAbs && state.files.find((f) => f.abspath === state.topAbs);
     const hasTb = state.files.some((f) => f.role === "testbench");
     el.innerHTML = !state.designDir
-      ? "<h3>No project open</h3><p>Open or create a project on the Setup tab, and its files appear here.</p>"
+      ? emptyHtml({ icon: "code", title: EMPTY_WORDS.noProject.title, body: "The IDE edits, checks and simulates the Verilog of the project you have open. Open or create one on Setup and its files appear here.", action: EMPTY_WORDS.noProject.action })
       : "<h3>Nothing open</h3><p>Pick a file on the left, or start here. The usual loop: write the design, check its syntax, " +
         "simulate it with a testbench, and only then run the RTL-to-GDS flow, which takes minutes rather than seconds.</p>" +
         "<div class='ide-start-acts'>" +
@@ -1809,7 +1818,7 @@ function renderProblems() {
   if (!checked) {
     host.innerHTML = "<div class='pb-empty'><p><b>Not checked yet.</b> Check syntax runs Verilator over the files the config " +
       "builds into the chip, with its defines, and over the testbenches. It takes seconds and catches most mistakes before you simulate.</p>" +
-      "<button class='btn btn-sm' data-pb='lint'>Check syntax</button></div>";
+      "<button class='btn btn-sm' data-pb='lint'" + (state.designDir ? "" : " disabled title='Open a project first'") + ">Check syntax</button></div>";
     return;
   }
   const f = state.pbFilter || (state.pbFilter = { error: true, warning: true });
@@ -1908,10 +1917,10 @@ function wireSimPick() {
   const pick = document.getElementById("ide-sim-pick");
   const menu = document.getElementById("ide-sim-menu");
   if (!pick || !menu) return;
-  const close = () => { menu.hidden = true; pick.setAttribute("aria-expanded", "false"); };
+  const close = () => { menu.hidden = true; };
   pick.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (!menu.hidden) { close(); return; }
+    if (isLayerOpen(menu)) { closeLayer(menu); return; }
     const sel = document.getElementById("ide-tb");
     const tbs = state.testbenches || [];
     const eng = document.getElementById("ide-sim-engine");
@@ -1919,24 +1928,22 @@ function wireSimPick() {
       (tbs.length ? tbs.map((t) => "<button role='menuitemradio' aria-checked='" + (sel && sel.value === t) + "' data-tb='" + fmt.escape(t) + "'>" + fmt.escape(t) + "</button>").join("")
         : "<p class='ism-none'>No testbench yet.</p>") +
       "<div class='ism-sep'></div>" +
-      "<button data-ism='new'>New testbench…</button>" +
-      "<button data-ism='settings'>Simulator: " + fmt.escape(eng ? eng.options[eng.selectedIndex].text.replace(/ \(.*\)$/, "") : "Auto") + "…</button>";
+      "<button role='menuitem' data-ism='new'>New testbench…</button>" +
+      "<button role='menuitem' data-ism='settings'>Simulator: " + fmt.escape(eng ? eng.options[eng.selectedIndex].text.replace(/ \(.*\)$/, "") : "Auto") + "…</button>";
     menu.hidden = false;
-    pick.setAttribute("aria-expanded", "true");
-    menu.querySelector("button")?.focus();
+    // On the overlay stack: Esc, arrows, an outside press, focus back on the button.
+    openLayer(menu, { kind: "menu", owner: pick, onClose: close });
   });
   menu.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b) return;
-    close();
+    closeLayer(menu);
     if (b.dataset.tb) {
       byId("ide-tb", (sel) => { sel.value = b.dataset.tb; byId("ide-top", (x) => { x.value = ""; }); deriveTopFromTb(); });
       paintSimPick();
     } else if (b.dataset.ism === "new") newFile("tb_v");
     else if (b.dataset.ism === "settings") { setPanel("sim"); document.getElementById("ide-sim-engine")?.focus(); }
   });
-  menu.addEventListener("keydown", (e) => { if (e.key === "Escape") { close(); pick.focus(); } });
-  document.addEventListener("pointerdown", (e) => { if (!menu.hidden && !menu.contains(e.target) && e.target !== pick && !pick.contains(e.target)) close(); });
 }
 
 // Toggle the Simulate / Stop buttons. While a sim runs Simulate is disabled so
@@ -1947,11 +1954,11 @@ function setSimBusy(busy) {
   const run = document.getElementById("ide-sim");
   const stop = document.getElementById("ide-sim-stop");
   if (run) {
-    run.disabled = !!busy;
+    run.disabled = !!busy || !state.designDir;
     run.innerHTML = busy ? "Simulating…"
       : "<svg viewBox='0 0 24 24' width='13' height='13' fill='currentColor' aria-hidden='true'><path d='M7 4l13 8-13 8z'/></svg> Simulate";
   }
-  byId("ide-sim-pick", (b) => { b.disabled = !!busy; });
+  byId("ide-sim-pick", (b) => { b.disabled = !!busy || !state.designDir; });
   if (stop) stop.hidden = !busy;
 }
 
@@ -1960,7 +1967,7 @@ function setSimBusy(busy) {
 function setLintBusy(busy) {
   state.linting = !!busy;
   const b = document.getElementById("ide-lint");
-  if (b) { b.disabled = !!busy; b.textContent = busy ? "Checking…" : "Check syntax"; }
+  if (b) { b.disabled = !!busy || !state.designDir; b.textContent = busy ? "Checking…" : "Check syntax"; }
   document.querySelector("#ide-diags [data-pb='lint']")?.toggleAttribute("disabled", !!busy);
 }
 

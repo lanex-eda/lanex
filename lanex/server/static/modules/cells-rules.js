@@ -129,7 +129,7 @@ function wireMine(host, names) {
 function rolesHtml(L) {
   const roles = L.rules.roles || [];
   if (!roles.length) return "<div class='an-none'>The PDK's config sets no cell roles for this library.</div>";
-  return "<div class='cl-tblwrap'><table class='cl-tbl cr-roles'><thead><tr><th>Role</th><th>Cell</th><th>What it is for</th><th>Set by</th></tr></thead><tbody>" +
+  return "<div class='cl-tblwrap'><table class='data-table cl-tbl cr-roles'><thead><tr><th>Role</th><th>Cell</th><th>What it is for</th><th>Set by</th></tr></thead><tbody>" +
     roles.map((r) => "<tr><td><b>" + esc(r.label) + "</b><div class='muted mono'>" + esc(r.key) + "</div></td>" +
       "<td>" + (r.cells.length ? r.cells.map((c) => C.byName.has(c) ? "<a href='#' class='cr-cell mono' data-open='" + esc(c) + "'>" + esc(c.replace(L.prefix, "")) + "</a>" : "<span class='mono'>" + esc(c) + "</span>").join(" ") : "<span class='muted'>none</span>") +
       (String(r.value || "").includes("/") ? "<div class='muted'>" + esc(pinText(r)) + "</div>" : "") + "</td>" +
@@ -160,7 +160,7 @@ async function renderCustom(names) {
   let cells = [];
   try { cells = (await api.customCells(state.designDir)).cells || []; } catch (_e) {}
   const list = cells.length
-    ? "<div class='cl-tblwrap'><table class='cl-tbl'><thead><tr><th>Cell</th><th>Views</th><th>Replaces</th><th>Use</th><th></th></tr></thead><tbody>" +
+    ? "<div class='cl-tblwrap'><table class='data-table cl-tbl'><thead><tr><th>Cell</th><th>Views</th><th>Replaces</th><th>Use</th><th></th></tr></thead><tbody>" +
       cells.map((c) => "<tr><td class='mono'>" + esc(c.name) + "</td><td>" + Object.keys(c.views || {}).map((k) => "<span class='cc-chip'>" + esc(k) + "</span>").join(" ") + "</td>" +
         "<td>" + ((c.swap_out || []).map((n) => C.byName.has(n) ? "<a href='#' class='cr-cell mono' data-open='" + esc(n) + "'>" + esc(n.replace(C.lib.prefix, "")) + "</a>" : "<span class='mono'>" + esc(n) + "</span>").join(" ") || "<span class='muted'>nothing (added only)</span>") + "</td>" +
         "<td><label class='cl-switch'><input type='checkbox' data-cc-en='" + esc(c.name) + "'" + (c.enabled ? " checked" : "") + "><span></span></label></td>" +

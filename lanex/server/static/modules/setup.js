@@ -13,6 +13,7 @@ import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 import { pdkFacts, stackHtml } from "./pdkinfo.js";
 import * as FS from "./flowstages.js";
+import { ago as MFago } from "./metricfmt.js";
 import { askNotifyOnRun } from "./runend.js";
 import { runMenuChoices, setupRunMenu, onlyChoice } from "./runmenu.js";
 import { followJob } from "./runfollow.js";
@@ -415,14 +416,8 @@ function paintProjectBlock() {
 
 // Under the Design row: one line about the newest run, and a warning line for
 // anything that will stop a run (no config, spaces in the path).
-function ago(sec) {
-  const s = Math.max(0, Date.now() / 1000 - sec);
-  if (s < 90) return "just now";
-  if (s < 3600) return Math.round(s / 60) + " min ago";
-  if (s < 86400) return Math.round(s / 3600) + " h ago";
-  const d = Math.round(s / 86400);
-  return d === 1 ? "yesterday" : d + " days ago";
-}
+// The one "how long ago" (metricfmt.ago).
+const ago = (sec) => MFago(sec);
 
 function paintLastRun(facts) {
   const el = document.getElementById("proj-lastrun");
@@ -1451,14 +1446,14 @@ export function paintRunning(running) {
     if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); g.dataset.tip = "Stop the run"; }
     pill?.classList.remove("pill-pending");
     pill?.classList.add("pill-running");
-    if (pill) pill.textContent = "running";
+    if (pill) pill.textContent = "Running";
   } else {
     if (b) b.disabled = !state.designDir || !!state.designMissing;
     if (c) { c.disabled = true; c.hidden = true; }   // Stop shows only while a run is live
     if (g) { g.disabled = !state.designDir || !!state.designMissing; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); paintRunLabel(); }
     pill?.classList.add("pill-pending");
     pill?.classList.remove("pill-running");
-    if (pill) pill.textContent = "idle";
+    if (pill) pill.textContent = "Idle";
   }
 }
 

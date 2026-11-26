@@ -100,7 +100,8 @@ def test_without_a_terminal_and_without_yes_nothing_is_removed(session, monkeypa
     monkeypatch.setattr(uninstall, "_tty_in", lambda: None)
     before = _files(home)
     assert uninstall.main() == uninstall.DECLINED
-    assert _files(home) == before
+    after = _files(home)
+    assert after == before, {"removed": sorted(set(before) - set(after)), "added": sorted(set(after) - set(before))}
 
 
 REPO = Path(__file__).resolve().parents[2]

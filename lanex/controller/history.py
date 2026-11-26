@@ -302,8 +302,9 @@ def _run_signature(run_dir: Path) -> tuple:
 # The cache is also kept on disk, so the first listing after LanEx starts (a
 # cold summary of 4 runs on /mnt/c measured 6.8 s; cached, 65 ms) is fast too.
 # 2: summaries carry Verify's verdict, lineage steps and new metric fields;
-# 3: started_at carries its UTC offset; 4: both merged, started_at from started_ts.
-_CACHE_FILE_VERSION = 4
+# 3: started_at carries its UTC offset; 4: both merged, started_at from started_ts;
+# 5: a failed run's verdict label names its stage ("Failed at Clock tree (step 35)").
+_CACHE_FILE_VERSION = 5
 _cache_loaded = False
 _cache_dirty = False
 
@@ -1108,7 +1109,7 @@ def design_summary(run_dir: str | Path, metrics: Optional[Dict[str, Any]] = None
     pw = g("power__total")
     if isinstance(pw, (int, float)):
         add("Total power", round(float(pw) * 1000, 4), "mW", "power__total")
-    add("Wirelength", g("route__wirelength"), "µm", "route__wirelength")
+    add("Routed wirelength", g("route__wirelength"), "µm", "route__wirelength")
 
     # --- Timing (worst slack across corners) ---
     def slack_row(label: str, key: str) -> None:

@@ -20,6 +20,7 @@ import { fmtDur } from "./reportcard.js";
 import { verdictOfRun, runVerdict } from "./verdict.js";
 import { openLayer, closeLayer } from "./overlay.js";
 import * as MF from "./metricfmt.js";
+import { EMPTY_WORDS } from "./empty.js";
 
 const esc = (s) => fmt.escape(String(s ?? ""));
 let _seq = 0;
@@ -40,7 +41,7 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
     const lt = live && live();
     if (lt) paintLive(host.querySelector("[data-rb='run']"), lt);
     else paintPick(host.querySelector("[data-rb='run']"), ctx.contextRow(),
-      { empty: ctx.runsLoadFailed() ? "Couldn't load runs. Retrying…" : "No runs yet" });
+      { empty: ctx.runsLoadFailed() ? "Couldn't load runs. Retrying…" : state.designDir ? EMPTY_WORDS.noRuns.title : EMPTY_WORDS.noProject.title });
     const b = host.querySelector("[data-rb='base']");
     if (b) {
       const tag = ctx.contextBaseline();
@@ -236,7 +237,7 @@ function paintLive(btn, tag) {
   if (!btn) return;
   btn.querySelector(".rb-mark").className = "rb-mark is-run";
   btn.querySelector(".rb-name").textContent = tag;
-  btn.querySelector(".rb-meta").textContent = "running";
+  btn.querySelector(".rb-meta").textContent = runVerdict("running").word;
   btn.querySelector(".rb-tags").innerHTML = "<span class='rb-tag is-new'>live</span>";
   btn.disabled = false;
 }
@@ -299,15 +300,7 @@ function verdict(r) {
   return verdictOfRun(r);
 }
 
-function when(r) {
-  const d = r.started_at ? new Date(r.started_at) : null;
-  if (!d || Number.isNaN(d.getTime())) return "";
-  const now = new Date();
-  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  const day = new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  if (day === 0) return "today " + time;
-  if (day === 86400000) return "yesterday " + time;
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) }) + ", " + time;
-}
+// The one date shape (metricfmt.when), the same as Runs.
+function when(r) { return r.started_at ? MF.when(r.started_at) : ""; }
 
 const dur = fmtDur;

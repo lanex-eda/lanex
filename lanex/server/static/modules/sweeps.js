@@ -25,6 +25,7 @@ import { toCsv, downloadCsv } from "./csvutil.js";
 import { localeNum } from "./intlcache.js";
 import * as SM from "./studymodel.js";
 import * as SQ from "./studyqueue.js";
+import { runVerdict } from "./verdict.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const MAX_RUNS = 64;               // controller/dse.py MAX_COMBOS
@@ -422,7 +423,7 @@ function clockHint(cur) {
   }
   return null;
 }
-const mhz = (ns) => (ns > 0 ? localeNum(Number((1000 / ns).toPrecision(4)), "en-US", { maximumFractionDigits: 2 }) + " MHz" : "");
+const mhz = (ns) => F.mhz(ns);
 
 function paintAxes() {
   const host = S.el.querySelector("#sw-axes");
@@ -679,15 +680,19 @@ async function roomForRuns(n) {
 // ------------------------------------------------------------------ summary
 // The numbers a sweep is read by: key, label, the metric (for the shared
 // formatter), better direction.
+// The names are the one list's (metricfmt.js): a table head takes the short
+// name, a chart or a hover the full one. "Utilisation" stays this page's
+// spelling until the owner picks one (consistency plan O6).
+const mk = (id, key, dir, over = {}) => ({ id, key, label: F.metricShort(key || "runtime"), short: F.metricShort(key || "runtime"), name: F.metricName(key || "runtime"), dir, ...over });
 const METRICS = [
-  { id: "wns", key: "timing__setup__ws", label: "Setup WNS", short: "WNS", dir: 1 },
-  { id: "tns", key: "timing__setup__tns", label: "Setup TNS", short: "TNS", dir: 1 },
-  { id: "hold", key: "timing__hold__ws", label: "Hold WNS", short: "Hold", dir: 1 },
-  { id: "die", key: "design__die__area", label: "Die area", short: "Die", dir: -1 },
-  { id: "cells", key: "design__instance__area__stdcell", label: "Std-cell area", short: "Cells", dir: -1 },
-  { id: "util", key: "design__instance__utilization", label: "Utilisation", short: "Util", dir: 0 },
-  { id: "power", key: "power__total", label: "Power", short: "Power", dir: -1 },
-  { id: "runtime", key: "", label: "Runtime", short: "Time", dir: -1 },
+  mk("wns", "timing__setup__ws", 1),
+  mk("tns", "timing__setup__tns", 1),
+  mk("hold", "timing__hold__ws", 1),
+  mk("die", "design__die__area", -1),
+  mk("cells", "design__instance__area__stdcell", -1),
+  mk("util", "design__instance__utilization", 0, { label: "Utilisation", name: "Utilisation" }),
+  mk("power", "power__total", -1),
+  mk("runtime", "", -1),
 ];
 const M_BY = Object.fromEntries(METRICS.map((m) => [m.id, m]));
 // The settings that size the die: a sweep of one of them is judged by the die.
@@ -811,7 +816,7 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
     }
   } else {
     const bestT = passed.filter((p) => num(p.r, "timing__setup__ws") != null).sort((a, b) => num(b.r, "timing__setup__ws") - num(a.r, "timing__setup__ws"))[0];
-    if (bestT) head = tile("Best for timing", bestT, "<b>" + esc(F.showText("timing__setup__ws", num(bestT.r, "timing__setup__ws"))) + "</b> <span class='muted'>setup WNS</span>", valsText(bestT.v));
+    if (bestT) head = tile("Best for timing", bestT, "<b>" + esc(F.showText("timing__setup__ws", num(bestT.r, "timing__setup__ws"))) + "</b> <span class='muted'>" + esc(M_BY.wns.label.toLowerCase()) + "</span>", valsText(bestT.v));
   }
   // A "best" only when the number moved: every point with the same area has
   // no best for area.
@@ -1022,10 +1027,10 @@ async function drawCharts(el, sw, pts, scale) {
     const xk = xm.id === "power" && scale ? 1 / scale.div : xm.id === "util" ? 100 : 1;
     const xu = xm.id === "runtime" ? "s" : xm.id === "power" ? (scale ? scale.unit : "W") : xm.id === "util" ? "%" : F.show(xm.key, 1).unit;
     const wsU = F.show("timing__setup__ws", 1).unit;
-    opt = SC.paretoOption({ x: { label: xm.label, unit: xu, dir: xm.dir || -1 }, y: { label: "Setup WNS", unit: wsU, dir: 1 },
+    opt = SC.paretoOption({ x: { label: xm.label, unit: xu, dir: xm.dir || -1 }, y: { label: M_BY.wns.label, unit: wsU, dir: 1 },
       points: live.map((p) => ({ x: p.r ? (metricOf(p, xm.id) == null ? null : metricOf(p, xm.id) * xk) : null, y: p.r ? metricOf(p, "wns") : null,
         key: p.key, tag: p.tag, label: p.v ? Object.values(p.v).join("/") : p.tag })) });
-    cap.innerHTML = "<b>Trade-off</b>: setup WNS against " + esc(xm.label.toLowerCase()) + ". The line joins the points nothing beats on both.";
+    cap.innerHTML = "<b>Trade-off</b>: " + esc(M_BY.wns.label.toLowerCase()) + " against " + esc(xm.label.toLowerCase()) + ". The line joins the points nothing beats on both.";
   }
   const fails = live.filter((p) => p.key === "failed" || p.key === "stopped" || p.key === "interrupted");
   note.textContent = view === "trade" && fails.length ? fails.length + " point" + (fails.length === 1 ? "" : "s") + " failed and have no numbers, so they aren't on this chart: " + fails.map((p) => p.label).join(", ") + "."
@@ -1035,6 +1040,8 @@ async function drawCharts(el, sw, pts, scale) {
   host.setAttribute("aria-label", cap.textContent);
   const chart = window.echarts.init(host, null, { renderer: "canvas" });
   chart.setOption(opt);
+  // Drawn with this theme's tokens: a theme switch draws the summary's charts again.
+  import("./theme-echarts.js").then((m) => m.followTheme(chart, () => { if (host.isConnected) drawCharts(el, sw, pts, scale); }));
   // A point on the chart opens its run (the same as its row in the table).
   chart.on("click", (e) => { const p = e.data && e.data.p; const row = p && el.querySelector("tr[data-open='" + CSS.escape(p.tag) + "']"); if (row) row.click(); });
   _sumCharts.get(el).push(chart);
@@ -1076,36 +1083,41 @@ function byValue(pts, axes) {
   });
 }
 
-const STATE_WORD = { passed: "Clean", warning: "Warnings", failed: "Failed", stopped: "Stopped", incomplete: "Incomplete", running: "Running", notrun: "Not run" };
-const STATE_TONE = { passed: "pass", warning: "warn", failed: "fail", stopped: "warn", incomplete: "warn", running: "live", notrun: "warn" };
+// A run state's word and tone are verdict.js's; a point that never ran is "Skipped".
+const stateWord = (s) => (s === "notrun" ? SM.POINT.skipped.word : runVerdict(s).word);
+const stateTone = (s) => (s === "notrun" ? "warn" : runVerdict(s).cls);
 
 // The table a sweep exists for: the swept value(s) against how each point
 // came out and its key numbers, sorted by value.
+// Each column says what it is, so a narrow table drops the least needed ones
+// (runs.css, as Runs drops columns) instead of scrolling sideways in its row.
+// The second area column is "a2": the one the sweep isn't judged by.
+const colCls = (id, i) => "sw-c-" + (i === 3 ? "a2" : id);
 function resultsHtml(pts, sw, { scale, areaId, failCode }) {
   const axes = sw.axes || [];
   if (!pts.length || !axes.length) return "";
   const cols = ["wns", "hold", areaId === "die" ? "die" : "cells", areaId === "die" ? "cells" : "die", "util", "power", "runtime"];
   const rows = byValue(pts, axes).map((p) => {
     const P = SM.POINT[p.key] || {};
-    const word = p.word || P.word || STATE_WORD[p.state] || p.state;
-    const tone = P.tone === "muted" ? "none" : P.tone || STATE_TONE[p.state] || "warn";
+    const word = p.word || P.word || stateWord(p.state);
+    const tone = P.tone === "muted" ? "none" : P.tone || stateTone(p.state);
     const sup = p.superseded ? "<span class='muted'> · rerun as " + esc(p.superseded) + "</span>" : "";
     return "<tr" + (p.r ? " data-open='" + esc(p.tag) + "' class='sw-res-row" + (p.superseded ? " is-old" : "") + "' title='" + esc("Open " + p.tag) + "'" : " class='is-missing'") + ">" +
       axes.map((a) => "<td class='sw-res-v'>" + esc(p.v ? p.v[a.var] : "") + (a.var === "CLOCK_PERIOD" && p.v && Number(p.v[a.var]) > 0 ? " <small>" + esc(mhz(Number(p.v[a.var]))) + "</small>" : "") + "</td>").join("") +
       "<td><span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(word) + "</span>" +
         (p.detail ? " <span class='muted'>" + esc(p.detail) + "</span>" : "") + sup + "</td>" +
-      cols.map((id) => {
+      cols.map((id, i) => {
         const v = p.r ? metricOf(p, id) : null;
         const neg = (id === "wns" || id === "hold") && v != null && v < 0 ? " is-neg" : "";
-        return "<td class='sw-num" + neg + "'" + (v != null && id !== "runtime" ? fmt.titleAttr(v) : "") + ">" + esc(cellText(id, v, scale, false)) + "</td>";
+        return "<td class='sw-num " + colCls(id, i) + neg + "'" + (v != null && id !== "runtime" ? fmt.titleAttr(v) : "") + ">" + esc(cellText(id, v, scale, false)) + "</td>";
       }).join("") +
-      "<td class='sw-res-tag'>" + esc(p.tag) + "</td></tr>";
+      "<td class='sw-res-tag sw-c-tag'>" + esc(p.tag) + "</td></tr>";
   }).join("");
   const unit = (id) => id === "runtime" ? "" : id === "power" ? (scale ? scale.unit : "") : F.show(M_BY[id].key, 1).unit;
   return "<div class='sw-res-wrap'><table class='sw-res'><caption>Results by " + esc(axes.map((a) => a.var).join(" × ")) + "</caption><thead><tr>" +
     axes.map((a) => "<th scope='col'>" + esc(a.var) + "</th>").join("") + "<th scope='col'>Result</th>" +
-    cols.map((id) => "<th scope='col' class='sw-num'>" + esc(M_BY[id].label) + (unit(id) ? " <small>" + esc(unit(id)) + "</small>" : "") + "</th>").join("") +
-    "<th scope='col'>Run</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
+    cols.map((id, i) => "<th scope='col' class='sw-num " + colCls(id, i) + "'>" + esc(M_BY[id].label) + (unit(id) ? " <small>" + esc(unit(id)) + "</small>" : "") + "</th>").join("") +
+    "<th scope='col' class='sw-c-tag'>Run</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
 }
 
 // The sweep's results as a CSV: the swept values, how each point ended and
@@ -1128,7 +1140,7 @@ function exportSweepCsv(sw, pts, failCode) {
   const axes = sw.axes || [];
   const head = [...axes.map((a) => a.var), "run", "result", "reason", ...METRICS.map((m) => m.key ? m.key + " (" + (F.unitOf(m.key) === "ratio" ? "fraction" : F.unitOf(m.key)) + ")" : "runtime (s)")];
   const rows = [head, ...byValue(pts, axes).map((p) => [
-    ...axes.map((a) => (p.v ? p.v[a.var] : "")), p.tag, p.word || STATE_WORD[p.state] || p.state,
+    ...axes.map((a) => (p.v ? p.v[a.var] : "")), p.tag, p.word || stateWord(p.state),
     p.superseded ? "rerun as " + p.superseded : p.detail || (p.r && p.failed ? (failCode && failCode(p.r)) || "" : ""),
     ...METRICS.map((m) => (p.r ? metricOf(p, m.id) ?? "" : "")),
   ])];

@@ -31,13 +31,14 @@ import { go } from "./nav.js";
 import * as FS from "./flowstages.js";
 import { icon } from "./icons.js";
 import { verdictOf as cardVerdict, warningsHtml, fmtDur } from "./reportcard.js";
-import { localeTime, localeDate } from "./intlcache.js";
 import { loadingStart, pageSkeleton } from "./loading.js";
 import * as MF from "./metricfmt.js";
 import { toCsv, downloadCsv, downloadText } from "./csvutil.js";
 import { singleKeysOn } from "./prefs.js";
 import * as SM from "./studymodel.js";
 import * as SQ from "./studyqueue.js";
+import { runVerdict, failedWhere, checkVerdict } from "./verdict.js";
+import { pageEmpty, emptyInner } from "./empty.js";
 
 // The last step of a stage in the Classic flow (matches setup.js's --to).
 function lastStepOfStage(stageId) {
@@ -95,32 +96,35 @@ const COLS = [
   // (metricfmt.js) Compare, the sweep views and Analytics use: slack signed in
   // ns, areas in µm², utilisation in %, power in the prefix that suits the
   // runs shown (one prefix down the column).
-  metricCol("wns", "Setup WNS", "timing__setup__ws", true, "Worst setup slack in any corner (ns). Positive: the design meets its clock."),
-  metricCol("tns", "Setup TNS", "timing__setup__tns", 1500, "Total negative setup slack (ns). 0 when every path meets timing."),
-  metricCol("hold", "Hold WNS", "timing__hold__ws", 1500, "Worst hold slack in any corner (ns)."),
-  metricCol("die", "Die area", "design__die__area", 1500, "design__die__area: the whole die, in µm²."),
-  metricCol("cells", "Std-cell area", "design__instance__area__stdcell", true,
+  // Names: the one list (metricfmt.js METRIC_NAMES / METRIC_SHORT).
+  metricCol("wns", "timing__setup__ws", true, "Worst setup slack in any corner (ns). Positive: the design meets its clock."),
+  metricCol("tns", "timing__setup__tns", 1500, "Total negative setup slack (ns). 0 when every path meets timing."),
+  metricCol("hold", "timing__hold__ws", 1500, "Worst hold slack in any corner (ns)."),
+  metricCol("die", "design__die__area", 1500, "design__die__area: the whole die, in µm²."),
+  metricCol("cells", "design__instance__area__stdcell", true,
     "design__instance__area__stdcell: the standard cells' area in µm², without fill, tap or decap cells."),
-  metricCol("util", "Util", "design__instance__utilization", true, "How full the core is with cells at the end (design__instance__utilization)."),
-  metricCol("power", "Power", "power__total", true, "Total power OpenROAD estimated (power__total)."),
+  metricCol("util", "design__instance__utilization", true, "How full the core is with cells at the end (design__instance__utilization)."),
+  metricCol("power", "power__total", true, "Total power OpenROAD estimated (power__total)."),
   { id: "checks", label: "DRC · LVS · Ant", dir: -1, get: (r) => { const c = checksOf(r); return c ? c.total : null; }, def: true,
     tip: "Design-rule errors (worst of Magic, KLayout and the router), LVS errors and antenna violations. Not checked: blank." },
-  { id: "runtime", label: "Runtime", key: "runtime", dir: -1, get: (r) => num(r.wall_time_s), f: (v) => fmtDur(v), def: 1300, tip: "The sum of every step's time." },
+  { id: "runtime", label: MF.metricName("runtime"), key: "runtime", dir: -1, get: (r) => num(r.wall_time_s), f: (v) => fmtDur(v), def: 1300, tip: "The sum of every step's time." },
   { id: "changed", label: "Changed vs baseline", sort: (r) => (CHANGES.get(keyOf(r)) || []).length, def: true },
   { id: "tags", label: "Tags", sort: (r) => (r.tags || []).join(" ").toLowerCase(), def: false },
   { id: "note", label: "Note", sort: (r) => r.note || "", def: 2100 },
 ];
-// The column heads: one line each, short enough that none wraps.
-const HEADS = { die: "Die", cells: "Std cells", checks: "Checks", changed: "Changed" };
+// The column heads: one line each, short enough that none wraps (the metric
+// columns' short names are metricfmt.js's).
+const HEADS = { checks: "Checks", changed: "Changed",
+  ...Object.fromEntries(COLS.filter((c) => c.key && c.key !== "runtime").map((c) => [c.id, MF.metricShort(c.key)])) };
 const VERDICT_ORDER = { running: 0, passed: 1, warning: 2, incomplete: 3, stopped: 4, failed: 5 };
 const TIMING = new Set(["wns", "tns", "hold"]);
 // One prefix per power or voltage column, from the runs shown (renderRuns):
 // the cells and the column's unit say the same thing (MF.scaleOf).
 const _scales = new Map();
 const scaled = (key) => { const u = MF.unitOf(MF.parseKey(key).base); return u === "W" || u === "V"; };
-function metricCol(id, label, key, def, tip) {
+function metricCol(id, key, def, tip) {
   return {
-    id, label, key, def, tip, dir: MF.direction(key, null),
+    id, label: MF.metricName(key) || key, key, def, tip, dir: MF.direction(key, null),
     get: (r) => km(r, key),
     f: (v) => (scaled(key) ? MF.showAt(key, v, _scales.get(id)) : MF.show(key, v, { compact: true })).text,
     get unit() { return scaled(key) ? (_scales.get(id) ? _scales.get(id).unit : MF.unitOf(MF.parseKey(key).base)) : MF.show(key, 1).unit; },
@@ -366,22 +370,25 @@ function defOn(c) {
 
 // ------------------------------------------------------------------ verdict
 const RX = new Map();          // keyOf(run) -> runExplain result (failed runs only)
+// The words are verdict.js's (the run picker, Compare, studies and Verify say
+// the same): "Clean", "Failed at Clock tree (step 35)", "Stopped".
 function verdictOf(r) {
-  if (r.verdict && r.verdict.state) return r.verdict;
+  if (r.verdict && r.verdict.state) return r.verdict.state === "failed" ? { ...r.verdict, label: failedWhere(r.verdict) } : r.verdict;
+  const word = (st) => runVerdict(st).word;
   if (state.status && state.status.running && state.liveTag && r.tag === state.liveTag && normDir(r._design) === normDir(state.designDir)) {
-    return { state: "running", label: "running" };
+    return { state: "running", label: word("running") };
   }
-  if (r.success) return { state: "passed", label: "passed" };
+  if (r.success) return { state: "passed", label: word("passed") };
   const rx = RX.get(keyOf(r));
   if (rx) {
-    if (rx.kind === "stopped") return { state: "stopped", label: "stopped" };
-    if (rx.kind === "incomplete") return { state: "incomplete", label: "incomplete" };
-    if (rx.kind === "checks-failed") return { state: "failed", label: "checks failed", stage: "signoff" };
-    if (rx.stage) return { state: "failed", label: "failed at " + FS.stageLabel(rx.stage), stage: rx.stage };
+    if (rx.kind === "stopped") return { state: "stopped", label: word("stopped") };
+    if (rx.kind === "incomplete") return { state: "incomplete", label: word("incomplete") };
+    if (rx.kind === "checks-failed") return { state: "failed", label: "Checks failed", stage: "signoff" };
+    if (rx.stage) return { state: "failed", label: failedWhere({ stage: rx.stage, label: rx.step && rx.step.n ? "step " + rx.step.n : "" }), stage: rx.stage };
   }
-  return { state: "failed", label: "failed" };
+  return { state: "failed", label: word("failed") };
 }
-const VERDICT_TONE = { passed: "pass", warning: "warn", failed: "fail", stopped: "warn", incomplete: "warn", running: "live" };
+const VERDICT_TONE = Object.fromEntries(["passed", "warning", "failed", "stopped", "incomplete", "running"].map((s) => [s, runVerdict(s).cls]));
 const finished = (r) => /passed|warning/.test(verdictOf(r).state);
 
 // ------------------------------------------------------------------ origin
@@ -777,7 +784,7 @@ export async function renderRuns({ cached = false } = {}) {
   const foot = document.getElementById("rn-foot");
   if (runs === null) {
     wrap.hidden = true; empty.hidden = false; if (foot) foot.hidden = true;
-    empty.innerHTML = "<h3>Couldn't load your runs</h3><p>LanEx didn't answer in time. Trying again…</p>";
+    empty.innerHTML = emptyInner({ icon: "refresh", title: "Couldn't load your runs", body: "LanEx didn't answer in time. Trying again…" });
     setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000);
     return;
   }
@@ -792,10 +799,9 @@ export async function renderRuns({ cached = false } = {}) {
   syncSide();
   if (!runs.length) {
     wrap.hidden = true; empty.hidden = false; if (foot) foot.hidden = true;
-    empty.innerHTML = state.designDir || scope === "all"
-      ? "<h3>No runs yet</h3><p>Run the flow once and every run appears here, one row each, with its timing, area, power and checks.</p>" +
-        "<button class='btn btn-primary' data-go='setup'>Go to Setup</button>"
-      : "<h3>Open a project first</h3><p>Runs lists the runs of the project you have open.</p><button class='btn btn-primary' data-go='setup'>Go to Setup</button>";
+    empty.innerHTML = pageEmpty(state.designDir || scope === "all" ? "noRuns" : "noProject", { icon: "clock", body: {
+      noRuns: "Run the flow once and every run appears here, one row each, with its timing, area, power and checks.",
+      noProject: "Runs lists every run of the project you have open, with its timing, area, power and checks." }, inner: true });
     _visible = [];
     syncSelection();
     return;
@@ -1247,13 +1253,15 @@ function cellHtml(c, r, base) {
     const k = checksOf(r);
     if (!k) return "<td class='" + cls + " is-num muted'></td>";
     const dd = r.verdict && r.verdict.drc_disagree;
+    // Check words (verdict.js): "Passed", "Failed: DRC 3", drawn with the via.
+    const word = (st, w) => { const cv = checkVerdict(st); return "<span class='rn-v is-" + cv.cls + "'><i aria-hidden='true'></i>" + esc(w || cv.word) + "</span>"; };
     if (!k.total && dd && dd.markers) {
-      return "<td class='" + cls + " is-num'><span class='rn-clean'>clean</span> <button class='rn-drcflag' data-act='drc' title='" +
+      return "<td class='" + cls + " is-num'>" + word("pass") + " <button class='rn-drcflag' data-act='drc' title='" +
         esc("The DRC report files list " + dd.markers + " markers but LibreLane's metric says 0. Open Verify's Design rules.") + "'>· report: " + dd.markers + "</button></td>";
     }
-    if (!k.total) return "<td class='" + cls + " is-num'><span class='rn-clean'>clean</span></td>";
-    const parts = [k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "ant " + k.ant : ""].filter(Boolean);
-    return "<td class='" + cls + " is-num'><span class='rn-bad'>" + esc(parts.join(" · ")) + "</span></td>";
+    if (!k.total) return "<td class='" + cls + " is-num'>" + word("pass") + "</td>";
+    const parts = [k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "Antenna " + k.ant : ""].filter(Boolean);
+    return "<td class='" + cls + " is-num'>" + word("fail", checkVerdict("fail").word + ": " + parts.join(" · ")) + "</td>";
   }
   // A run in which no flip-flop had a clock: its slack says nothing about the clock.
   if ((TIMING.has(c.id) || c.timing) && untimed(r)) return "<td class='" + cls + " is-num muted rn-untimed' title='" + esc(UNTIMED_TIP) + "'>not timed</td>";
@@ -1398,9 +1406,10 @@ function groupRowHtml(g, cols, gk, open, { tag, title, why = "", verdictCell = "
     if (c.id === "origin") return "<td class='" + cls + "'>" + esc(origin) + "</td>";
     if (c.id === "design") return "<td class='" + cls + "'>" + esc(designLabel(rs[0] && rs[0]._design)) + "</td>";
     if (c.id === "checks") {
-      if (failed.length) return "<td class='" + cls + " is-num'><span class='rn-bad'>" + esc(rsn.length ? "failed: " + rsn.join(", ") : failed.length + " failed") + "</span></td>";
+      const cw = (st, w) => "<span class='rn-v is-" + checkVerdict(st).cls + "'><i aria-hidden='true'></i>" + esc(w || checkVerdict(st).word) + "</span>";
+      if (failed.length) return "<td class='" + cls + " is-num'>" + cw("fail", rsn.length ? "Failed: " + rsn.join(", ") : failed.length + " failed") + "</td>";
       const ks = passed.map(checksOf).filter(Boolean);
-      return "<td class='" + cls + " is-num'>" + (ks.length && ks.every((k) => !k.total) ? "<span class='rn-clean'>clean</span>" : "") + "</td>";
+      return "<td class='" + cls + " is-num'>" + (ks.length && ks.every((k) => !k.total) ? cw("pass") : "") + "</td>";
     }
     if (c.id === "runtime") {
       const t = rs.map((r) => num(r.wall_time_s)).filter((v) => v != null);
@@ -1448,22 +1457,9 @@ function when(iso) {
   if (w === undefined) { w = whenNow(iso); if (_whenMemo.size < 20000) _whenMemo.set(iso, w); }
   return w;
 }
-function whenNow(iso) {
-  const d = new Date(iso);
-  if (isNaN(d)) return iso;
-  const now = new Date();
-  const hm = localeTime(d, [], { hour: "2-digit", minute: "2-digit" });
-  const days = Math.floor((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
-  if (days === 0) return "today " + hm;
-  if (days === 1) return "yesterday " + hm;
-  if (d.getFullYear() !== now.getFullYear()) return localeDate(d, [], { day: "numeric", month: "short", year: "numeric" });
-  return localeDate(d, [], { day: "numeric", month: "short" }) + " " + hm;
-}
-function fullWhen(iso) {
-  const d = iso ? new Date(iso) : null;
-  if (!d || isNaN(d)) return iso || "";
-  return localeDate(d, [], { weekday: "short", day: "numeric", month: "short", year: "numeric" }) + ", " + localeTime(d, [], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
+// The one date shape (metricfmt.js when / whenFull), memoised above.
+const whenNow = (iso) => MF.when(iso);
+const fullWhen = (iso) => MF.whenFull(iso);
 
 // ------------------------------------------------------------------ table events
 function runOfRow(tr) {
@@ -2197,7 +2193,7 @@ function sideNumsHtml(r, base) {
   }).join("");
   const k = checksOf(r);
   const checks = !k ? "" : "<div class='rn-num'><dt title='Design-rule errors (worst of Magic, KLayout and the router), LVS errors and antenna violations'>DRC · LVS · Antenna</dt><dd class='" +
-    (k.total ? "is-neg" : "") + "'>" + (k.total ? esc([k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "ant " + k.ant : ""].filter(Boolean).join(" · ")) : "<span class='rn-clean'>clean</span>") + "</dd><span class='rn-d'></span></div>";
+    (k.total ? "is-neg" : "") + "'>" + (k.total ? esc(checkVerdict("fail").word + ": " + [k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "Antenna " + k.ant : ""].filter(Boolean).join(" · ")) : "<span class='rn-clean'>" + esc(checkVerdict("pass").word) + "</span>") + "</dd><span class='rn-d'></span></div>";
   if (!rows && !checks) return "<p class='rn-side-line muted'>This run ended before it had numbers to show.</p>";
   return "<h4 class='rn-side-h'>Numbers" + (base ? " <small>against the baseline <code>" + esc(base.tag) + "</code></small>" : isBaseline(r) ? " <small>this run is the baseline</small>" : "") + "</h4><dl class='rn-nums'>" + rows + checks + "</dl>";
 }
@@ -2239,13 +2235,13 @@ async function paintRecipes(r, my) {
     return;
   }
   if (my !== _sideSeq || !host || !host.isConnected) return;
-  const n = (v, dd = 2) => (typeof v === "number" && Number.isFinite(v) ? (Math.abs(v) >= 1000 ? Math.round(v).toLocaleString("en-US") : v.toFixed(dd)) : v === Infinity ? "none" : "");
+  const n = (v, dd = 2) => (typeof v === "number" && Number.isFinite(v) ? (Math.abs(v) >= 1000 ? Math.round(v).toLocaleString("en-US") : v.toFixed(dd)) : v === Infinity ? MF.NO_PATH_WORD : "");
   const rows = (d.rows || []).map((x) => {
     const m = x.metrics || {};
     const best = [x.strategies.includes(d.best_area) ? "smallest" : "", x.strategies.includes(d.best_slack) ? "most slack" : ""].filter(Boolean).join(", ");
     return "<tr" + (best ? " class='is-best'" : "") + "><td class='sw-res-v'>" + esc(x.strategies.join(" · ")) + (best ? " <small>" + esc(best) + "</small>" : "") + "</td>" +
       (x.ok ? "<td class='sw-num'>" + esc(n(m.design__instance__count, 0)) + "</td><td class='sw-num'>" + esc(n(m.design__instance__area, 0)) + "</td>" +
-        "<td class='sw-num" + (m.timing__setup__ws < 0 ? " is-neg" : "") + "'>" + esc((m.timing__setup__ws >= 0 ? "+" : "") + n(m.timing__setup__ws)) + "</td>"
+        "<td class='sw-num" + (m.timing__setup__ws < 0 ? " is-neg" : "") + "'>" + esc(MF.slack(m.timing__setup__ws)) + "</td>"
         : "<td colspan='3'><span class='rn-v is-fail'><i aria-hidden='true'></i>Failed at " + esc(x.step_words || x.step || "") + "</span> <span class='muted'>" + esc(x.reason || "") + "</span></td>") + "</tr>";
   }).join("");
   // The best by area and the best by slack; when one recipe is both, the
@@ -2310,7 +2306,7 @@ function sideTopHtml(r, rx, vf) {
 function sideHtml(r, base) {
   const b = (id, label, ic, cls = "btn-ghost") => "<button class='btn " + cls + " btn-sm' data-ra='" + id + "'>" + (ic ? icon(ic, { size: 13 }) + " " : "") + esc(label) + "</button>";
   const d = r.started_at ? new Date(r.started_at) : null;
-  const meta = [d && !isNaN(d) ? localeDate(d, [], { day: "numeric", month: "short", year: "numeric" }) + ", " + localeTime(d, [], { hour: "2-digit", minute: "2-digit" }) : "",
+  const meta = [d && !isNaN(d) ? MF.when(d) : "",
     [r.pdk, r.scl].filter(Boolean).join(" / "), getRunScope() === "all" ? designLabel(r._design) : ""].filter(Boolean).join(" · ");
   const isB = isBaseline(r);
   return "<div class='rn-side-head'><div><div class='an-eyebrow'>Run" + (isB ? " · baseline" : "") + (r.archived ? " · archived" : "") + "</div><h3 class='rn-side-tag'>" + esc(r.tag) + "</h3>" +
@@ -2626,12 +2622,7 @@ function filesOverlay() {
   return ov;
 }
 
-function fmtBytes(n) {
-  if (!n) return "";
-  if (n < 1024) return n + " B";
-  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
-  return (n / 1048576).toFixed(1) + " MB";
-}
+function fmtBytes(n) { return n ? MF.bytes(n) : ""; }
 
 async function showFilesModal(tag) {
   const ov = filesOverlay();

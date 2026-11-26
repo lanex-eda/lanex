@@ -385,6 +385,39 @@ def test_queue_survives_a_restart_and_offers_continue(sched, tmp_path, monkeypat
     assert s2._waiting_sorted()[0]["id"] == nj["id"]
 
 
+def test_a_run_that_finished_while_lanex_was_down_comes_back_done(sched, tmp_path, monkeypatch):
+    # Z2 leftover: it came back "interrupted (It had finished)". A run whose
+    # log ends with "Flow complete." finished: it ends, and _finalize reads its
+    # verdict from the folder, the same as a run that ended with LanEx up.
+    a = _proj(tmp_path, "a")
+    r, _ = sched.submit_now(a, {"run_mode": "container"})
+    tag = r["tag"]
+    rd = a / "runs" / tag
+    for n, sl in ((1, "verilator-lint"), (2, "yosys-synthesis")):
+        s = rd / f"{n}-{sl}"
+        s.mkdir()
+        for f in ("state_in.json", "state_out.json", "runtime.txt"):
+            (s / f).write_text("{}" if f != "runtime.txt" else "1")
+    (rd / "flow.log").write_text("Starting...\nFlow complete.\n")
+    monkeypatch.setattr("lanex.controller.events.BOOT_ID", "fffffff1")
+    s2 = jobs.Scheduler(persist=True)
+    s2._facts_override = sched._facts_override
+    monkeypatch.setattr(jobs, "flow_containers", lambda: [])
+    read = []
+    s2.set_outcome_reader(lambda d: read.append(d) or {"ok": True, "good": False, "verdict": "warning", "kind": "clean"})
+    found = s2.recover_all([a])
+    assert found["finished"] == 1 and found["interrupted"] == 0
+    j = s2.job(r["job_id"])
+    assert j["state"] == "done" and j.get("_finalize") and "resume" not in j
+    assert "interrupted" not in j["reason"].lower() and "had finished" not in j["reason"]
+    assert s2.queue_of(a)["paused"] is not True, "a finished run is no reason to pause the queue"
+    # The service loop finishes it the way it finishes any run: its verdict from the folder.
+    s2._finalize(j)
+    j = s2.job(r["job_id"])
+    assert read and j["outcome"]["verdict"] == "warning" and not j.get("_finalize")
+    assert j["reason"].startswith("Finished · ")
+
+
 def test_a_container_still_running_is_followed_again(sched, tmp_path, monkeypatch):
     a = _proj(tmp_path, "a")
     r, _ = sched.submit_now(a, {})
@@ -886,7 +919,7 @@ def test_reattach_needs_the_container_to_work_in_this_project(rf_env, tmp_path, 
     started = []
     monkeypatch.setattr(termwatch.Follower, "start", lambda self: started.append(self.job_id))
     found = s.recover_all([d])
-    assert found == {"reattached": 0, "interrupted": 1} and started == []
+    assert found == {"reattached": 0, "interrupted": 1, "finished": 0} and started == []
 
 
 def test_bad_point_tags_never_make_folders_outside_runs(tmp_path):

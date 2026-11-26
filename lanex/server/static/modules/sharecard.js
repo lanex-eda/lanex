@@ -13,6 +13,7 @@
 // image is same-origin, so nothing leaves the PC and the canvas stays exportable.
 
 import { parseCorner } from "./cornergrid.js";
+import { slack as mfSlack, dateText } from "./metricfmt.js";
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 export const SIZES = { wide: [1200, 630], square: [1080, 1080] };
@@ -25,10 +26,8 @@ const C = {
   layers: ["#d6446f", "#8ea6c4", "#4da3ff", "#e879c9", "#36d399", "#f2c14e", "#ff7a45"],
 };
 
-function slack(v) {
-  if (!isNum(v) || Math.abs(v) >= 1e12) return "—";
-  return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2);
-}
+// The one slack formatter (metricfmt.js): three decimals, "no path" for OpenSTA's 1e30.
+function slack(v) { return mfSlack(v); }
 
 const fmtInt = (v) => (isNum(v) ? Math.round(v).toLocaleString("en-US") : "—");
 const trimNum = (v, d = 1) => (isNum(v) ? (+v.toFixed(d)).toString() : "—");
@@ -74,7 +73,7 @@ export function cardData(sum, verdict, { showRun = true, showDate = true } = {})
   let date = "";
   if (showDate && idn.finished) {
     const d = new Date(idn.finished);
-    if (!isNaN(d)) date = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    if (!isNaN(d)) date = dateText(d);
   }
   const foot = ["LibreLane " + (idn.librelane || "?"), showRun ? "run " + idn.run : "", date].filter(Boolean).join(" · ");
   return {

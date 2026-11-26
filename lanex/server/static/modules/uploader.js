@@ -9,6 +9,7 @@
 
 import { state } from "./state.js";
 import { UPLOAD_MAX_BYTES } from "./api.js";
+import { bytes } from "./metricfmt.js";
 
 const UPLOAD = { path: "/api/upload", method: "POST" };
 
@@ -17,7 +18,7 @@ export function uploadFile(file, designDir, { onProgress } = {}) {
   let cancelled = false;
   const done = new Promise((resolve, reject) => {
     if (file.size > UPLOAD_MAX_BYTES) {
-      const err = new Error(file.name + " is " + Math.round(file.size / 1048576) + " MiB; LanEx takes files up to " + (UPLOAD_MAX_BYTES / 1073741824) + " GiB.");
+      const err = new Error(file.name + " is " + bytes(file.size) + "; LanEx takes files up to " + bytes(UPLOAD_MAX_BYTES) + ".");
       err.status = 413;
       reject(err);
       return;
@@ -46,10 +47,5 @@ export function uploadFile(file, designDir, { onProgress } = {}) {
   };
 }
 
-export function fmtBytes(n) {
-  if (!Number.isFinite(n)) return "–";
-  if (n < 1000) return n + " B";
-  if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + " kB";
-  if (n < 1e9) return (n / 1e6).toFixed(n < 1e8 ? 1 : 0) + " MB";
-  return (n / 1e9).toFixed(2) + " GB";
-}
+// The one size formatter (metricfmt.bytes).
+export function fmtBytes(n) { return Number.isFinite(n) ? bytes(n) : "–"; }

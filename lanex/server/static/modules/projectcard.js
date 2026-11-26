@@ -8,17 +8,12 @@ import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { applyingEntry, sectionWho, writeSetting } from "./configscope.js";
 import { mountClockField, lastRunLine } from "./clockfield.js";
+import { mhz } from "./metricfmt.js";
 
 let _info = null;
 let _seq = 0;
 const $ = (id) => document.getElementById(id);
 
-function mhz(ns) {
-  const n = parseFloat(ns);
-  if (!(n > 0)) return "";
-  const f = 1000 / n;
-  return (f >= 100 ? f.toFixed(0) : f.toFixed(1).replace(/\.0$/, "")) + " MHz";
-}
 
 function option(value, label, selected) {
   return "<option value='" + fmt.escape(value) + "'" + (selected ? " selected" : "") + ">" + fmt.escape(label) + "</option>";

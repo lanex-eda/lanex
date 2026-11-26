@@ -179,16 +179,30 @@ def test_uninstall_gds3d_absent_is_honest(monkeypatch, tmp_path):
     assert res["already_absent"] is True
 
 
-def test_pull_image_fails_fast_without_engine_or_daemon():
+def test_pull_image_fails_fast_without_engine_or_daemon(monkeypatch):
     # With no usable engine, pull must return actionable guidance immediately
     # rather than launching a doomed background pull that looks like a hang.
-    from lanex.controller import installer
+    #
+    # The engine is mocked both ways. Unmocked, on a PC with Docker this test
+    # started a real `docker pull` of the LibreLane image, and that pull's log
+    # heartbeat (every 5 s, to platform_env.home()/logs/install) went on after
+    # the test into whatever home the next test had patched: the Z2 flake of
+    # test_uninstall's "nothing is removed" (a log file appeared in its home).
+    import threading
+    from lanex.controller import installer, tools as tools_mod
 
+    before = {t.name for t in threading.enumerate()}
+    monkeypatch.setattr(installer.shutil, "which", lambda n: None)
     res = installer.pull_image()
-    if not res.get("ok"):
-        assert res.get("reason")
-        # When a binary exists but the daemon is unreachable we also guide.
-        assert "guidance" in res or "Install Docker or Podman" in res["reason"]
+    assert res["ok"] is False and "Install Docker or Podman" in res["reason"]
+    # A binary but no reachable daemon (Linux): the platform's remedy, still no pull.
+    monkeypatch.setattr(installer.shutil, "which", lambda n: "/usr/bin/docker" if n == "docker" else None)
+    monkeypatch.setattr(installer.sys, "platform", "linux")
+    monkeypatch.setattr(tools_mod, "resolve_engine", lambda *a, **k: {"ready": False, "engine": None, "sg_wrap": False})
+    res = installer.pull_image()
+    assert res["ok"] is False and res.get("guidance")
+    started = {t.name for t in threading.enumerate()} - before
+    assert not {"installer_pull_image", "installer_heartbeat"} & started, started
 
 
 def test_no_double_download_guard():

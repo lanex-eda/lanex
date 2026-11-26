@@ -5,6 +5,7 @@ import { state } from "./state.js";
 import { icon } from "./icons.js";
 import { toast } from "./toast.js";
 import { openLayer, closeLayer } from "./overlay.js";
+import { bytes } from "./metricfmt.js";
 
 let _curPath = "";
 const _checked = new Set();
@@ -250,14 +251,8 @@ function useCurrentFolder() {
 }
 
 // 85 B, 9.3 kB, 1.2 MB: a file's size the way a file manager shows it.
-function fileSize(n) {
-  if (typeof n !== "number" || !Number.isFinite(n)) return "";
-  if (n < 1000) return n + " B";
-  const units = ["kB", "MB", "GB", "TB"];
-  let v = n, i = -1;
-  do { v /= 1000; i++; } while (v >= 1000 && i < units.length - 1);
-  return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + " " + units[i];
-}
+// (metricfmt.bytes is this formatter, shared by every page.)
+function fileSize(n) { return bytes(n); }
 
 // A testbench drives a design in simulation and must never be synthesized.
 // Recognised by where it lives (verify/, tb/, test/, sim/) or by its name.

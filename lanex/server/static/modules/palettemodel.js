@@ -5,6 +5,8 @@
 //   #  LibreLane settings      /  project files        ?  help and glossary
 //   (Verify checks, tools and PDKs come up by name.)
 
+import { when } from "./metricfmt.js";
+
 export const PREFIXES = {
   ">": { group: "action", label: "Actions" },
   "!": { group: "project", label: "Projects" },
@@ -86,17 +88,7 @@ function wordsScore(words, it) {
 
 // A run's start time in the person's own time, the way Runs shows it:
 // "today 05:22 pm", "yesterday 09:10 am", "3 days ago", "17 Sept".
-export function whenLocal(iso, now = new Date()) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d)) return String(iso);
-  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const days = Math.floor((new Date(now.toDateString()) - new Date(d.toDateString())) / 864e5);
-  if (days === 0) return "today " + hm;
-  if (days === 1) return "yesterday " + hm;
-  if (days < 7) return days + " days ago";
-  return d.toLocaleDateString([], { day: "numeric", month: "short", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
-}
+export function whenLocal(iso, now = new Date()) { return when(iso, now); }
 
 // Rank *items* ({ id, group, title, keys?: [strings searched besides the title] })
 // for the raw query. Recents (ids in *recentIds*, newest first) come first while

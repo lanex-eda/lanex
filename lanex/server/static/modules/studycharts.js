@@ -19,12 +19,13 @@
 
 import { chartTheme, chartInk } from "./theme-echarts.js";
 import { escapeText } from "./html.js";
+import { mhz as mfMhz } from "./metricfmt.js";
 
 const fin = (v) => typeof v === "number" && Number.isFinite(v);
 const CROSS = "path://M2,2 L10,10 M10,2 L2,10";
 const escT = escapeText;
 const fmtN = (v, d = 3) => (fin(v) ? (Math.abs(v) >= 1000 ? Math.round(v).toLocaleString("en-US") : Number(v.toFixed(d)).toString()) : "—");
-const mhz = (ns) => (ns > 0 ? (1000 / ns >= 100 ? Math.round(1000 / ns) : (1000 / ns).toPrecision(3)) + " MHz" : "");
+const mhz = (ns) => mfMhz(ns);
 
 // The front of a set of points for two directions (+1 higher is better, -1
 // lower): the points no other point beats on both. Sorted by x.

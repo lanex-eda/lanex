@@ -12,111 +12,14 @@ import * as FS from "./flowstages.js";
 // Key anatomy, numbers and units live in metricfmt.js, the one formatter
 // Runs, Compare and the sweep views share with this page; they are
 // re-exported here so everything that reads them from this module keeps working.
-import { parseKey, isNum, nonFinite, num, si, unitOf, show, signed, LANEX_DIRECTIONS, fixedDirection } from "./metricfmt.js";
+import { parseKey, isNum, nonFinite, num, si, unitOf, show, signed, LANEX_DIRECTIONS, fixedDirection, METRIC_NAMES } from "./metricfmt.js";
+import { cornerWords } from "./cornergrid.js";
 export { parseKey, isNum, nonFinite, num, si, unitOf, show, signed };
 
 // ---------- labels ---------------------------------------------------------------
 
-// Plain-English names for the base metrics people look at. Unknown keys fall
-// back to the raw key (experts recognise those; nothing is invented).
-export const LABELS = {
-  "timing__setup__ws": "Worst setup slack",
-  "timing__setup__wns": "Worst negative setup slack (WNS)",
-  "timing__setup__tns": "Total negative setup slack (TNS)",
-  "timing__setup_vio__count": "Setup violations",
-  "timing__setup_r2r__ws": "Reg-to-reg setup slack",
-  "timing__setup_r2r_vio__count": "Reg-to-reg setup violations",
-  "timing__hold__ws": "Worst hold slack",
-  "timing__hold__wns": "Worst negative hold slack (WNS)",
-  "timing__hold__tns": "Total negative hold slack (TNS)",
-  "timing__hold_vio__count": "Hold violations",
-  "timing__hold_r2r__ws": "Reg-to-reg hold slack",
-  "timing__hold_r2r_vio__count": "Reg-to-reg hold violations",
-  "timing__unannotated_net__count": "Nets without parasitics",
-  "timing__unannotated_net_filtered__count": "Nets without parasitics (filtered)",
-  "timing__drv__floating__nets": "Floating nets",
-  "timing__drv__floating__pins": "Floating pins",
-  "clock__skew__worst_setup": "Worst clock skew (setup)",
-  "clock__skew__worst_hold": "Worst clock skew (hold)",
-  "design__max_slew_violation__count": "Max slew violations",
-  "design__max_cap_violation__count": "Max capacitance violations",
-  "design__max_fanout_violation__count": "Max fanout violations",
-  "design__die__area": "Die area",
-  "design__die__bbox": "Die box",
-  "design__core__area": "Core area",
-  "design__core__bbox": "Core box",
-  "design__instance__utilization": "Core utilization",
-  "design__instance__utilization__stdcell": "Core utilization (std cells)",
-  "design__instance__count": "Instances (all)",
-  "design__instance__area": "Instance area (all, incl. fill)",
-  "design__instance__count__stdcell": "Standard cells",
-  "design__instance__area__stdcell": "Standard-cell area",
-  "design__instance__count__macros": "Macros",
-  "design__instance__area__macros": "Macro area",
-  "design__instance__count__padcells": "Pad cells",
-  "design__instance__area__padcells": "Pad-cell area",
-  "design__instance__count__cover": "Cover cells",
-  "design__instance__area__cover": "Cover-cell area",
-  "design__instance__count__setup_buffer": "Setup-repair buffers",
-  "design__instance__count__hold_buffer": "Hold-repair buffers",
-  "design__instance__displacement__max": "Max placement displacement",
-  "design__instance__displacement__mean": "Mean placement displacement",
-  "design__instance__displacement__total": "Total placement displacement",
-  "design__io": "I/O pins",
-  "design__io__hpwl": "I/O half-perimeter wirelength",
-  "floorplan__design__io": "I/O pins (floorplan)",
-  "design__rows": "Placement rows",
-  "design__sites": "Placement sites",
-  "design__lint_error__count": "Lint errors",
-  "design__lint_warning__count": "Lint warnings",
-  "design__lint_timing_construct__count": "Timing constructs in RTL",
-  "design__inferred_latch__count": "Inferred latches",
-  "design__instance_unmapped__count": "Unmapped cells",
-  "synthesis__check_error__count": "Synthesis check errors",
-  "design__disconnected_pin__count": "Disconnected pins",
-  "design__critical_disconnected_pin__count": "Critical disconnected pins",
-  "design__lvs_error__count": "LVS errors",
-  "design__lvs_device_difference__count": "LVS device differences",
-  "design__lvs_net_difference__count": "LVS net differences",
-  "design__lvs_property_fail__count": "LVS property failures",
-  "design__lvs_unmatched_device__count": "LVS unmatched devices",
-  "design__lvs_unmatched_net__count": "LVS unmatched nets",
-  "design__lvs_unmatched_pin__count": "LVS unmatched pins",
-  "design__xor_difference__count": "XOR differences (Magic vs KLayout GDS)",
-  "design__power_grid_violation__count": "Power-grid violations",
-  "design__violations": "Design violations",
-  "magic__drc_error__count": "DRC errors (Magic)",
-  "magic__illegal_overlap__count": "Illegal overlaps (Magic)",
-  "klayout__drc_error__count": "DRC errors (KLayout)",
-  "route__drc_errors": "Routing DRC errors",
-  "route__antenna_violation__count": "Antenna violations",
-  "antenna__violating__nets": "Antenna-violating nets",
-  "antenna__violating__pins": "Antenna-violating pins",
-  "antenna_diodes_count": "Antenna diodes inserted",
-  "route__wirelength": "Routed wirelength",
-  "route__wirelength__estimated": "Estimated wirelength (placement)",
-  "route__wirelength__max": "Longest net",
-  "global_route__wirelength": "Global-route wirelength",
-  "global_route__vias": "Global-route vias",
-  "route__vias": "Vias",
-  "route__vias__singlecut": "Single-cut vias",
-  "route__vias__multicut": "Multi-cut vias",
-  "route__net": "Routed nets",
-  "route__net__special": "Special (power) nets",
-  "power__total": "Total power",
-  "power__internal__total": "Internal power",
-  "power__switching__total": "Switching power",
-  "power__leakage__total": "Leakage power",
-  "ir__drop__worst": "Worst IR drop",
-  "ir__drop__avg": "Average IR drop",
-  "ir__voltage__worst": "Worst supply voltage",
-  "design_powergrid__drop__worst": "Worst IR drop (power grid)",
-  "design_powergrid__drop__average": "Average voltage (filed by the tool as drop__average)",
-  "design_powergrid__voltage__worst": "Worst voltage (power grid)",
-  "flow__errors__count": "Flow errors",
-  "flow__warnings__count": "Flow warnings",
-  "flow__warnings__type_count": "Warning types",
-};
+// The names live in metricfmt.js (one list for every page).
+export const LABELS = METRIC_NAMES;
 
 export function labelOf(key) {
   const { base, mods } = parseKey(key);
@@ -149,7 +52,6 @@ export function categoryOf(key) {
 
 // ---------- PVT corners ----------------------------------------------------------
 
-const PROC = { ss: "Slow-slow", ff: "Fast-fast", tt: "Typical", sf: "Slow-fast", fs: "Fast-slow" };
 
 // "max_ss_100C_1v60" -> { rc: "max", proc: "ss", temp: "100 °C", volt: "1.60 V" }
 // Unknown shapes return { raw } only; the UI then shows the raw name.
@@ -165,24 +67,10 @@ export function parseCorner(name) {
   return out;
 }
 
-// Compact one-line form for charts: "SS 100 °C 1.60 V · max RC".
-export function cornerShort(name) {
-  const c = parseCorner(name);
-  const bits = [c.proc ? c.proc.toUpperCase() : "", c.temp || "", c.volt || ""].filter(Boolean).join(" ");
-  if (!bits) return name;
-  return bits + (c.rc ? " · " + c.rc + " RC" : "");
-}
-
-// Long form for tips: "Slow-slow process · 100 °C · 1.60 V · max wire RC".
-export function cornerLabel(name) {
-  const c = parseCorner(name);
-  const bits = [];
-  if (c.proc) bits.push(PROC[c.proc] || c.proc.toUpperCase());
-  if (c.temp) bits.push(c.temp);
-  if (c.volt) bits.push(c.volt);
-  if (c.rc) bits.push(c.rc + " RC");
-  return bits.length >= 2 ? bits.join(" · ") : name;
-}
+// A corner in words: one namer for every page (cornergrid.js cornerWords):
+// "slow process, 100 °C, 1.60 V, max wire RC"; an unknown name stays raw.
+export function cornerShort(name) { return cornerWords(name) || String(name); }
+export function cornerLabel(name) { return cornerWords(name) || String(name); }
 
 // All corners that carry `base`, with values: [{corner, value}] in metric order.
 export function byCorner(values, base) {
