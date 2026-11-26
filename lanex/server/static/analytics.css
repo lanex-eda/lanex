@@ -628,6 +628,10 @@ body.theme-light .cmp-fold summary { color: var(--accent); }
 .cmp-lay-l small { display: block; margin-top: 4px; font-size: 12px; color: var(--text-muted); }
 .cmp-lay-c { text-align: center !important; }
 .cmp-thumb { display: inline-flex; align-items: flex-end; justify-content: center; width: 100%; max-width: 150px; aspect-ratio: 1 / 1; padding: 0; border: 0; background: none; cursor: pointer; }
+/* A wide Compare spends its width on the layouts: bigger pictures, not wider gaps. */
+#compare-body { container: cmp / inline-size; }
+@container cmp (min-width: 1500px) { .cmp-thumb { max-width: 240px; } }
+@container cmp (min-width: 2000px) { .cmp-thumb { max-width: 300px; } }
 .cmp-thumb img { display: block; height: auto; border: 1px solid var(--border-strong); border-radius: 2px; background: #06080d; }
 .cmp-thumb:hover img { border-color: var(--met1); box-shadow: 0 0 12px var(--accent-soft); }
 .cmp-error { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--fail) 45%, var(--border)); border-radius: var(--r-md); color: var(--text); }
