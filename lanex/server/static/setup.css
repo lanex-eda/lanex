@@ -188,7 +188,6 @@
 
 /* ---------- picker cards ---------- */
 .h2ico { vertical-align: -3px; margin-right: 8px; color: var(--text-muted); }
-.section-h2 { margin-top: var(--s-5); }
 
 .picker {
   background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
@@ -341,7 +340,6 @@ body.theme-light .hub-label { color: var(--accent); }
 .proj-missing .picker-actions { margin-top: var(--s-3); }
 
 .hub-list-head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-3); }
-.hub-list-acts { margin-left: auto; display: flex; gap: 6px; }
 .hub-rows { display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; margin: 0 calc(-1 * var(--s-2)); }
 .hub-none { margin: 0 var(--s-2); font-size: 14px; color: var(--text-muted); line-height: 1.5; }
 .hub-row {

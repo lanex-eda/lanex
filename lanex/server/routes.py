@@ -2118,12 +2118,6 @@ def h_manual_cancel(handler: Any) -> None:
     _respond(handler, manualcmd.get_job().cancel())
 
 
-def h_manual_result(handler: Any) -> None:
-    from ..controller import manualcmd
-    job = manualcmd.get_job()
-    _respond(handler, {"running": job.running, "result": job.last_result})
-
-
 def h_run_cancel(handler: Any) -> None:
     """Stop one run: ``{job_id}``, else the run the open project follows.
     Stopping a sweep point stops its sweep (its waiting points too)."""
@@ -6758,7 +6752,6 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/cli-command", h_cli_command),
     ("/api/manual/run", h_manual_run),
     ("/api/manual/cancel", h_manual_cancel),
-    ("/api/manual/result", h_manual_result),
     ("/api/run/start", h_run_start),
     ("/api/run/cancel", h_run_cancel),
     ("/api/run/resume", h_run_resume),
@@ -6854,7 +6847,7 @@ _GET_ROUTES = {
     "/api/layout/commands", "/api/runs/", "/api/tools", "/api/metrics-catalog", "/api/run/status",
     "/api/reports/drc", "/api/reports/lvs", "/api/fs/roots", "/api/fs/list", "/api/walk-sources",
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
-    "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
+    "/api/design-dir", "/api/preflight", "/api/pdk-layers",
     "/api/runs-keys", "/api/compare-image", "/api/synth-explore",
     "/api/timing/paths", "/api/timing/path", "/api/warnings", "/api/verify/summary",
     # Layout (lane 3)

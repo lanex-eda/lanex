@@ -384,10 +384,6 @@ function showPane(pane) {
   return body;
 }
 
-export function helpBody() {
-  return sheet().querySelector("#help-sheet-body");
-}
-
 export function selectHelpTab(pane) {
   sheet().querySelectorAll(".sheet-tab").forEach((t) =>
     t.setAttribute("aria-selected", t.dataset.pane === pane ? "true" : "false"));

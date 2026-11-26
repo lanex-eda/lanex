@@ -19,6 +19,3 @@ export function toggleDensity() {
   return compact;
 }
 
-export function isCompact() {
-  return document.body.classList.contains("density-compact");
-}

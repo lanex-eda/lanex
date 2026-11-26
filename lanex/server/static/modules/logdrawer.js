@@ -99,15 +99,6 @@ export function appendDrawer(line) {
   syncBtn();
 }
 
-export function clearDrawer() {
-  const b = body();
-  if (b) { b.textContent = ""; _unseen = 0; syncBtn(); }
-}
-
-export function closeDrawer() {
-  if (_el) { releaseOverlay(_el); hide(); }
-}
-
 export function toggleDrawer() {
   const d = ensure();
   if (!d.hidden && isOverlayOpen(d)) { releaseOverlay(d); hide(); return false; }

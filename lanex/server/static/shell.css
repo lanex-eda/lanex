@@ -42,7 +42,7 @@ a { color: var(--met1); text-underline-offset: 3px; }
 html { scrollbar-width: thin; scrollbar-color: var(--seal) transparent; }
 
 /* The one lane-label recipe: names etched into the scribe lane. */
-.lane-label, .inst-label, .rail-label, .menu-lane, .sheet-lane {
+.lane-label, .rail-label, .menu-lane, .sheet-lane {
   font-family: var(--cond); font-size: 12px; font-weight: 600;
   letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-2);
 }
@@ -99,10 +99,6 @@ html { scrollbar-width: thin; scrollbar-color: var(--seal) transparent; }
 .logo--light { display: none !important; }
 body.theme-light .logo--dark { display: none !important; }
 body.theme-light .logo--light { display: block !important; }
-.brand-name {
-  font-family: var(--sans); font-weight: 700; font-size: 19px; letter-spacing: 0.005em;
-  color: var(--ink-strong); white-space: nowrap;
-}
 
 /* Project switcher: the die label for the whole session. */
 .tb-project { position: relative; min-width: 0; height: 32px; display: flex; align-items: center; }
@@ -395,7 +391,6 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
   content: ""; position: absolute; left: -5px; top: 50%; width: 8px; height: 8px; margin-top: -4px;
   background: var(--met1); box-shadow: 0 0 10px var(--accent-glow);
 }
-.side-tab .help-pill { display: none; }
 
 /* Short windows: tighter rows; group names stay (they keep the groups
    distinct); the rail scrolls rather than clips. */
@@ -453,9 +448,6 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .section-jump .chip-clickable.is-current::after {
   content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--met1);
 }
-.section-jump-sub { min-height: 38px; border-top: 1px solid var(--seal); }
-.section-jump-sub[hidden] { display: none; }
-.section-jump-sub .chip-clickable { font-size: 13px; padding: 0 10px; }
 
 /* ------------------------------------------------------------ pills */
 /* The original rounded pill. State colour lives in the tinted fill and the
@@ -473,7 +465,6 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .pill-pass { background: var(--pass-soft); border-color: var(--pass); color: var(--text-strong); }
 .pill-warn { background: var(--warn-soft); border-color: var(--warn); color: var(--text-strong); }
 .pill-fail { background: var(--fail-soft); border-color: var(--fail); color: var(--text-strong); }
-.pill-info { background: var(--accent-soft); border-color: var(--accent); color: var(--text-strong); }
 .pill-pending { color: var(--text-muted); }
 .pill-running { background: var(--accent-soft); border-color: var(--accent); color: var(--text-strong); animation: pulse 1.5s ease-in-out infinite; will-change: opacity; }
 @keyframes pulse { 50% { opacity: 0.6; } }
@@ -593,9 +584,6 @@ body[data-conn="lost"] #update-banner { display: none; }
 .gloss-term { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--ink-strong); padding-top: 1px; }
 .gloss-def { font-size: 14px; line-height: 1.5; color: var(--ink); }
 .gloss-empty { color: var(--ink-2); padding: 12px 0; }
-.learn-md { line-height: 1.55; }
-.learn-md code { font-family: var(--mono); }
-.learn-id { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); margin: 0 0 14px; }
 
 .keys { display: flex; flex-direction: column; }
 .keys-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--seal); }
@@ -667,8 +655,6 @@ body[data-conn="lost"] #update-banner { display: none; }
 .btn-ghost:hover { background: transparent; }
 .btn-warn { background: var(--fail); border-color: var(--fail); color: var(--on-accent); font-weight: 600; }
 .btn-warn:hover { background: var(--fail); border-color: var(--fail); color: var(--on-accent); filter: brightness(1.05); box-shadow: 0 6px 16px var(--fail-soft); }
-.btn-success { background: var(--pass); border-color: var(--pass); color: var(--on-pass); font-weight: 600; }
-.btn-success:hover { background: var(--pass); border-color: var(--pass); color: var(--on-pass); filter: brightness(1.05); }
 .btn-sm { height: 28px; padding: 0 10px; font-size: 13px; gap: 6px; }
 .btn-lg { height: 40px; padding: 0 20px; font-size: 15px; }
 
@@ -726,7 +712,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--met1); }
 .wiz-tpl-only::before { background: var(--met4); }
 .wiz-tpl:disabled { opacity: 0.55; cursor: not-allowed; }
 .wiz-tpl:disabled:hover { border-color: var(--border); box-shadow: none; }
-.wiz-tpl-empty { grid-column: 1 / -1; min-height: 0; }
 .wiz-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 18px; }
 .wiz-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .wiz-field.span-2 { grid-column: 1 / -1; }

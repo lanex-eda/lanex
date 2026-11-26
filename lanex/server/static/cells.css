@@ -196,7 +196,6 @@ body.theme-light #sec-cells {
 .cl-tt th.cl-tt-o { color: var(--text-strong); }
 .cl-tt td.v1 { color: var(--text-strong); font-weight: 700; background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .cl-tt td.v0 { color: var(--text-muted); }
-.cl-tt td.vZ { color: var(--warn); }
 .cl-seq { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.55; }
 .cl-seq li + li { margin-top: 4px; }
 .cl-pinline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: var(--s-3); }
@@ -263,7 +262,7 @@ body.theme-light #sec-cells {
 .cl-tbl { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
 .cl-tbl th { text-align: left; font-weight: 500; font-size: 11px; font-family: var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .cl-tbl td { padding: 6px 10px; border-bottom: 1px solid var(--cl-grid); vertical-align: top; white-space: nowrap; }
-.cr-roles td:nth-child(3), .mc-cat td:first-child, .cl-tbl td.cl-wrap { white-space: normal; }
+.cr-roles td:nth-child(3), .mc-cat td:first-child { white-space: normal; }
 .cl-tbl tr[data-pick] { cursor: pointer; }
 .cl-tbl tr[data-pick]:hover td { background: var(--hover, var(--surface-2)); }
 .cl-tbl tr.is-sel td { background: var(--cl-sel); }

@@ -17,7 +17,6 @@
 
 @keyframes ld-pulse { from { opacity: 1; } to { opacity: 0.55; } }
 @keyframes ld-in { from { opacity: 0; } to { opacity: 1; } }
-.ld-in { animation: ld-in 120ms ease-out; }
 
 .ld-line {
   display: block; height: 12px; border-radius: var(--r-sm);
@@ -58,5 +57,4 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ld-skel { animation: none; opacity: 0.8; }
-  .ld-in { animation: none; }
-}
+  }
