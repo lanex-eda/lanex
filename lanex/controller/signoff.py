@@ -132,6 +132,28 @@ def _when(iso: Any) -> str:
     return d.strftime("%d %b %Y, %H:%M").lstrip("0") + zone
 
 
+def no_clock_words(nc: Any) -> Tuple[str, str]:
+    """The no-clock verdict in words (verify._no_clock's facts): the headline
+    and what it means. Three cases: nothing was timed at all; only
+    input-to-output paths were timed (no flip-flop had a clock); some
+    flip-flops' clock pins were not timed."""
+    nc = nc if isinstance(nc, dict) else {}
+    regs, unclk = nc.get("registers"), nc.get("unclocked")
+    port = ""
+    if nc.get("port_missing") and nc.get("sdc_port"):
+        port = f" The SDC names the clock port {nc['sdc_port']}, which the design doesn't have."
+    if not nc.get("io_paths"):
+        return ("Timing was never checked: no clock reached the registers.",
+                "OpenSTA found no timed path in any corner, so \"0 violations\" means nothing was checked." + port)
+    if _isnum(unclk) and _isnum(regs) and 0 < unclk < regs:
+        return ("Timing is incomplete: some flip-flops had no clock.",
+                f"{fmt_n(unclk)} flip-flop clock pins not timed (of {fmt_n(regs)} flip-flops), so their setup and "
+                "hold were never checked; the violation counts cover the rest." + port)
+    return ("Timing was never checked on the flip-flops: no clock reached them.",
+            "Only input-to-output paths were timed; no flip-flop had a clock, so \"0 violations\" says nothing "
+            "about the registers." + port)
+
+
 def _rel(run_dir: Path, p: Path) -> str:
     try:
         return p.relative_to(run_dir).as_posix()
@@ -329,7 +351,7 @@ def build(run_dir: str | Path, *, design_dir: Optional[str | Path] = None, base_
         row = next((x for x in checks if x["id"] == kind), None)
         if row and len(per) > 1 and " violating" in row["value"] and not row["value"].startswith("0 "):
             row["value"] = row["value"].replace(
-                " violating", f" violating (summed over {len(per)} corners; {fmt_n(max(per))} in the worst)", 1)
+                " violating", f" violating (summed over {len(per)} corners; {fmt_n(max(per))} in the worst corner)", 1)
     power = _power_by_corner(run)
     for pw in power[:1]:
         use(run_dir / pw["source"])
@@ -514,8 +536,8 @@ def render_md(r: Dict[str, Any]) -> str:
     t = r["timing"]
     L += ["## Timing", "", "### Clock", ""]
     if t.get("no_clock"):
-        L += ["**Timing was never checked: no clock reached the registers.** OpenSTA found no timed path in any corner, "
-              "so \"0 violations\" means nothing was checked.", ""]
+        head, more = no_clock_words(t["no_clock"])
+        L += [f"**{_mt(head)}** {_mt(more)}", ""]
     L += [(f"Period {_mt(t['clock_period'])} ns ({_mt(t['mhz'])} MHz)" if t.get("clock_period") else "No clock period in the config.")
           + (f" · uncertainty {abs(t['uncertainty']):.3f} ns" if _isnum(t.get("uncertainty")) else ""), ""]
     if t["corners"]:
@@ -713,7 +735,8 @@ def render_html(r: Dict[str, Any], *, fonts_dir: Optional[Path] = None, chip_png
     t = r["timing"]
     H.append("<h2>Timing</h2>")
     if t.get("no_clock"):
-        H.append("<div class='disc'><b>Timing was never checked: no clock reached the registers.</b> OpenSTA found no timed path in any corner, so “0 violations” means nothing was checked.</div>")
+        head, more = no_clock_words(t["no_clock"])
+        H.append(f"<div class='disc'><b>{_e(head)}</b> {_e(more)}</div>")
     H.append("<p>" + (f"Clock period <b class='mono'>{_e(t['clock_period'])} ns</b> ({_e(t['mhz'])} MHz)" if t.get("clock_period") else "No clock period in the config.")
              + (f" · uncertainty <span class='mono'>{abs(t['uncertainty']):.3f} ns</span>" if _isnum(t.get("uncertainty")) else "") + "</p>")
     if t["corners"]:
