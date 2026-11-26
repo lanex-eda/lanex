@@ -63,19 +63,23 @@ export function fmtUm(v) {
 const f2 = (v) => (Math.abs(v - Math.round(v)) > 1e-9 ? v.toFixed(2).replace(/0+$/, "").replace(/\.$/, "") : String(Math.round(v)));
 
 // Bands of the core grid's straps: axis "h" = horizontal straps (y extent),
-// "v" = vertical (x extent). Power first, ground one width plus spacing on.
+// "v" = vertical (x extent). pdngen's offset is the power strap's centre
+// line, so each strap is centre ± width/2; ground's centre is one width plus
+// the spacing on (the SRAM template's DEF: met5 VPWR 26.73-28.33 around
+// core 10.88 + offset 16.65, VGND 30.03-31.63). Same as macrolib.straps.
 export function straps(model, axis) {
   const core = model.core && model.core.box;
   const p = (model.pdn || {})[axis] || {};
   if (!core || !p.pitch) return [];
   const [lo, hi] = axis === "h" ? [core[1], core[3]] : [core[0], core[2]];
+  const half = p.w / 2;
   const out = [];
   for (let k = 0; k < 2000; k++) {
-    const a = lo + p.off + k * p.pitch;
-    if (a > hi) break;
-    const b = a + p.w + p.s;
-    out.push(["power", a, a + p.w]);
-    if (b + p.w <= hi + 1e-6) out.push(["ground", b, b + p.w]);
+    const c = lo + p.off + k * p.pitch;
+    if (c > hi) break;
+    const g = c + p.w + p.s;
+    out.push(["power", c - half, c + half]);
+    if (g + half <= hi + 1e-6) out.push(["ground", g - half, g + half]);
   }
   return out;
 }
