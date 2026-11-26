@@ -773,7 +773,7 @@ function driveHtml(c, fam, det) {
     "<td class='mono' title='" + esc(isExcluded(x) ? "The flow won't use it: " + exWhy(x).join(", ") : x.cell) + "'>" + esc(x.drive || "·") + "</td><td>" + M.fmtArea(x.area) + "</td>" +
     "<td>" + (x.delay ? M.fmtPs(x.delay) : "–") + "</td><td>" + (x.in_cap ? M.fmtCap(x.in_cap) : "–") + "</td>" +
     "<td>" + (x.leakage != null ? M.fmtPower(x.leakage) : "–") + "</td><td>" + (x.used ? localeNum(x.used) : "–") + "</td></tr>").join("");
-  const table = "<div class='cl-tblwrap'><table class='cl-tbl'><thead><tr><th>Drive</th><th>Area</th><th title='At a fan-out-of-4 load'>Delay</th><th>In cap</th><th>Leakage</th><th>Used</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
+  const table = "<div class='cl-tblwrap'><table class='data-table cl-tbl'><thead><tr><th>Drive</th><th>Area</th><th title='At a fan-out-of-4 load'>Delay</th><th>In cap</th><th>Leakage</th><th>Used</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
   const cv = det && det.ok && det.curves;
   let chart = "";
   if (cv && cv.series && cv.series.length && cv.loads_ff && cv.loads_ff.length) {
@@ -862,8 +862,8 @@ function pinsHtml(c, det) {
       "<td><button class='btn btn-ghost btn-xs' data-table='" + k + "'>Table</button></td></tr>";
   }).join("");
   return "<div class='cl-card-h'>Pins &amp; timing arcs <span class='muted'>" + esc(det.corner || "") + "</span></div>" +
-    "<div class='cl-tblwrap'><table class='cl-tbl'><thead><tr><th>Pin</th><th>Direction</th><th>Cap</th><th>Function</th></tr></thead><tbody>" + pins + "</tbody></table></div>" +
-    (arcs ? "<div class='cl-tblwrap'><table class='cl-tbl'><thead><tr><th>Arc</th><th>Kind</th><th title='At the FO4 operating point'>Rise</th><th>Fall</th><th></th></tr></thead><tbody>" + arcs + "</tbody></table></div><div id='cl-nldm'></div>" : "") +
+    "<div class='cl-tblwrap'><table class='data-table cl-tbl'><thead><tr><th>Pin</th><th>Direction</th><th>Cap</th><th>Function</th></tr></thead><tbody>" + pins + "</tbody></table></div>" +
+    (arcs ? "<div class='cl-tblwrap'><table class='data-table cl-tbl'><thead><tr><th>Arc</th><th>Kind</th><th title='At the FO4 operating point'>Rise</th><th>Fall</th><th></th></tr></thead><tbody>" + arcs + "</tbody></table></div><div id='cl-nldm'></div>" : "") +
     "<div class='cl-pro-acts'><button class='btn btn-ghost btn-sm' id='cl-copy-inst'>" + icon("code", { size: 13 }) + " Copy an instance</button>" +
     "<span class='muted'>for hand-placed cells (clock gates, delay lines, sync flops). Synthesis keeps a hand-instantiated cell as-is.</span></div>";
 }

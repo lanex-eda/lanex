@@ -21,6 +21,7 @@ import { openLayer, closeLayer, isLayerOpen } from "./overlay.js";
 import { toast } from "./toast.js";
 import * as MF from "./metricfmt.js";
 import { pageEmpty } from "./empty.js";
+import * as MR from "./metricrows.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 // Up to twelve runs: every point of a typical sweep. At 1366 px twelve
@@ -224,17 +225,15 @@ async function compare(root) {
     "<div class='cmp-grid'><section class='cmp-block cmp-sec'>" + summaryHtml(data, cols) + "</section>" +
     "<section class='cmp-block cmp-sec'>" + settingsHtml(data, cols) + "</section></div>" +
     "<h3 class='cmp-h'>Charts</h3><div id='cmp-charts' class='cmp-charts'></div>" +
+    // The one "every metric" view (metricrows.js), the same as Analytics' All metrics.
     "<div class='cmp-mhead'><h3 class='cmp-h'>Every metric</h3>" +
-    "<div class='rn-seg' role='group' aria-label='Which metrics'>" +
-    "<button class='rn-segb' data-mf='changed' title='Metrics where any run differs from the reference'>Changed <span class='rn-n' id='cmp-n-changed'></span></button>" +
-    "<button class='rn-segb' data-mf='worse' title='Metrics where any run is worse than the reference, by LibreLane&#39;s direction'>Worse <span class='rn-n' id='cmp-n-worse'></span></button>" +
-    "<button class='rn-segb' data-mf='all'>All <span class='rn-n' id='cmp-n-all'></span></button></div>" +
-    "<input id='cmp-search' type='search' placeholder='Filter metrics' aria-label='Filter metrics'/></div>" +
-    "<div class='cmp-scroll' id='cmp-metrics'></div>";
+    "<span id='cmp-mfilter'></span>" +
+    "<input id='cmp-search' class='an-search' type='search' placeholder='Filter by name or key, e.g. slack, area, lvs' aria-label='Filter metrics'/></div>" +
+    "<div class='cmp-scroll cmp-mscroll' id='cmp-metrics'></div>";
   const search = out.querySelector("#cmp-search");
   const paint = () => paintMetrics(out, data, cols, search.value.trim().toLowerCase());
   search.oninput = paint;
-  out.querySelectorAll("[data-mf]").forEach((b) => b.addEventListener("click", () => { _filter = b.dataset.mf; paint(); }));
+  out.querySelector("#cmp-mfilter").addEventListener("click", (e) => { const b = e.target.closest("[data-mf]"); if (b && !b.disabled) { _filter = b.dataset.mf; paint(); } });
   out.querySelector("#cmp-metrics").addEventListener("click", (e) => {
     const t = e.target.closest("[data-fold]");
     if (!t) return;
@@ -489,21 +488,18 @@ function paintMetrics(out, data, cols, filter) {
   const changed = (g) => keysOf(g).some((k) => differ(table[k], cols));
   const worse = (g) => keysOf(g).some((k) => worseOf(k));
   const crit = (g) => !!(meta[g.base] && meta[g.base].critical) || keysOf(g).some((k) => meta[k] && meta[k].critical);
-  const nChanged = groups.filter(changed).length, nWorse = groups.filter(worse).length;
-  out.querySelector("#cmp-n-changed").textContent = nChanged;
-  out.querySelector("#cmp-n-worse").textContent = nWorse;
-  out.querySelector("#cmp-n-all").textContent = groups.length;
-  out.querySelectorAll("[data-mf]").forEach((b) => {
-    const on = b.dataset.mf === _filter;
-    b.classList.toggle("is-on", on);
-    b.setAttribute("aria-pressed", on ? "true" : "false");
-  });
-  let set = groups.filter((g) => (_filter === "all" ? true : _filter === "worse" ? worse(g) : changed(g)));
-  if (filter) set = set.filter((g) => keysOf(g).some((k) => k.toLowerCase().includes(filter)));
+  const isCrit = (b) => !!(meta[b] && meta[b].critical);
+  const problem = (g) => keysOf(g).some((k) => cols.some((c) => { const s = MR.statusOf(k, table[k][c.col], isCrit); return s === "fail" || s === "warn"; }));
+  const test = { all: () => true, problems: problem, changed, worse };
+  const counts = Object.fromEntries(Object.entries(test).map(([id, f]) => [id, groups.filter(f).length]));
+  out.querySelector("#cmp-mfilter").innerHTML = MR.filterHtml(counts, _filter, { label: "Which metrics", noRef: cols.length < 2 });
+  let set = groups.filter(test[_filter] || test.all);
+  if (filter) set = set.filter((g) => keysOf(g).some((k) => MR.matches(k, filter)));
   if (_filter !== "all") set.sort((a, b) => (crit(b) ? 1 : 0) - (crit(a) ? 1 : 0) || a.base.localeCompare(b.base));
   const host = out.querySelector("#cmp-metrics");
   if (!set.length) {
-    host.innerHTML = "<p class='muted cmp-none'>" + (filter ? "No metric matches that filter." : _filter === "worse" ? "No run is worse than the reference in any metric." : "Every metric is the same in these runs.") + "</p>";
+    host.innerHTML = "<p class='muted cmp-none'>" + (filter ? "No metric matches that filter." : _filter === "worse" ? "No run is worse than the reference in any metric."
+      : _filter === "problems" ? "No run has a violation, an error or a negative slack." : "Every metric is the same in these runs.") + "</p>";
     return;
   }
   const row = (k, { sub = false, g = null } = {}) => {
@@ -512,12 +508,11 @@ function paintMetrics(out, data, cols, filter) {
     const m = meta[k] || meta[MF.parseKey(k).base];
     const dir = MF.direction(k, meta);
     const unit = scale ? scale.unit : MF.show(k, 1).unit;
-    const isCrit = m && m.critical;
     const n = g ? g.kids.length : 0;
-    const label = sub ? "<span class='cmp-sub'>" + esc(k.slice(MF.parseKey(k).base.length).replace(/^__/, "")) + "</span>"
-      : (n ? "<button class='cmp-fold-b' data-fold='" + esc(g.base) + "' aria-expanded='" + _openBases.has(g.base) + "'>" + icon("chevron", { size: 11 }) + "</button>" : "<span class='cmp-fold-sp'></span>") +
-        (isCrit ? "<span class='cmp-crit' title='LibreLane treats a change here as critical'>!</span>" : "") + "<code>" + esc(g ? g.base : k) + "</code>" +
-        (n ? " <span class='cmp-kids'>" + n + (g.self ? "" : " values") + "</span>" : "");
+    // The row of Analytics' All metrics (metricrows.js): plain name, critical tag, unit and direction, the key in mono with its count.
+    const label = sub ? MR.nameHtml({ key: k, kid: true })
+      : (n ? "<button class='cmp-fold-b' data-fold='" + esc(g.base) + "' aria-expanded='" + _openBases.has(g.base) + "' aria-label='Show the " + n + " values'>" + icon("chevron", { size: 11 }) + "</button>" : "<span class='cmp-fold-sp'></span>") +
+        "<div class='an-mname-t'>" + MR.nameHtml({ key: g.self || "", base: g.base, critical: crit(g), count: MR.countWords(g.kids), unit, dir }) + "</div>";
     const cells = cols.map((c, i) => {
       if (!sub && g && !g.self) return "<td class='" + (i === 0 ? "is-ref" : "") + "'></td>";
       const v = per[c.col];
@@ -527,7 +522,7 @@ function paintMetrics(out, data, cols, filter) {
       return "<td class='" + (i === 0 ? "is-ref" : "") + "'" + fmt.titleAttr(v) + "><span class='cmp-v'>" + esc(!s ? "—" : s.text) + "</span>" +
         (d && d.cls !== "is-same" ? deltaHtml(d) : d ? "<span class='cmp-d is-same'>same</span>" : "") + "</td>";
     }).join("");
-    return "<tr class='" + (sub ? "cmp-subrow" : "") + "'><td title='" + esc(k) + "'><div class='cmp-ml'>" + label + (unit || dir ? "<small class='cmp-u'>" + esc(unit) + (dir ? " " + MF.dirMark(dir) : "") + "</small>" : "") + "</div></td>" + cells + "</tr>";
+    return "<tr class='" + (sub ? "cmp-subrow" : "") + "'><td title='" + esc(k) + "'><div class='cmp-ml'>" + label + "</div></td>" + cells + "</tr>";
   };
   host.innerHTML = "<table class='cmp-table cmp-all'><thead><tr><th>Metric</th>" + colHeaders(cols) + "</tr></thead><tbody>" +
     set.map((g) => {

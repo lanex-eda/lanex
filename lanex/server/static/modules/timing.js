@@ -447,7 +447,7 @@ export function pathDetailHtml(p) {
     budgetHtml(p) +
     "<div class='tx-sums'>" + sumHtml(hold ? "Must arrive after" : "Needed by", p.required, p.required_terms, "is-req") +
       sumHtml("Arrives at", p.arrival, p.arrival_terms, "is-arr") + "</div>" +
-    "<div class='tx-tscroll'><table class='tx-table'><thead><tr><th>Pin</th><th><span class='sr-only'>Edge</span></th><th class='n'>Fanout</th><th class='n'>Cap <small>fF</small></th>" +
+    "<div class='tx-tscroll'><table class='data-table tx-table'><thead><tr><th>Pin</th><th><span class='sr-only'>Edge</span></th><th class='n'>Fanout</th><th class='n'>Cap <small>fF</small></th>" +
       "<th class='n'>Slew <small>" + U + "</small></th><th class='n'>Incr <small>" + U + "</small></th><th class='n'>Arrival <small>" + U + "</small></th></tr></thead><tbody>" +
       foldRow("launch", p.launch || {}, scale) + stageRows((p.data && p.data.rows) || [], scale) + foldRow("capture", p.capture || {}, scale) +
     "</tbody></table></div>" +

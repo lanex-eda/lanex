@@ -689,7 +689,7 @@ async function showLibChange(m) {
     title: "What LanEx changed in the timing file",
     bodyHtml: "<p class='muted'>LanEx never edits a PDK file. It keeps a copy in your project and changes only the per-pin input limits below; every delay and transition table is exactly the PDK's. The limit it uses is the file's own <code>default_max_transition</code>.</p>" +
       rel.map((r) => "<h4>" + esc(r.from) + "</h4><p class='muted mono'>" + esc(r.file.replace(/^dir::/, "")) + "</p>" +
-        "<table class='cl-tbl'><thead><tr><th>Pin</th><th>Line</th><th>max_transition</th><th>LanEx's copy</th></tr></thead><tbody>" +
+        "<table class='data-table cl-tbl'><thead><tr><th>Pin</th><th>Line</th><th>max_transition</th><th>LanEx's copy</th></tr></thead><tbody>" +
         r.changes.map((c) => "<tr><td class='mono'>" + esc(c.pin) + "</td><td class='mono'>" + c.line + "</td><td class='mono'>" + esc(c.from) + " ns</td><td class='mono'>" + esc(c.to) + " ns</td></tr>").join("") +
         "</tbody></table>").join("") +
       "<p class='cl-foot'>Why: a 0.04 ns limit is the bottom of the characterisation table, and no buffer in the library can make an edge that fast, so the resizer stops with RSZ-0090.</p>",
@@ -771,7 +771,7 @@ function panePdk(pane, pdk, close) {
   if (!list.length) { pane.innerHTML = "<p class='muted'>" + esc(pdk) + " ships no hard macros under libs.ref.</p>"; return; }
   const have = new Set(D.macros.map((m) => m.name));
   pane.innerHTML = "<p class='muted'>Ready-made blocks in the installed " + esc(pdk) + ". LanEx points at the PDK's files with <code>pdk_dir::</code> paths, so nothing is copied and the project stays portable. It makes a ports-only header for synthesis and, where the PDK's timing file needs it, a relaxed copy in your project.</p>" +
-    "<div class='cl-tblwrap'><table class='cl-tbl mc-cat'><thead><tr><th>Block</th><th>Capacity</th><th>Ports</th><th>Size</th><th>Timing</th><th></th></tr></thead><tbody>" +
+    "<div class='cl-tblwrap'><table class='data-table cl-tbl mc-cat'><thead><tr><th>Block</th><th>Capacity</th><th>Ports</th><th>Size</th><th>Timing</th><th></th></tr></thead><tbody>" +
     list.map((m, k) => {
       const c = m.capacity || {};
       const slow = m.lef_bytes > 5e6;

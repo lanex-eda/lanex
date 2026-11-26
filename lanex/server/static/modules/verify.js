@@ -612,14 +612,14 @@ function detailHtml(c) {
   ].filter(Boolean);
   let table = "";
   if (c.breakdown && c.breakdown.length) {
-    table += "<table class='vf-mini'><tbody>" + c.breakdown.map((b) =>
+    table += "<table class='data-table vf-mini'><tbody>" + c.breakdown.map((b) =>
       "<tr" + (V.isNum(b.value) && b.value > 0 && c.id !== "antenna" && !/iteration|diodes|all, incl/.test(b.label) ? " class='is-bad'" : "") + "><th scope='row'>" + esc(b.label) + "</th><td>" + esc(n(b.value)) +
       mprov(b.metric) + "</td></tr>").join("") + "</tbody></table>";
   }
   if (c.corners && c.corners.length) {
     // "Fails the run?" is the corner matched against the checker's corner
     // rule (Decides above), so its source is that setting.
-    table += "<table class='vf-mini'><thead><tr><th>Corner</th><th>Count</th><th>Fails the run?</th></tr></thead><tbody>" +
+    table += "<table class='data-table vf-mini'><thead><tr><th>Corner</th><th>Count</th><th>Fails the run?</th></tr></thead><tbody>" +
       [...c.corners].sort((a, b) => V.cornerSortKey(a.corner) - V.cornerSortKey(b.corner)).map((r) =>
         "<tr" + (V.isNum(r.value) && r.value > 0 ? " class='is-" + (r.gating ? "bad" : "warnrow") + "'" : "") + "><th scope='row'><span data-an-tip='" + esc(AM.cornerLabel(r.corner)) + "' tabindex='0'>" + esc(r.corner) + "</span></th><td>" + esc(n(r.value)) +
         (r.value != null && c.metric ? mprov(c.metric + "__corner:" + r.corner) : "") + "</td><td>" + (r.gating ? "yes" : "<span class='muted'>warns</span>") + "</td></tr>").join("") +
@@ -702,7 +702,7 @@ function renderTiming() {
       cell(r, "slew", { gate: false }) + cell(r, "cap", { gate: false }) + cell(r, "fanout", { gate: false }) +
       "</tr>";
   }).join("");
-  const table = "<div class='vf-tscroll'><table class='an-ttable vf-ttable'><thead>" +
+  const table = "<div class='vf-tscroll'><table class='data-table an-ttable vf-ttable'><thead>" +
     "<tr><th rowspan='2' scope='col'>Corner</th><th colspan='4' class='vf-th-grp'>Setup <small>(max delay)</small></th><th colspan='4' class='vf-th-grp'>Hold <small>(min delay)</small></th><th colspan='3' class='vf-th-grp'>Electrical <small>(violations)</small></th></tr>" +
     "<tr><th class='vf-gcol'><span class='has-tip' tabindex='0' data-an-tip='● this corner fails the run on a violation; ○ it only warns'>gate</span></th><th><span class='has-tip' tabindex='0' data-an-tip='Worst slack (ns). Negative means a path misses the clock.'>WNS</span></th><th><span class='has-tip' tabindex='0' data-an-tip='Total negative slack (ns): the sum over every failing endpoint.'>TNS</span></th><th>Viol.</th>" +
     "<th class='vf-gcol'>gate</th><th>WHS</th><th>THS</th><th>Viol.</th><th>Slew</th><th>Cap</th><th>Fanout</th></tr>" +
@@ -825,22 +825,22 @@ function renderLvs() {
         : rprov(lv.json, "", "Open Netgen's comparison (JSON)");
       return "<tr" + (same ? "" : " class='is-bad'") + "><th scope='row'><span class='has-tip' tabindex='0' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span></th><td>" + esc(n(a)) + "</td><td>" + esc(n(b)) + "</td><td>" + (same ? mark("pass") : mark("fail")) + src + "</td></tr>";
     };
-    lvsBody = "<table class='an-ttable vf-lvs-t'><thead><tr><th></th><th>Layout <small>(extracted)</small></th><th>Netlist <small>(from synthesis)</small></th><th></th></tr></thead><tbody>" +
+    lvsBody = "<table class='data-table an-ttable vf-lvs-t'><thead><tr><th></th><th>Layout <small>(extracted)</small></th><th>Netlist <small>(from synthesis)</small></th><th></th></tr></thead><tbody>" +
       row("Devices", "devices", "Cell instances, including fill, tap and decap cells.", "Number of devices:") +
       row("Nets", "nets", "Distinct electrical nodes.", "Number of nets:") +
       row("Pins", "pins", "Top-level ports, power included.", "") +
       "</tbody></table>";
     if (lv.device_diffs && lv.device_diffs.length) {
-      lvsBody += "<p class='vf-k'>Device counts that differ</p><table class='vf-mini'><thead><tr><th>Layout</th><th></th><th>Netlist</th><th></th></tr></thead><tbody>" +
+      lvsBody += "<p class='vf-k'>Device counts that differ</p><table class='data-table vf-mini'><thead><tr><th>Layout</th><th></th><th>Netlist</th><th></th></tr></thead><tbody>" +
         lv.device_diffs.map((r) => "<tr class='is-bad'><td><code>" + esc(r.layout) + "</code></td><td>" + esc(n(r.layout_n)) + "</td><td><code>" + esc(r.netlist) + "</code></td><td>" + esc(n(r.netlist_n)) + "</td></tr>").join("") + "</tbody></table>";
     }
     if (lv.pin_diffs && lv.pin_diffs.length) {
-      lvsBody += "<p class='vf-k'>Pins that don't match</p><table class='vf-mini'><tbody>" +
+      lvsBody += "<p class='vf-k'>Pins that don't match</p><table class='data-table vf-mini'><tbody>" +
         lv.pin_diffs.map((r) => "<tr class='is-bad'><td><code>" + esc(r.layout) + "</code></td><td>↔</td><td><code>" + esc(r.netlist) + "</code></td></tr>").join("") + "</tbody></table>";
     }
   }
   if (c && c.breakdown && c.breakdown.length) {
-    lvsBody += "<table class='vf-mini'><tbody>" + c.breakdown.map((b) => "<tr" + (V.isNum(b.value) && b.value > 0 ? " class='is-bad'" : "") + "><th scope='row'>" + esc(b.label) + "</th><td>" + esc(n(b.value)) + mprov(b.metric) + "</td></tr>").join("") + "</tbody></table>";
+    lvsBody += "<table class='data-table vf-mini'><tbody>" + c.breakdown.map((b) => "<tr" + (V.isNum(b.value) && b.value > 0 ? " class='is-bad'" : "") + "><th scope='row'>" + esc(b.label) + "</th><td>" + esc(n(b.value)) + mprov(b.metric) + "</td></tr>").join("") + "</tbody></table>";
   }
   const result = lv && lv.result
     ? "<p class='vf-lvs-result is-" + (c && c.status === "pass" ? "pass" : "fail") + "'>" + mark(c && c.status === "pass" ? "pass" : "fail") + "Netgen: <b>" + esc(lv.result) + "</b>" +
@@ -880,7 +880,7 @@ function renderRel() {
     antBody = "<dl class='vf-dl vf-dl-compact'>" + an.breakdown.map((b) => "<div><dt>" + esc(b.label) + "</dt><dd><b>" + esc(n(b.value)) + "</b>" + mprov(b.metric) + "</dd></div>").join("") + "</dl>";
   }
   if (ant && ant.rows && ant.rows.length) {
-    antBody += "<div class='vf-tscroll'><table class='vf-mini'><thead><tr><th>Net</th><th>Pin</th><th>Layer</th><th><span class='has-tip' tabindex='0' data-an-tip='Partial antenna ratio over the required ratio. Over 1 is a violation.'>Ratio</span></th></tr></thead><tbody>" +
+    antBody += "<div class='vf-tscroll'><table class='data-table vf-mini'><thead><tr><th>Net</th><th>Pin</th><th>Layer</th><th><span class='has-tip' tabindex='0' data-an-tip='Partial antenna ratio over the required ratio. Over 1 is a violation.'>Ratio</span></th></tr></thead><tbody>" +
       ant.rows.map((r) => "<tr class='is-bad'><td><code>" + esc(r.net) + "</code></td><td><code>" + esc(r.pin) + "</code></td><td>" + esc(r.layer) + "</td><td>" + esc(r.partial) + " / " + esc(r.required) + rprov(ant.report, r.net + " ", "Show this net in the antenna summary") + "</td></tr>").join("") +
       "</tbody></table></div>" + (ant.more ? "<p class='an-foot'>" + ant.more + " more in the report.</p>" : "");
   } else if (an && an.status === "pass") {
@@ -902,7 +902,7 @@ function renderRel() {
   const pdnBody = (pd && pd.breakdown && pd.breakdown.length
       ? "<dl class='vf-dl vf-dl-compact'>" + pd.breakdown.map((b) => "<div><dt>Unconnected, " + esc(b.label) + "</dt><dd><b>" + esc(n(b.value)) + "</b>" + mprov(b.metric) + "</dd></div>").join("") + "</dl>"
       : (pd && pd.status === "pass" ? "<p class='vf-clean'>" + mark("pass") + "Every cell reaches the power grid.</p>" : "")) +
-    (irRows ? "<p class='vf-k'>IR drop" + (ir[0] && ir[0].corner ? " · " + esc(ir[0].corner) : "") + "</p><table class='vf-mini vf-ir'><thead><tr><th>Net</th><th>Worst</th><th>Average</th><th><span class='has-tip' tabindex='0' data-an-tip='Worst drop as a share of the supply voltage. The bar is full at 10 %.'>Of supply</span></th></tr></thead><tbody>" + irRows + "</tbody></table>" +
+    (irRows ? "<p class='vf-k'>IR drop" + (ir[0] && ir[0].corner ? " · " + esc(ir[0].corner) : "") + "</p><table class='data-table vf-mini vf-ir'><thead><tr><th>Net</th><th>Worst</th><th>Average</th><th><span class='has-tip' tabindex='0' data-an-tip='Worst drop as a share of the supply voltage. The bar is full at 10 %.'>Of supply</span></th></tr></thead><tbody>" + irRows + "</tbody></table>" +
       "<p class='an-foot'>LibreLane reports IR drop but doesn't judge it; a few percent of the supply is a common budget.</p>" : "");
   const pdnCard = "<div class='an-card vf-tool is-" + esc(pd ? pd.status : "not_run") + "'>" +
     "<div class='vf-tool-h'><div><span class='an-kpi-t'>Power grid · OpenROAD</span><small>Connections and IR drop</small></div><span class='vf-pillar-st'>" + mark(pd ? pd.status : "not_run") + esc(pd ? (V.STATUS[pd.status] || {}).label : "") + "</span></div>" +

@@ -223,6 +223,10 @@ function renderTable() {
       "<button type='button' data-sr-show='bad' aria-pressed='" + (batch.show === "bad") + "'>Didn't pass</button></span>" +
     (batch.running ? "<button class='btn btn-ghost btn-sm' data-sr='stop'>Stop</button>" : "<button class='btn btn-ghost btn-sm' data-sr='close' title='Hide the table'>Close</button>") +
     "</div><div class='sr-table' role='table' aria-label='Testbench results'>" +
+    // The table standard's head row (mono caps), so each column says what it is.
+    "<div class='sr-row sr-hrow' role='row'><span role='columnheader'>Result</span><span role='columnheader'>Testbench</span>" +
+      "<span class='sr-end' role='columnheader'>How it ended</span><span class='sr-ms' role='columnheader'>Time</span>" +
+      "<span class='sr-line' role='columnheader'>The deciding line</span><span role='columnheader'><span class='sr-only'>Actions</span></span></div>" +
     rows.map(({ r, i }) => {
       const [word, cls] = STATE[r.state] || [String(r.state || "").toUpperCase(), "is-idle"];
       const name = r.tb.split("/").pop();
@@ -342,7 +346,7 @@ export function initSimRun(c) {
       const show = e.target.closest("[data-sr-show]");
       if (show) { batch.show = show.dataset.srShow; renderTable(); return; }
       const b = e.target.closest("[data-sr]");
-      const row = e.target.closest(".sr-row");
+      const row = e.target.closest(".sr-row:not(.sr-hrow)");
       if (b) {
         const i = +b.dataset.i;
         if (b.dataset.sr === "stop") { try { await api.simCancel(); } catch (_e) { /* the done event follows */ } }
@@ -355,12 +359,12 @@ export function initSimRun(c) {
       if (row) showLog(+row.dataset.i);
     });
     host.addEventListener("keydown", (e) => {
-      const row = e.target.closest(".sr-row");
+      const row = e.target.closest(".sr-row:not(.sr-hrow)");
       if (!row) return;
       if (e.key === "Enter") { e.preventDefault(); showLog(+row.dataset.i); }
       else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        const all = [...host.querySelectorAll(".sr-row")];
+        const all = [...host.querySelectorAll(".sr-row:not(.sr-hrow)")];
         const k = all.indexOf(row) + (e.key === "ArrowDown" ? 1 : -1);
         if (all[k]) all[k].focus();
       }

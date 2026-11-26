@@ -1087,6 +1087,10 @@ const stateTone = (s) => (s === "notrun" ? "warn" : runVerdict(s).cls);
 
 // The table a sweep exists for: the swept value(s) against how each point
 // came out and its key numbers, sorted by value.
+// Each column says what it is, so a narrow table drops the least needed ones
+// (runs.css, as Runs drops columns) instead of scrolling sideways in its row.
+// The second area column is "a2": the one the sweep isn't judged by.
+const colCls = (id, i) => "sw-c-" + (i === 3 ? "a2" : id);
 function resultsHtml(pts, sw, { scale, areaId, failCode }) {
   const axes = sw.axes || [];
   if (!pts.length || !axes.length) return "";
@@ -1100,18 +1104,18 @@ function resultsHtml(pts, sw, { scale, areaId, failCode }) {
       axes.map((a) => "<td class='sw-res-v'>" + esc(p.v ? p.v[a.var] : "") + (a.var === "CLOCK_PERIOD" && p.v && Number(p.v[a.var]) > 0 ? " <small>" + esc(mhz(Number(p.v[a.var]))) + "</small>" : "") + "</td>").join("") +
       "<td><span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(word) + "</span>" +
         (p.detail ? " <span class='muted'>" + esc(p.detail) + "</span>" : "") + sup + "</td>" +
-      cols.map((id) => {
+      cols.map((id, i) => {
         const v = p.r ? metricOf(p, id) : null;
         const neg = (id === "wns" || id === "hold") && v != null && v < 0 ? " is-neg" : "";
-        return "<td class='sw-num" + neg + "'" + (v != null && id !== "runtime" ? fmt.titleAttr(v) : "") + ">" + esc(cellText(id, v, scale, false)) + "</td>";
+        return "<td class='sw-num " + colCls(id, i) + neg + "'" + (v != null && id !== "runtime" ? fmt.titleAttr(v) : "") + ">" + esc(cellText(id, v, scale, false)) + "</td>";
       }).join("") +
-      "<td class='sw-res-tag'>" + esc(p.tag) + "</td></tr>";
+      "<td class='sw-res-tag sw-c-tag'>" + esc(p.tag) + "</td></tr>";
   }).join("");
   const unit = (id) => id === "runtime" ? "" : id === "power" ? (scale ? scale.unit : "") : F.show(M_BY[id].key, 1).unit;
   return "<div class='sw-res-wrap'><table class='sw-res'><caption>Results by " + esc(axes.map((a) => a.var).join(" × ")) + "</caption><thead><tr>" +
     axes.map((a) => "<th scope='col'>" + esc(a.var) + "</th>").join("") + "<th scope='col'>Result</th>" +
-    cols.map((id) => "<th scope='col' class='sw-num'>" + esc(M_BY[id].label) + (unit(id) ? " <small>" + esc(unit(id)) + "</small>" : "") + "</th>").join("") +
-    "<th scope='col'>Run</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
+    cols.map((id, i) => "<th scope='col' class='sw-num " + colCls(id, i) + "'>" + esc(M_BY[id].label) + (unit(id) ? " <small>" + esc(unit(id)) + "</small>" : "") + "</th>").join("") +
+    "<th scope='col' class='sw-c-tag'>Run</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
 }
 
 // The sweep's results as a CSV: the swept values, how each point ended and

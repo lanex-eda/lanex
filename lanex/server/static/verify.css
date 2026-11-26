@@ -245,8 +245,9 @@ body.theme-light .vf-step-n { color: var(--accent); border-color: color-mix(in s
 .vf-dl dd b { color: var(--text-strong); }
 .vf-dl-compact { margin-bottom: var(--s-3); }
 .vf-mini { width: 100%; border-collapse: collapse; font-size: 13px; }
-.vf-mini th, .vf-mini td { padding: 5px 8px; text-align: right; border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent); white-space: nowrap; }
-.vf-mini thead th { font-weight: 600; color: var(--text-strong); font-size: 12px; }
+table.vf-mini th, table.vf-mini td { padding: 5px 8px; text-align: right; border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent); white-space: nowrap; }
+.vf-mini td { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.vf-mini td:first-child { font-family: inherit; }
 .vf-mini thead th:first-child, .vf-ttable thead th:first-child { text-align: left; }
 .vf-mini th[scope=row], .vf-mini td:first-child { text-align: left; font-weight: 400; color: var(--text-muted); }
 .vf-mini code { font-size: 12px; }
@@ -266,7 +267,7 @@ body.theme-light .vf-step-n { color: var(--accent); border-color: color-mix(in s
 .vf-card-flush { padding: 0; overflow: hidden; }
 .vf-tscroll { overflow-x: auto; }
 .vf-ttable th, .vf-ttable td { padding: 7px 10px; font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.vf-ttable thead th { font-family: var(--sans, inherit); }
+/* (Its head is the table standard's mono caps: styles.css table.data-table.) */
 .vf-ttable .vf-th-grp { text-align: center; border-bottom: 1px solid var(--border); font-size: 12.5px; }
 .vf-ttable tbody th[scope=row] { font-family: inherit; }
 .vf-corner { display: flex; flex-direction: column; line-height: 1.25; }
@@ -461,7 +462,9 @@ body.theme-light .tx-dl.is-better { color: var(--pass); }
 .tx-term[data-an-tip] { cursor: help; border-bottom: 1px dotted color-mix(in srgb, var(--text-muted) 55%, transparent); }
 .tx-term.is-zero { opacity: 0.6; }
 .tx-op { margin-right: 4px; color: var(--text-muted); font-family: var(--mono); }
-.tx-tscroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-md); }
+/* A box of its own height, so the path table's head stays in view as it scrolls. */
+.tx-tscroll { overflow: auto; max-height: calc(62vh / var(--ll-zoom, 1)); border: 1px solid var(--border); border-radius: var(--r-md); }
+.tx-table th { z-index: 1; background: var(--bg-2); }
 .tx-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .tx-table th { position: sticky; top: 0; padding: 7px 10px; text-align: left; font: 500 10.5px/1.2 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); background: var(--surface-2); border-bottom: 1px solid var(--border); white-space: nowrap; }
 .tx-table th small { text-transform: none; letter-spacing: 0; color: var(--text-disabled); }

@@ -748,7 +748,8 @@ body.theme-light .lx-focus-k { color: var(--accent); }
 .lx-slack.is-neg { color: var(--fail); }
 .lx-ptab { width: calc(100% - 20px); margin: 10px 10px 0; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
 .lx-ptab th {
-  padding: 4px 4px; text-align: left; font: 600 10.5px/1.2 var(--cond); letter-spacing: 0.1em; text-transform: uppercase;
+  /* The table standard's head: mono caps (the glass over the canvas keeps --cond). */
+  padding: 4px 4px; text-align: left; font: 500 10.5px/1.2 var(--mono); letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--text-muted); border-bottom: 1px solid var(--border);
 }
 .lx-ptab th:nth-child(1) { width: 28px; }

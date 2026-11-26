@@ -245,14 +245,7 @@
 .seg-btn.is-active { background: var(--accent-soft, var(--surface)); color: var(--accent); }
 .seg-btn:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: -2px; }
 
-/* ---- Generic data table (Timing, reused by future tables) -------------- */
-.data-table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
-.data-table thead th { position: sticky; top: 0; background: var(--surface-2); color: var(--text);
-  text-align: left; padding: 6px var(--s-2); border-bottom: 1px solid var(--border);
-  font-weight: 600; z-index: 1; }
-.data-table td { padding: 5px var(--s-2); border-bottom: 1px solid var(--border); vertical-align: top; }
-.data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-.data-table .mono { font-family: var(--mono); font-size: var(--t-xs); }
+/* (The data table standard is table.data-table in styles.css.) */
 
 /* ---- In-app dialogs (dialog.js) --------------------------------------- */
 .dlg-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: flex;
@@ -378,6 +371,12 @@ body.theme-light .dlg-body h4 { color: var(--accent); }
 }
 .dlg-body .prov-btn:hover { color: var(--met1); border-color: var(--border); background: var(--surface-2); box-shadow: none; }
 .dlg-body .cc-table td, .dlg-body .cc-table th { padding-top: 7px; padding-bottom: 7px; vertical-align: middle; }
+/* Settings used: fixed columns, long values wrap, so Source is never cut off. */
+.fs-tablewrap table.data-table { table-layout: fixed; margin: 0; }
+.fs-tablewrap table.data-table th:nth-child(1) { width: 30%; }
+.fs-tablewrap table.data-table th:nth-child(3) { width: 24%; }
+.fs-tablewrap table.data-table td { overflow-wrap: anywhere; word-break: break-word; vertical-align: top; }
+.fs-tablewrap table.data-table td code { overflow-wrap: anywhere; }
 .dlg-body .fs-note .btn { margin-left: 6px; height: 28px; padding: 0 10px; font-size: 13px; }
 
 /* Folder browser: the places to jump to are chips in one row, not file rows. */

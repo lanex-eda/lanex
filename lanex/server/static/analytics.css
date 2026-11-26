@@ -227,7 +227,7 @@ body.theme-light .an-v.is-neg { color: var(--fail); }
 
 /* ---------- timing ---------- */
 .an-ttable { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.an-ttable th, .an-ttable td { padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent); text-align: right; white-space: nowrap; }
+table.an-ttable th, table.an-ttable td { padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent); text-align: right; white-space: nowrap; }
 .an-ttable thead th { font-weight: 600; color: var(--text-strong); font-size: 13px; border-bottom-color: var(--border-strong); }
 .an-ttable thead th small { font-weight: 400; color: var(--text-muted); }
 .an-ttable th[scope=row] { text-align: left; font-weight: 400; color: var(--text-muted); }
@@ -404,8 +404,7 @@ body.theme-light .an-spark .sp-pt { fill: var(--an-1); stroke: var(--surface); s
 
 /* ---------- all metrics ---------- */
 .an-all-bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); margin-bottom: var(--s-3); }
-.an-all-bar .seg-btn { height: 32px; padding: 0 14px; font-size: 13px; }
-.an-all-bar .seg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.rn-segb:disabled { opacity: 0.45; cursor: not-allowed; }
 .an-cat { border: 1px solid var(--border); border-radius: var(--r-md); margin-bottom: var(--s-3); background: var(--surface); overflow: hidden; max-width: 1240px; }
 .an-cat > summary {
   cursor: pointer; list-style: none; padding: 10px var(--s-4); background: var(--surface-2);
@@ -540,7 +539,20 @@ body.theme-light .cmp-fold summary { color: var(--accent); }
 .cmp-fold[open] summary { margin-bottom: var(--s-2); }
 #compare-body .cmp-mhead { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2) var(--s-3); margin: var(--s-5) 0 var(--s-2); }
 #compare-body .cmp-mhead .cmp-h { margin: 0 var(--s-2) 0 0; }
-#compare-body .cmp-mhead #cmp-search { width: 280px; height: 34px; min-height: 34px; }
+#compare-body .cmp-mhead #cmp-search { width: 360px; height: 34px; min-height: 34px; }
+/* ---- The every-metric view (metricrows.js): the same row in All metrics and Compare ---- */
+.mr-run { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--text); }
+#compare-body .cmp-mscroll .cmp-table td { vertical-align: top; }
+.mr-u { margin-left: 6px; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--text-muted); white-space: nowrap; }
+.an-mtable td.is-num .an-v { font-weight: 500; }
+.an-mtable td.is-num .an-dot { margin-right: 6px; }
+/* Compare's long list scrolls in its own box, so its head (run names) stays in view. */
+#compare-body .cmp-mscroll { max-height: calc(78vh / var(--ll-zoom, 1)); overflow: auto; }
+#compare-body .cmp-mscroll .cmp-table thead th { position: sticky; top: 0; z-index: 2; }
+#compare-body .cmp-mscroll .cmp-table td:first-child { white-space: normal; min-width: 280px; }
+#compare-body .cmp-ml .an-mname-t { min-width: 0; }
+#compare-body .cmp-ml .an-mname-t code { display: block; margin-top: 2px; padding: 0; background: none; font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); overflow-wrap: anywhere; }
+#compare-body .cmp-ml .an-mname-t code.an-mkey { display: inline; margin-top: 0; color: var(--text); }
 #compare-body .cmp-charts { margin: 0; }
 .cmp-none { margin: 0; padding: 14px; }
 
@@ -578,9 +590,9 @@ body.theme-light .cmp-fold summary { color: var(--accent); }
 .cmp-kids { font-size: 11.5px; color: var(--text-muted); flex: none; }
 /* A metric's label on one line: the fold, the critical mark, the name (cut
    with … and whole in the hover), how many values it folds, its unit. */
-.cmp-ml { display: flex; align-items: baseline; gap: 4px; min-width: 0; white-space: nowrap; }
+.cmp-ml { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
 .cmp-ml code { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.cmp-ml .cmp-fold-b, .cmp-ml .cmp-crit { align-self: center; flex: none; }
+.cmp-ml .cmp-fold-b, .cmp-ml .cmp-crit { align-self: flex-start; margin-top: 2px; flex: none; }
 .cmp-ml .cmp-u { margin-left: auto; padding-left: 6px; flex: none; }
 #compare-body .cmp-table tr.cmp-subrow td:first-child { padding-left: 40px; }
 .cmp-sub { font-family: var(--mono); font-size: 12px; color: var(--text-muted); }

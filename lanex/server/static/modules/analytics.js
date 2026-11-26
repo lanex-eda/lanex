@@ -31,6 +31,7 @@ import { loadingStart, skel } from "./loading.js";
 import { verdictOfRun } from "./verdict.js";
 import { showEmpty, setRunBarActions } from "./empty.js";
 import * as SM from "./studymodel.js";
+import * as MR from "./metricrows.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -46,7 +47,7 @@ let _token = 0;                 // guards against out-of-order loads
 let _job = null;                // the first load's skeleton (loading.js), until the first paint
 function loadDone() { if (_job) { _job.done(); _job = null; } }
 const _trendCache = new Map();  // design dir -> trends payload
-let _allFilter = "all";         // All metrics: all | problems | changed
+let _allFilter = "all";         // All metrics: all | problems | changed | worse (metricrows.js)
 let _partial = null;            // {n, name, dir} when values come from a step's state_out.json
 
 async function loadMeta() {
@@ -590,7 +591,7 @@ function renderTiming() {
     return "<td" + (neg || (isCount && v > 0) ? " class='is-bad'" : "") + ">" + vh(key) + (suf === "ws" ? " " + deltaHtml(key, { short: true }) : "") + provBtn(key) +
       (cs && cs.n > 1 ? " <span class='an-u'>" + esc(F.num(cs.worst)) + " in the worst</span>" : "") + "</td>";
   };
-  const table = "<table class='an-ttable'><thead><tr><th></th><th>Setup <small>(max delay)</small></th><th>Hold <small>(min delay)</small></th></tr></thead><tbody>" +
+  const table = "<table class='data-table an-ttable'><thead><tr><th></th><th>Setup <small>(max delay)</small></th><th>Hold <small>(min delay)</small></th></tr></thead><tbody>" +
     rows.map(([label, suf, tip]) => "<tr><th scope='row'><span tabindex='0' class='has-tip' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span></th>" + cell("setup", suf) + cell("hold", suf) + "</tr>").join("") +
     "</tbody></table>";
 
@@ -782,7 +783,7 @@ function renderPower() {
     return "<tr><th scope='row'>" + esc(net) + "</th><td>" + (has(wk) ? vh(wk) + " " + deltaHtml(wk, { short: true }) + provBtn(wk) : "—") + "</td><td>" + (has(vk) ? vh(vk) + provBtn(vk) : "—") + "</td></tr>";
   }).join("");
   const ir = netRows ? "<div class='an-card'><div class='an-card-h'>IR drop <span class='muted'>" + (corner ? "at " + esc(corner) : "power grid") + "</span></div>" +
-    "<table class='an-ttable'><thead><tr><th>Net</th><th><span class='has-tip' tabindex='0' data-an-tip='The largest voltage lost across the power grid before reaching a cell on this net.'>Worst drop</span></th><th><span class='has-tip' tabindex='0' data-an-tip='Supply net: the lowest voltage any cell sees. Ground net: the highest (ground bounce).'>Worst voltage</span></th></tr></thead><tbody>" + netRows + "</tbody></table>" +
+    "<table class='data-table an-ttable'><thead><tr><th>Net</th><th><span class='has-tip' tabindex='0' data-an-tip='The largest voltage lost across the power grid before reaching a cell on this net.'>Worst drop</span></th><th><span class='has-tip' tabindex='0' data-an-tip='Supply net: the lowest voltage any cell sees. Ground net: the highest (ground bounce).'>Worst voltage</span></th></tr></thead><tbody>" + netRows + "</tbody></table>" +
     "<dl class='an-facts'>" + fact("Power-grid violations", "design__power_grid_violation__count", { tip: "Cells not connected to the power grid." }) + "</dl>" +
     "<p class='an-foot'>From OpenROAD's static IR-drop analysis. A few millivolts on a small design is typical.</p></div>"
     : (has("ir__drop__worst") ? "<div class='an-card'><div class='an-card-h'>IR drop</div><dl class='an-facts'>" + fact("Worst IR drop", "ir__drop__worst") + fact("Average IR drop", "ir__drop__avg") + fact("Worst voltage", "ir__voltage__worst") + "</dl></div>" : "");
@@ -890,7 +891,7 @@ function renderFlow() {
     return "<tr><th scope='row'>" + (tip ? "<span class='has-tip' tabindex='0' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span>" : esc(label)) + "</th>" + cells.join("") + "</tr>";
   }).join("");
   const qor = "<div class='an-card an-card-wide'><div class='an-card-h'>Quality by stage <span class='muted'>value at the end of each stage, as the steps wrote it; · = unchanged in that stage</span></div>" +
-    "<div class='an-scrollx'><table class='an-ttable an-qor'><thead>" + thead + "</thead><tbody>" + tbody + "</tbody></table></div></div>";
+    "<div class='an-scrollx'><table class='data-table an-ttable an-qor'><thead>" + thead + "</thead><tbody>" + tbody + "</tbody></table></div></div>";
 
   // Runtime by stage + slowest steps + peak memory.
   const timed = steps.filter((s) => M.isNum(s.runtime_s));
@@ -1036,16 +1037,9 @@ async function drawHistoryBy(by, t, runs, xOf) {
 
 // ---------- 8. All metrics -----------------------------------------------------------------
 
+// The one reading of "a problem" (metricrows.js), the same as Compare's.
 function statusOf(key, v) {
-  const { base } = M.parseKey(key);
-  if (/(_vio__count|error[s]?__count|__errors$|_violation__count|drc_errors|illegal_overlap__count|unmatched_|_difference__count|disconnected_pin__count|inferred_latch__count|unmapped__count|property_fail__count|violating__)/.test(base)) {
-    const n = Number(v);
-    if (n === 0) return "pass";
-    const m = _meta.get(base);
-    return m && m.critical ? "fail" : (/drc_error|drc_errors/.test(base) ? "fail" : "warn");
-  }
-  if (/^timing__.*__(ws|wns|tns)$/.test(base) && M.isNum(v)) return v < 0 ? "fail" : "";
-  return "";
+  return MR.statusOf(key, v, (base) => { const m = _meta.get(base); return !!(m && m.critical); });
 }
 
 function renderAll() {
@@ -1053,11 +1047,10 @@ function renderAll() {
   if (!el) return;
   const total = Object.keys(_v).length;
   el.innerHTML = "<div class='an-all-bar'>" +
+    // The one "every metric" view (metricrows.js): Compare's Every metric has the same filter and row.
+    "<span id='an-all-filter'></span>" +
     "<input type='search' id='an-all-search' class='an-search' placeholder='Filter by name or key, e.g. slack, area, lvs' aria-label='Filter metrics' value='" + esc(document.getElementById("an-all-search")?.value || "") + "'/>" +
-    "<div class='seg' role='group' aria-label='Show'>" +
-      [["all", "All"], ["problems", "Problems"], ["changed", "Changed"]].map(([id, l]) =>
-        "<button class='seg-btn" + (_allFilter === id ? " is-active" : "") + "' data-an-filter='" + id + "'" + (id === "changed" && !_b ? " disabled title='Pick a run under Compare with first'" : "") + ">" + l + "</button>").join("") +
-    "</div><span class='muted' id='an-all-count'></span></div>" +
+    "<span class='muted' id='an-all-count'></span></div>" +
     "<div id='an-all-rows'></div>" +
     "<p class='an-foot'>" + total + " values from " + (_partial ? esc(_partial.dir) + "/state_out.json (the last step that finished)" : "this run's metrics.json") + ". The magnifier opens the raw file at that line. Directions (higher or lower is better) come from LibreLane's metric registry.</p>";
   renderAllRows();
@@ -1066,8 +1059,12 @@ function renderAll() {
 function renderAllRows() {
   const host = document.getElementById("an-all-rows");
   if (!host) return;
-  if (_allFilter === "changed" && !_b) _allFilter = "all";
+  if ((_allFilter === "changed" || _allFilter === "worse") && !_b) _allFilter = "all";
   const q = (document.getElementById("an-all-search")?.value || "").trim().toLowerCase();
+  const isProblem = (k) => { const s = statusOf(k, _v[k]); return s === "fail" || s === "warn"; };
+  const isChanged = (k) => !!_b && JSON.stringify(_b[k]) !== JSON.stringify(_v[k]);
+  const isWorse = (k) => { if (!_b) return false; const d = F.delta(k, _v[k], _b[k], null, { dir: M.directionOf(_meta, k) }); return !!(d && d.cls === "is-worse"); };
+  const TEST = { all: () => true, problems: isProblem, changed: isChanged, worse: isWorse };
   // Group keys by base metric; modifier variants hang under their base.
   const fams = new Map();
   for (const k of Object.keys(_v).sort()) {
@@ -1076,13 +1073,12 @@ function renderAllRows() {
     const f = fams.get(base);
     if (!Object.keys(mods).length) f.main = k; else f.kids.push(k);
   }
-  const keep = (k) => {
-    const v = _v[k];
-    if (q && !(k.toLowerCase().includes(q) || (M.labelOf(k) || "").toLowerCase().includes(q))) return false;
-    if (_allFilter === "problems") { const s = statusOf(k, v); return s === "fail" || s === "warn"; }
-    if (_allFilter === "changed") { const b = _b[k]; return JSON.stringify(b) !== JSON.stringify(v); }
-    return true;
-  };
+  const keep = (k) => MR.matches(k, q) && (TEST[_allFilter] || TEST.all)(k);
+  // Counts per filter, by metric (a metric and its corners count once), as Compare counts.
+  const famKeys = (f) => (f.main ? [f.main] : []).concat(f.kids);
+  const counts = Object.fromEntries(Object.entries(TEST).map(([id, t]) => [id, [...fams.values()].filter((f) => famKeys(f).some(t)).length]));
+  const fh = document.getElementById("an-all-filter");
+  if (fh) fh.innerHTML = MR.filterHtml(counts, _allFilter, { attr: "data-an-filter", noRef: !_b });
   const byCat = new Map(M.CATEGORIES.map(([id, title]) => [id, { title, rows: [], n: 0 }]));
   byCat.set("other", { title: "Other", rows: [], n: 0 });
   let shown = 0;
@@ -1105,33 +1101,29 @@ function renderAllRows() {
   if (cnt) cnt.textContent = shown + " of " + Object.keys(_v).length + " shown";
   const body = [...byCat.values()].filter((c) => c.rows.length).map((c) =>
     "<details class='an-cat' open><summary>" + esc(c.title) + " <span class='muted'>" + c.n + "</span></summary>" +
-    "<table class='an-mtable'><thead><tr><th>Metric</th><th>Value</th>" + (_b ? "<th>" + esc(_baseTag) + "</th><th>Change</th>" : "") + "<th class='an-src'><span class='sr-only'>Source</span></th></tr></thead><tbody>" + c.rows.join("") + "</tbody></table></details>").join("");
+    "<table class='data-table an-mtable'><thead><tr><th>Metric</th><th class='is-num'><span class='mr-run'>" + esc(_tag) + "</span></th>" + (_b ? "<th class='is-num'><span class='mr-run'>" + esc(_baseTag) + "</span></th><th class='is-num'>Change</th>" : "") + "<th class='an-src'><span class='sr-only'>Source</span></th></tr></thead><tbody>" + c.rows.join("") + "</tbody></table></details>").join("");
   host.innerHTML = body || "<div class='an-none'>Nothing matches. Clear the filter to see every metric.</div>";
   wireProvBtns(host);
 }
 
-function kidNoun(keys) {
-  const m = M.parseKey(keys[0]).mods;
-  if (m.corner) return keys.length === 1 ? "corner" : "corners";
-  if (m.net) return keys.length === 1 ? "net" : "nets";
-  if (m.iter !== undefined) return keys.length === 1 ? "iteration" : "iterations";
-  if (m.class) return keys.length === 1 ? "cell type" : "cell types";
-  return keys.length === 1 ? "variant" : "variants";
-}
+// "corners", "nets": the words Compare uses too (metricrows.countWords).
+function kidNoun(keys) { return MR.countWords(keys).replace(/^\d+ /, ""); }
 
+// One row of the every-metric view (metricrows.js): the name cell Compare
+// draws too, then the numbers at the table precision in the row's unit.
 function rowHtml(key, base, toggle, kid, famId, hidden, count = "") {
-  const label = key ? M.labelOf(key) : (M.LABELS[base] || null);
   const v = key ? _v[key] : undefined;
   const st = key ? statusOf(key, v) : "";
   const m = _meta.get(base);
-  const tag = m && m.critical ? "<span class='an-crit' data-an-tip='LibreLane marks this metric critical: a non-zero count fails the flow.' tabindex='0'>critical</span>" : "";
-  const name = kid
-    ? "<span class='an-kidname'>" + esc(key.slice(base.length).replace(/^__/, "").replace(/__/g, " · ")) + "</span>"
-    : (label ? "<span class='an-mlabel'>" + esc(label) + "</span>" + tag + "<code>" + esc(key || base) + (count ? "<span class='an-mcount'> · " + esc(count) + "</span>" : "") + "</code>"
-      : "<code class='an-mkey'>" + esc(key || base) + "</code>" + tag + (count ? "<span class='an-mcount'> · " + esc(count) + "</span>" : ""));
-  const val = key ? "<td class='an-mval" + (st === "fail" ? " is-bad" : st === "warn" ? " is-warn" : "") + "'>" + (st ? "<i class='an-dot is-" + st + "' aria-hidden='true'></i>" : "") + vh(key, v) + "</td>" : "<td class='muted'>" + (toggle ? "" : "—") + "</td>";
+  const k0 = key || base;
+  const scale = key ? MR.rowScale(key, [v, _b ? _b[key] : undefined]) : null;
+  const unit = kid ? "" : MR.rowUnit(k0, scale);
+  const dir = kid ? 0 : M.directionOf(_meta, k0);
+  const name = MR.nameHtml({ key: key || "", base, kid, critical: !!(m && m.critical), count, unit, dir });
+  const num = (x) => { const s = MR.valueShown(key, x, scale); return "<span class='an-v' title='" + esc(s.title) + "'>" + esc(s.text) + "</span>"; };
+  const val = key ? "<td class='is-num an-mval" + (st === "fail" ? " is-bad" : st === "warn" ? " is-warn" : "") + "'>" + (st ? "<i class='an-dot is-" + st + "' aria-hidden='true'></i>" : "") + num(v) + "</td>" : "<td class='is-num muted'>" + (toggle ? "" : "—") + "</td>";
   let bcells = "";
-  if (_b) bcells = key ? "<td class='an-mval an-mbase'>" + (_b[key] !== undefined ? vh(key, _b[key]) : "—") + "</td><td>" + deltaHtml(key, { short: true }) + "</td>" : "<td></td><td></td>";
+  if (_b) bcells = key ? "<td class='is-num an-mval an-mbase'>" + (_b[key] !== undefined ? num(_b[key]) : "—") + "</td><td class='is-num'>" + deltaHtml(key, { short: true }) + "</td>" : "<td></td><td></td>";
   return "<tr class='" + (kid ? "an-kid" : "an-fam") + "'" + (kid ? " data-fam='" + famId + "'" + (hidden ? " hidden" : "") : "") + ">" +
     "<th scope='row'><div class='an-mname'>" + (kid ? "" : "<span class='an-exp-slot'>" + toggle + "</span>") + "<div>" + name + "</div></div></th>" + val + bcells + "<td class='an-src'>" + (key ? provBtn(key) : "") + "</td></tr>";
 }
