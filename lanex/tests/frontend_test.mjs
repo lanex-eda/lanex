@@ -2826,6 +2826,159 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   });
 }
 
+// ------------------------------------------------ lane 5: failures and learning
+{
+  const GL = JSON.parse(readFileSync(resolve(MOD, "..", "glossary.json"), "utf8"));
+  const TM = await import(toUrl(resolve(MOD, "term.js")));
+  const terms = TM.normGlossary(GL);
+  check("glossary: version 2, 60+ terms, each with a plain short line and real See also links", () => {
+    assert.equal(GL.version, 2);
+    const ids = Object.keys(terms);
+    assert.ok(ids.length >= 60, ids.length + " terms");
+    for (const [id, e] of Object.entries(terms)) {
+      assert.match(id, /^[a-z0-9-]+$/, id);
+      assert.ok(e.term && e.short && e.short.length < 260, id);
+      for (const s of e.see || []) assert.ok(terms[s], id + " sees " + s);
+    }
+  });
+  check("glossary: every place the registry attaches to names a real term (40+ labels)", () => {
+    const used = new Set();
+    for (const a of TM.ATTACH) {
+      assert.ok(a.in && a.sel, JSON.stringify(a));
+      for (const id of a.term ? [a.term] : Object.values(a.text || {})) { assert.ok(terms[id], id); used.add(id); }
+    }
+    assert.ok(used.size >= 40, used.size + " distinct terms on labels");
+    assert.equal(TM.termFor({ text: { "core utilization": "utilization" } }, "  Core utilization: "), "utilization");
+    assert.equal(TM.termFor({ term: "antenna" }, "anything"), "antenna");
+    assert.equal(TM.termFor({ text: { a: "b" } }, "c"), null);
+  });
+  check("glossary: a term is found by its id, its name or another name", () => {
+    assert.equal(TM.findTerm(terms, "wns").id, "wns");
+    assert.equal(TM.findTerm(terms, "Utilisation").id, "utilization");
+    assert.equal(TM.findTerm(terms, "WNS").id, "wns");
+    assert.equal(TM.findTerm(terms, "nope"), null);
+    // The old flat file still reads, and the palette gets a flat list.
+    assert.equal(TM.normGlossary({ DRC: "Design rule check." }).drc.short, "Design rule check.");
+    assert.match(TM.flatGlossary(GL).WNS, /worst path/);
+  });
+  check("glossary: the popover's words are escaped and link to Help", () => {
+    const h = TM.termHtml({ id: "x", term: "<b>X</b>", short: "a & b", lanex: "in LanEx", see: [] });
+    assert.ok(!h.includes("<b>X</b>") && h.includes("&#60;b&#62;X") && h.includes("a &#38; b"));
+    assert.match(h, /data-term-more='x'/);
+    assert.match(h, /term-lanex/);
+  });
+  check("glossary: the failure cards' terms are all in the glossary", () => {
+    const py = readFileSync(resolve(MOD, "..", "..", "..", "controller", "problems.py"), "utf8");
+    const keys = new Set();
+    // Literal lists ("learn": ["pdn", "strap"]) and the check-to-term table.
+    for (const m of py.matchAll(/"learn": \[((?:"[a-z0-9-]+"(?:, )?)*)\]/g)) for (const k of m[1].matchAll(/"([a-z0-9-]+)"/g)) keys.add(k[1]);
+    const table = (py.match(/_CHECK_TERM = \{([^}]*)\}/) || [])[1] || "";
+    for (const k of table.matchAll(/: "([a-z0-9-]+)"/g)) keys.add(k[1]);
+    assert.ok(keys.size >= 15, keys.size + " keys");
+    for (const k of keys) assert.ok(terms[k], "problems.py learn key " + k);
+  });
+
+  const CK = await import(toUrl(resolve(MOD, "clockfield.js")));
+  check("clock helper: periods and frequencies, both ways", () => {
+    assert.deepEqual(CK.parseClock("10"), { ns: 10, unit: "ns" });
+    assert.equal(CK.parseClock("100 MHz").ns, 10);
+    assert.equal(CK.parseClock("100M").ns, 10);
+    assert.equal(CK.parseClock("2.5GHz").ns, 0.4);
+    assert.equal(CK.parseClock("8 ns", "mhz").ns, 8, "a unit typed wins over the field's");
+    assert.equal(CK.parseClock("50", "mhz").ns, 20, "MHz mode reads a bare number as MHz");
+    assert.equal(CK.parseClock("3", "mhz").ns, 333.3);
+    assert.ok(CK.parseClock("0").error && CK.parseClock("abc").error && CK.parseClock("").error);
+    assert.equal(CK.freqText(10), "100 MHz");
+    assert.equal(CK.freqText(15), "66.67 MHz");
+    assert.equal(CK.freqText(0.4), "2.5 GHz");
+    assert.equal(CK.periodText(10), "10 ns");
+    assert.equal(CK.shown(10, "mhz"), "100");
+  });
+  check("clock helper: the last run's line is arithmetic on its slack, said as an estimate", () => {
+    assert.equal(CK.lastRunLine("t1", 10, 4.11), "t1 met 10 ns with 4.11 ns to spare.");
+    const miss = CK.lastRunLine("t1", 5, -0.59);
+    assert.match(miss, /missed 5 ns by 0\.59 ns: about 5\.6 ns \(179 MHz\) would meet, an estimate/);
+    assert.equal(CK.lastRunLine("t1", null, 1), "");
+  });
+
+  const FP = await import(toUrl(resolve(MOD, "fppreview.js")));
+  // LibreLane's own numbers, from real sky130A runs (sky130_fd_sc_hd).
+  const SKY = { site: { name: "unithd", w: 0.46, h: 2.72 }, margins: {},
+    pdn: { PDN_VOFFSET: 16.32, PDN_VWIDTH: 1.6, PDN_VSPACING: 1.7, PDN_HOFFSET: 16.65, PDN_HWIDTH: 1.6, PDN_HSPACING: 1.7, PDN_MULTILAYER: true },
+    io: { v_pitch: 0.46, h_pitch: 0.68 }, aspect: 1 };
+  check("floorplan: relative sizing gives the die LibreLane made (to the grid)", () => {
+    // A real run: 3359.472 µm² of cells at 40 % -> LibreLane's die 102.685 x 113.405.
+    const fp = FP.computeFloorplan({ FP_SIZING: "relative", FP_CORE_UTIL: 40 }, { ...SKY, synth: { area: 3359.472, tag: "t" } });
+    assert.ok(fp.estimate && Math.abs(fp.die[2] - 102.685) < 0.01 && Math.abs(fp.die[3] - 113.405) < 0.01, JSON.stringify(fp.die));
+    assert.equal(fp.rows, 33);
+    assert.ok(fp.checks.some((c) => c.level === "ok" && /straps fit/.test(c.text)));
+    assert.equal(FP.computeFloorplan({ FP_SIZING: "relative", FP_CORE_UTIL: 40 }, { ...SKY, synth: null }).state, "needs-synthesis");
+  });
+  check("floorplan: the power-grid check matches the PDN-0185 LibreLane really raised", () => {
+    // Forced: a 4-bit counter's core 19.78 µm across, straps need 16.32 + 4.9.
+    const small = FP.computeFloorplan({ FP_SIZING: "absolute", DIE_AREA: "0 0 30.82 60" }, SKY);
+    const f = small.checks.find((c) => c.code === "PDN-0185");
+    assert.ok(f && /needs 21\.22 µm of core width/.test(f.text) && /has 19\.78/.test(f.text), JSON.stringify(small.checks));
+    assert.equal(small.state, "problem");
+    // The 30 µm die: no room up the core for the horizontal straps either.
+    const none = FP.computeFloorplan({ FP_SIZING: "absolute", DIE_AREA: [0, 0, 8, 8] }, SKY);
+    assert.equal(none.state, "no-core");
+    assert.equal(none.checks[0].code, "STA-0572");
+  });
+  check("floorplan: a fixed die reports the cells' fill and the pins' room", () => {
+    const fp = FP.computeFloorplan({ FP_SIZING: "absolute", DIE_AREA: [0, 0, 60, 60] },
+      { ...SKY, pins: 602, synth: { area: 500, tag: "t1" } });
+    const pin = fp.checks.find((c) => c.code === "PPL-0024");
+    assert.ok(pin && pin.level === "fail" && /room for about 218/.test(pin.text), "OpenROAD counted 206; the formula says 218");
+    assert.ok(fp.checks.some((c) => /fill about \d+ %/.test(c.text)));
+    const out = FP.computeFloorplan({ FP_SIZING: "absolute", DIE_AREA: [0, 0, 100, 100], CORE_AREA: [10, 10, 120, 90] }, SKY);
+    assert.ok(out.checks.some((c) => c.code === "IFP-0055"));
+  });
+  check("floorplan: the drawing names its sizes for screen readers and says an estimate", () => {
+    const fp = FP.computeFloorplan({ FP_SIZING: "relative", FP_CORE_UTIL: 40 }, { ...SKY, synth: { area: 3359.472, tag: "t" } });
+    const svg = FP.floorplanSvg(fp);
+    assert.match(svg, /role='img' aria-label='Die 102\.7 by 113\.4 µm, core 91\.64 by 91\.64 µm with 33 rows \(an estimate\)'/);
+    assert.match(svg, /is-estimate/);
+    assert.match(FP.sourceLine(fp, { synth: { area: 3359.472, tag: "t", placed_area: 4167 } }), /An estimate, sized from t's synthesis \(3,359 µm² of cells\)\..*grew to 4,167/);
+    assert.equal(FP.previewHtml(FP.computeFloorplan({}, {}), {}, { compact: true }), "", "no PDK installed: nothing in the wizard");
+  });
+
+  const LN = await import(toUrl(resolve(MOD, "learn.js")));
+  check("help: the glossary and the error index search by name, other names and codes", () => {
+    assert.ok(LN.glossMatch(terms.utilization, "utilisation"));
+    assert.ok(!LN.glossMatch(terms.utilization, "zzz"));
+    const e = { id: "cts-0127", code: "CTS-0127", also: ["CTS-0126"], about: "A clock buffer the library lacks.", stage: "cts", forced: true };
+    assert.ok(LN.codeMatch(e, "cts-0126") && LN.codeMatch(e, "clock tree") && !LN.codeMatch(e, "PDN"));
+    const row = LN.codeRowHtml(e, { "cts-0127": ["t1", "t2"] });
+    assert.match(row, /CTS-0127<br>CTS-0126/);
+    assert.match(row, /checked on a real run · in 2 of your runs \(t1, t2\)/);
+  });
+
+  const PX5 = await import(toUrl(resolve(MOD, "problems.js")));
+  check("failure card: each fix says how sure it is, with a via and a word", () => {
+    assert.match(PX5.sureHtml("fixes"), /vf-mark is-pass.*Fixes it/);
+    assert.match(PX5.sureHtml("likely"), /is-warn.*Likely fix/);
+    assert.match(PX5.sureHtml("try"), /is-info.*Worth a try/);
+    assert.equal(PX5.sureHtml(undefined), "");
+    const row = PX5.fixRowHtml({ kind: "setting", var: "PDN_VPITCH", from: "3", to: "8", why: "w", sure: "fixes" }, { tag: "t" });
+    assert.match(row, /px-sure is-fixes/);
+  });
+  check("failure card: its terms are glossary chips and its code opens Help", () => {
+    const t = PX5.termsRowHtml(["pdn", "strap", "pdn"]);
+    assert.equal((t.match(/data-term=/g) || []).length, 2, "each term once");
+    assert.match(t, /tabindex='0'/);
+    assert.equal(PX5.termsRowHtml([]), "");
+    assert.match(PX5.codeChipHtml("PDN-0175"), /<button type='button' class='fl-code px-code' data-kb-code='PDN-0175'/);
+    assert.equal(PX5.codeChipHtml(null), "");
+    assert.match(PX5.notesHtml(["a <b>"]), /<li>a &lt;b&gt;<\/li>|<li>a &#60;b&#62;<\/li>/);
+  });
+
+  check("wizard: the examples are a ladder in teaching order", () => {
+    const l = WZ.ladder([{ name: "empty", kind: "blank" }, { name: "b", order: 3 }, { name: "a", order: 1 }, { name: "c" }]);
+    assert.deepEqual(l.map((t) => t.name), ["a", "b", "c"]);
+  });
+}
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

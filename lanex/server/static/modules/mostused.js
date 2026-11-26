@@ -38,7 +38,7 @@ const GROUPS = [
     items: [
       { key: "FP_SIZING", label: "Die size from", kind: "select", def: "relative",
         choices: [["relative", "Utilization (sized for you)"], ["absolute", "A fixed die area"]],
-        hint: "Utilization sizes the die from the design and grows with it. A very small design needs a fixed die: on a tiny one, placement fails with DPL-0036." },
+        hint: "Utilization sizes the die from the design and grows with it. A very small design needs a fixed die: on a tiny one the power grid has no room for its straps (PDN-0185)." },
       { key: "FP_CORE_UTIL", label: "Core utilization", kind: "num", unit: "%", def: 50, min: 1, max: 99,
         when: (v) => v.FP_SIZING !== "absolute",
         hint: "How full the core is with cells. Lower it if routing is congested; raise it for a smaller die." },
@@ -47,7 +47,7 @@ const GROUPS = [
         hint: "x0 y0 x1 y1 in microns. New blank projects start at 0 0 150 150. If placement reports the design doesn't fit, make it bigger or switch to utilization." },
       { key: "PL_TARGET_DENSITY_PCT", label: "Placement density", kind: "num", unit: "%", def: null, min: 1, max: 100,
         defText: "auto",
-        hint: "How tightly cells are packed (auto: utilization + 10). Raise it if global placement fails with GPL-0301; lower it if routing is congested." },
+        hint: "How tightly cells are packed locally (auto: utilization + 10). Lower it if routing is congested. It doesn't help when placement says the core is full (GPL-0301): that needs a bigger core." },
     ],
   },
   {
@@ -248,14 +248,47 @@ function render() {
   body.innerHTML =
     (!editable ? "<p class='ms-ro'>" + fmt.escape((_cfg && _cfg.reason) || "LanEx can't edit this project's config.") +
       " Use All settings to change values for runs from LanEx.</p>" : "") +
-    "<div class='ms-groups'>" + GROUPS.map((g) =>
+    "<div class='ms-groups'>" + GROUPS.map((g, gi) =>
       "<section class='ms-group'><span class='lane-label'>" + fmt.escape(g.name) + "</span>" +
       g.items.filter((it) => !it.when || it.when(_vals)).map(fieldHtml).join("") +
       (g.note ? "<p class='ms-gnote'>" + fmt.escape(g.note) + "</p>" : "") +
+      // The floorplan these sizes give, before a run (fppreview.js).
+      (gi === 0 ? "<div class='fp-preview' data-fp-preview hidden></div>" : "") +
       "</section>").join("") + "</div>";
   body.querySelectorAll("input, select").forEach((el) => { el.disabled = !editable; });
   wireProvBtns(body);
   paintSummary();
+  paintFloorplan();
+}
+
+// ---- the floorplan preview in Chip size (fppreview.js): the PDK's numbers
+// once per project, PDK and library; the sizes from the fields as typed.
+let _fpTimer = 0;
+async function paintFloorplan() {
+  const el = document.querySelector("#ms-body [data-fp-preview]");
+  if (!el || !state.designDir) return;
+  const fp = await import("./fppreview.js");
+  let inputs = null;
+  try { inputs = await fp.estimateInputs(); } catch (_e) { inputs = null; }
+  if (!el.isConnected || !inputs) return;
+  fp.mountFloorplan(el, { values: chipValues(), inputs });
+}
+// The Chip size fields as they read now (typed, not yet saved).
+function chipValues() {
+  const v = { FP_SIZING: _vals.FP_SIZING, FP_CORE_UTIL: _vals.FP_CORE_UTIL, DIE_AREA: _vals.DIE_AREA, CORE_AREA: _vals.CORE_AREA };
+  for (const k of ["FP_SIZING", "FP_CORE_UTIL", "DIE_AREA"]) {
+    const f = document.getElementById("ms-" + k);
+    if (f && f.value !== "") v[k] = f.value;
+  }
+  return v;
+}
+if (typeof document !== "undefined" && document.addEventListener) {
+  // Typing a size redraws the preview (nothing is saved until the field changes).
+  document.addEventListener("input", (e) => {
+    if (!e.target.closest || !e.target.closest("#ms-body .ms-field")) return;
+    clearTimeout(_fpTimer);
+    _fpTimer = setTimeout(paintFloorplan, 150);
+  });
 }
 
 // The folded card's bar: what is set, in a line, so the card can stay closed.

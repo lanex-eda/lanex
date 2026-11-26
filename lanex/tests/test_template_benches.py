@@ -126,6 +126,18 @@ def test_benches_fail_with_fatal_not_error():
         assert "$error" not in text, (name, tb)
 
 
+def test_the_template_list_names_each_templates_files():
+    """The first-chip guide names the files the project really gets
+    (guide-steps.js guideFiles reads `sources` and `testbench`)."""
+    by = {t["name"]: t for t in scaffold.list_templates()}
+    assert by["blinky"]["sources"] == ["src/blinky.v"] and by["blinky"]["testbench"] == "verify/blinky_tb.v"
+    assert by["uart_tx"]["sources"] == ["src/uart_pkg.sv", "src/uart_tx.sv"]
+    assert by["seg7"]["clock_port"] is None and by["seg7"]["size"]["FP_SIZING"] == "absolute"
+    orders = [by[n]["order"] for n in ("blinky", "seg7", "counter", "traffic", "pwm", "uart_tx", "fifo", "timing",
+                                       "spm", "tt_tile", "multiplier")]
+    assert orders == sorted(orders) and len(set(orders)) == len(orders)
+
+
 def test_new_rungs_render_the_config_they_teach(tmp_path: Path):
     import json
     seg = json.loads((_make(tmp_path, "seg7") / "config.json").read_text())

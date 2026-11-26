@@ -20,10 +20,10 @@ const CATALOG = {
     samples: [
       { key: "CLOCK_PERIOD", sample: "10 (ns, which is 100 MHz)" },
       { key: "FP_CORE_UTIL", sample: "50 (% of the core filled with cells)" },
-      { key: "PL_TARGET_DENSITY_PCT", sample: "raise it if global placement fails with GPL-0301" },
+      { key: "PL_TARGET_DENSITY_PCT", sample: "lower it if routing is congested (a full core, GPL-0301, needs a lower FP_CORE_UTIL instead)" },
     ],
     pitfalls: [
-      "A very small design (a few dozen cells) on a utilization-sized die can fail placement (DPL-0036 or GPL-0301). A fixed die area in Settings, such as 0 0 150 150, gives it room.",
+      "A very small design (a few dozen cells) on a utilization-sized die gets a die too small for the power grid's straps (PDN-0185). A fixed die area in Settings, such as 0 0 150 150, gives it room; the floorplan preview in Settings shows it before the run.",
       "A folder path with spaces breaks LibreLane runs. New projects are always created without them.",
       "The top module's name has to match DESIGN_NAME in the config. The project card keeps the two in step.",
       "A ticked testbench is sent to synthesis. Leave testbenches unticked; they belong in the RTL IDE's simulator.",
@@ -36,7 +36,7 @@ const CATALOG = {
     how: [
       "The seven tiles are the stages every page uses: Synthesis, Floorplan, Power grid, Placement, Clock tree, Routing, Sign-off. Each shows its time (against the run it is compared with), one number from the end of the stage, and the chip at that point.",
       "Below them is every step in flow order, under its stage, and beside it the run's output as LibreLane prints it. While a run goes the list keeps the running step in view; scroll it yourself and a chip brings you back. Pick a step to see only its log, what it does, the settings it reads and its reports.",
-      "A run that stops says why first, in plain words, with the line from the log and what to change. A run that finishes shows its report card: the verdict, the key numbers, and its warnings counted by code.",
+      "A run that stops says why first, in plain words, with the line from the log and what to change. Each change says how sure it is: Fixes it (the tool's own numbers say so), Likely fix, or Worth a try. The code on the card (GPL-0301, PDN-0185…) opens its entry in Help's error index. A run that finishes shows its report card: the verdict, the key numbers, and its warnings counted by code.",
       "The Run menu can stop a run after any stage: Synthesis alone gives the cell count and area in seconds.",
     ],
     samples: [
