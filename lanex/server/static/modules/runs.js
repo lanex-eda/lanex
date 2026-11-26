@@ -37,6 +37,7 @@ import * as MF from "./metricfmt.js";
 import { toCsv, downloadCsv, downloadText } from "./csvutil.js";
 import { singleKeysOn } from "./prefs.js";
 import * as SM from "./studymodel.js";
+import * as SQ from "./studyqueue.js";
 
 // The last step of a stage in the Classic flow (matches setup.js's --to).
 function lastStepOfStage(stageId) {
@@ -529,6 +530,13 @@ function wire() {
   // Default columns and the table's height follow the window.
   let rz = 0;
   window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (document.getElementById("sec-runs")?.classList.contains("section-active")) renderRuns({ cached: true }); }, 250); });
+  // A study's points change state in the queue (queued, running, skipped):
+  // the group row's marks and its summary follow, a moment later.
+  let sqT = 0;
+  SQ.onStudyJobs(() => {
+    clearTimeout(sqT);
+    sqT = setTimeout(() => { if (document.getElementById("sec-runs")?.classList.contains("section-active")) renderRuns(); }, 1500);
+  });
   document.addEventListener("g:sweep", () => {
     if (document.getElementById("sec-runs")?.classList.contains("section-active")) renderRuns();
   });
@@ -1336,8 +1344,9 @@ function sweepRowHtml(g, cols, gk, open) {
   const count = ran + (isShort ? " of " + planned : "") + " run" + ((isShort ? planned : ran) === 1 ? "" : "s");
   // One mark per point, in value order, planned points included: the study's
   // strip (studymodel.js), the same marks as its summary.
-  const marks = rs.map((r) => ({ tag: r.tag, v: pointValues(r, sw), key: SM.pointKey({ run: { ...r, verdict: verdictOf(r) }, active: !!sw.active }) }));
-  (sw.tags || []).forEach((t, i) => { if (!have.has(t) && !(reruns[t] && have.has(reruns[t]))) marks.push({ tag: t, v: (sw.points || [])[i] || null, key: sw.active ? "queued" : "skipped" }); });
+  const jobs = SQ.jobsOf(sw.id);
+  const marks = rs.map((r) => ({ tag: r.tag, v: pointValues(r, sw), key: SM.pointKey({ run: { ...r, verdict: verdictOf(r) }, job: jobs.get(r.tag) || null, active: !!sw.active }) }));
+  (sw.tags || []).forEach((t, i) => { if (!have.has(t) && !(reruns[t] && have.has(reruns[t]))) marks.push({ tag: t, v: (sw.points || [])[i] || null, key: SM.pointKey({ run: null, job: jobs.get(t) || null, active: !!sw.active }) }); });
   const ax = (sw.axes || []).map((a) => a.var);
   const nv = (p) => ax.map((k) => (p.v ? Number(p.v[k]) : NaN));
   marks.sort((a, b) => { const x = nv(a), y = nv(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i] && Number.isFinite(x[i]) && Number.isFinite(y[i])) return x[i] - y[i]; return 0; });
