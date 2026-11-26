@@ -56,7 +56,8 @@ from typing import Any, Dict, List, Optional, Tuple
 _SIDECAR = ".gui-custom-macros.json"
 _OVERLAY = ".gui-macros.json"          # the generated LibreLane config overlay
 _MACROS_SUBDIR = "macros"
-_MAX_FILE_BYTES = 256 * 1024 * 1024    # a hardened-macro GDS can be large.
+_MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024    # a hardened-macro GDS can be large (as uploads.py)
+_PDN_FILE = ".gui-macros-pdn.tcl"      # the power grid LanEx writes for blocks the default can't reach
 
 # A macro module name / instance name is a Verilog identifier. (We also accept a
 # leading-digit-free dotted/hier form some flows use, but keep it conservative.)
@@ -79,6 +80,11 @@ _VIEW_SPECS: Dict[str, Dict[str, Any]] = {
     "spice": {"field": "spice", "shape": "list",   "exts": (".spice", ".sp", ".cir", ".cdl"), "required": False},
     "vh":    {"field": "vh",    "shape": "list",   "exts": (".v", ".vh", ".sv"),     "required": False},
     "pnl":   {"field": "pnl",   "shape": "list",   "exts": (".v", ".pnl.v"),         "required": False},
+    # Not part of LibreLane's Macro: Magic's abstract view (MAGIC_DRC_MAGLEFS,
+    # so Magic checks around the block and not inside it) and the vendor's
+    # behavioural model (kept for simulation; synthesis reads the header).
+    "maglef": {"field": None,   "shape": "list",   "exts": (".mag",),                "required": False},
+    "model": {"field": None,    "shape": "list",   "exts": (".v", ".sv"),            "required": False},
 }
 
 # A view reference that is not a GUI upload: a PDK file (``pdk_dir::``) or one
@@ -231,6 +237,7 @@ def save_macro(
     copies: Optional[Dict[str, Any]] = None,
     power: Optional[Dict[str, Any]] = None,
     source: Optional[Dict[str, Any]] = None,
+    generated: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Save (or replace) a custom macro for *design_dir*.
 
@@ -370,16 +377,18 @@ def save_macro(
     }
     pw = power if power is not None else (prior or {}).get("power")
     if pw:
-        clean_pw = {k: str(pw.get(k) or "").strip() for k in ("vdd_pin", "gnd_pin", "vdd_net", "gnd_net")}
-        if any(clean_pw.values()):
-            bad = [k for k, v in clean_pw.items() if v and not re.match(r"^[\w$\[\]!|.*^]+$", v)]
-            if bad or not all(clean_pw.values()):
-                return {"ok": False, "error": "power hookup needs all four names: the macro's power and "
-                                              "ground pins and the design nets they connect to"}
+        clean_pw = norm_power(pw)
+        if clean_pw is None:
+            return {"ok": False, "error": "power hookup needs the macro's power and ground pins and the "
+                                          "design nets they connect to (names only: letters, digits, _ $ [ ] ! .)"}
+        if clean_pw:
             entry["power"] = clean_pw
     src = source if source is not None else (prior or {}).get("source")
     if isinstance(src, dict):
         entry["source"] = {k: src[k] for k in ("kind", "label", "pdk", "library", "design_dir", "tag") if k in src}
+    gen = generated if generated is not None else (prior or {}).get("generated")
+    if isinstance(gen, dict) and gen:
+        entry["generated"] = gen
     macros.append(entry)
     try:
         _save(d, macros)
@@ -446,7 +455,7 @@ def _macro_to_config(entry: Dict[str, Any]) -> Dict[str, Any]:
     cfg: Dict[str, Any] = {}
     for kind, spec in _VIEW_SPECS.items():
         path = views.get(kind)
-        if not path:
+        if not path or spec["field"] is None:
             continue
         if isinstance(path, dict):            # {corner: path} (a run's lib/spef)
             if spec["shape"] == "list":
@@ -461,8 +470,13 @@ def _macro_to_config(entry: Dict[str, Any]) -> Dict[str, Any]:
             cfg[spec["field"]] = {"*": [path]}
     instances: Dict[str, Any] = {}
     for inst in entry.get("instances") or []:
+        # An instance without a position is never written: LibreLane would
+        # skip it and stop at the power grid (PDN-0235). The run check
+        # (run_problems) refuses to start such a run instead.
+        if not inst.get("location"):
+            continue
         instances[inst["name"]] = {
-            "location": inst.get("location"),     # None => unplaced (the run stops at PDN)
+            "location": inst.get("location"),
             "orientation": inst.get("orientation") or "N",
         }
     if instances:
@@ -508,16 +522,59 @@ def _inst_regex(name: str) -> str:
     return re.sub(r"([.\[\]])", r"\\\1", name)
 
 
+_PIN_NAME_RX = re.compile(r"^[\w$\[\]!.*^]+$")
+
+
+def norm_power(pw: Any) -> Optional[Dict[str, Any]]:
+    """A power hookup as ``{vdd_net, gnd_net, vdd_pins: [...], gnd_pins: [...]}``.
+    Also takes the older ``{vdd_pin, gnd_pin}`` with ``|`` between pins. ``{}``
+    for an empty hookup (removed), None for a bad one."""
+    if not isinstance(pw, dict):
+        return {}
+
+    def pins(many: str, one: str) -> List[str]:
+        v = pw.get(many)
+        if v is None:
+            v = pw.get(one)
+        if isinstance(v, str):
+            v = v.split("|")
+        return [str(x).strip() for x in (v or []) if str(x).strip()]
+    out = {"vdd_net": str(pw.get("vdd_net") or "").strip(), "gnd_net": str(pw.get("gnd_net") or "").strip(),
+           "vdd_pins": pins("vdd_pins", "vdd_pin"), "gnd_pins": pins("gnd_pins", "gnd_pin")}
+    if not (out["vdd_net"] or out["gnd_net"] or out["vdd_pins"] or out["gnd_pins"]):
+        return {}
+    names = [out["vdd_net"], out["gnd_net"]] + out["vdd_pins"] + out["gnd_pins"]
+    if not (out["vdd_net"] and out["gnd_net"] and out["vdd_pins"] and out["gnd_pins"]) or \
+            not all(_PIN_NAME_RX.match(n) for n in names):
+        return None
+    return out
+
+
+def hookup_lines(inst: str, pw: Dict[str, Any]) -> List[str]:
+    """``PDN_MACRO_CONNECTIONS`` lines for one instance: one per power pin, as
+    IHP's own template writes them (``VDD!`` and ``VDDARRAY!`` each to VPWR,
+    with ``VSS!``). ``<inst_rx> <vdd_net> <gnd_net> <vdd_pin> <gnd_pin>``."""
+    p = norm_power(pw) or {}
+    if not p:
+        return []
+    vs, gs = p["vdd_pins"], p["gnd_pins"]
+    rx = _inst_regex(inst)
+    out = [f"{rx} {p['vdd_net']} {p['gnd_net']} {v} {gs[min(k, len(gs) - 1)]}" for k, v in enumerate(vs)]
+    out += [f"{rx} {p['vdd_net']} {p['gnd_net']} {vs[0]} {g}" for g in gs[len(vs):]]
+    return out
+
+
 def pdn_connections(design_dir: str | Path) -> List[str]:
-    """``PDN_MACRO_CONNECTIONS`` lines for the enabled macros that have a power
-    hookup: one per instance, ``<inst_rx> <vdd_net> <gnd_net> <vdd_pin> <gnd_pin>``."""
+    """``PDN_MACRO_CONNECTIONS`` lines for the enabled, placed macros that have
+    a power hookup."""
     out = []
     for m in _load(design_dir):
         pw = m.get("power")
         if not m.get("enabled", True) or not pw:
             continue
         for inst in m.get("instances") or []:
-            out.append(f"{_inst_regex(inst['name'])} {pw['vdd_net']} {pw['gnd_net']} {pw['vdd_pin']} {pw['gnd_pin']}")
+            if inst.get("location"):
+                out.extend(hookup_lines(inst["name"], pw))
     return out
 
 
@@ -590,36 +647,405 @@ def build_macros_dict(design_dir: str | Path) -> Dict[str, Any]:
     return merged
 
 
-def write_overlay(design_dir: str | Path) -> Optional[str]:
+def _user_config_doc(design_dir: Path) -> Dict[str, Any]:
+    for ext in ("json", "yaml", "yml"):
+        f = design_dir / f"config.{ext}"
+        if not f.is_file():
+            continue
+        try:
+            if ext == "json":
+                doc = json.loads(f.read_text(encoding="utf-8"))
+            else:
+                import yaml  # type: ignore
+                doc = yaml.safe_load(f.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return doc if isinstance(doc, dict) else {}
+    return {}
+
+
+def overlay_extras(design_dir: str | Path, pdk: Optional[str] = None, scl: Optional[str] = None,
+                   model: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Optional[str]]:
+    """The settings besides ``MACROS`` a run with these macros needs, each found
+    on a real LibreLane 3.0.4 run (research/LANE-7-research.md 6.1), and the
+    PDN_CFG text when LanEx writes one. A config file later in the list
+    replaces a key, so lists the user set are merged, and a setting the user
+    chose is never overridden."""
+    d = Path(design_dir).resolve()
+    user = _user_config_doc(d)
+    extra: Dict[str, Any] = {}
+    hooks = pdn_connections(d)
+    if hooks:
+        mine = _user_config_list(d, "PDN_MACRO_CONNECTIONS")
+        extra["PDN_MACRO_CONNECTIONS"] = mine + [h for h in hooks if h not in mine]
+    # One keep-out per axis sets the rows' halo (cut_rows, tapcell) and the
+    # power grid's (pdngen): a larger power halo leaves rows no strap reaches.
+    st = _settings(d)
+    if "halo_h" in st:
+        extra["FP_MACRO_HORIZONTAL_HALO"] = st["halo_h"]
+        extra["PDN_HORIZONTAL_HALO"] = st["halo_h"]
+    if "halo_v" in st:
+        extra["FP_MACRO_VERTICAL_HALO"] = st["halo_v"]
+        extra["PDN_VERTICAL_HALO"] = st["halo_v"]
+    enabled = [m for m in _load(d) if m.get("enabled", True)]
+    # Magic's default stream-out of a design with macros leaves stray top
+    # cells (KLayout.Render: "The layout has multiple top cells").
+    if "MAGIC_MACRO_STD_CELL_SOURCE" not in user:
+        extra["MAGIC_MACRO_STD_CELL_SOURCE"] = "PDK"
+    # Magic checks around a block with its abstract view, not inside it (the
+    # SRAM's bit cells alone report millions of errors).
+    mags = [v for m in enabled for v in _as_list((m.get("views") or {}).get("maglef"))]
+    if mags:
+        mine = [str(x) for x in (user.get("MAGIC_DRC_MAGLEFS") or [])] if isinstance(user.get("MAGIC_DRC_MAGLEFS"), list) else []
+        extra["MAGIC_DRC_MAGLEFS"] = mine + [m for m in mags if m not in mine]
+    pdn_text = None
+    if not (user.get("PDN_CFG") or user.get("FP_PDN_CFG")):
+        try:
+            from . import macrolib
+            fp = model or macrolib.floorplan(str(d), pdk, scl)
+            plans = []
+            for name, g in (fp.get("macros") or {}).items():
+                if g.get("grid") != "lanex" or not g.get("plan"):
+                    continue
+                insts = [i["name"] for i in fp.get("instances") or [] if i["macro"] == name and i.get("location")]
+                if insts:
+                    plans.append((name, insts, g["plan"]))
+            if plans:
+                pdn_text = macrolib.pdn_cfg_text(plans)
+                extra["PDN_CFG"] = "dir::" + _PDN_FILE
+        except Exception:
+            pdn_text = None
+    return extra, pdn_text
+
+
+def _as_list(v: Any) -> List[str]:
+    if not v:
+        return []
+    return [str(x) for x in v] if isinstance(v, list) else [str(v)]
+
+
+def write_overlay(design_dir: str | Path, pdk: Optional[str] = None, scl: Optional[str] = None) -> Optional[str]:
     """Write the ``MACROS`` overlay config and return its path, or ``None`` when
     there are no enabled macros (also removing any stale overlay then). The path
     is handed to the flow as an extra config file. Per-run; never touches
     ``config.json``."""
     d = Path(design_dir).resolve()
     overlay = d / _OVERLAY
+    pdn_file = d / _PDN_FILE
+    try:
+        ensure_generated(d, pdk, scl)
+    except Exception:
+        pass
     macros = build_macros_dict(d)
-    extra: Dict[str, Any] = {}
-    if macros:
-        hooks = pdn_connections(d)
-        if hooks:
-            mine = _user_config_list(d, "PDN_MACRO_CONNECTIONS")
-            extra["PDN_MACRO_CONNECTIONS"] = mine + [h for h in hooks if h not in mine]
-        st = _settings(d)
-        if "halo_h" in st:
-            extra["FP_MACRO_HORIZONTAL_HALO"] = st["halo_h"]
-        if "halo_v" in st:
-            extra["FP_MACRO_VERTICAL_HALO"] = st["halo_v"]
     if not macros:
-        try:
-            overlay.unlink()
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
+        for f in (overlay, pdn_file):
+            try:
+                f.unlink()
+            except OSError:
+                pass
         return None
+    extra, pdn_text = overlay_extras(d, pdk, scl)
     try:
         from . import platform_env
+        if pdn_text:
+            platform_env.atomic_write_text(pdn_file, pdn_text)
+        else:
+            try:
+                pdn_file.unlink()
+            except OSError:
+                pass
         platform_env.atomic_write_text(overlay, json.dumps(dict({"MACROS": macros}, **extra), indent=2) + "\n")
     except Exception:
         return None
     return str(overlay)
+
+
+# --------------------------------------------------------------------------- #
+# Views LanEx makes for a block: a ports-only header, a Liberty copy a run
+# can meet, each PDK corner's timing file
+# --------------------------------------------------------------------------- #
+_BEHAVIOURAL_RX = re.compile(r"\b(always|assign|initial|reg)\b")
+
+
+def _write_generated(macro_dir: Path, fname: str, text: str) -> str:
+    from . import platform_env
+    macro_dir.mkdir(parents=True, exist_ok=True)
+    target = macro_dir / fname
+    if target.is_symlink():
+        target.unlink()
+    platform_env.atomic_write_text(target, text)
+    return target.name
+
+
+def _relaxed_copy(macro_dir: Path, src: Path) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """A copy of *src* with too-tight input limits relaxed, in *macro_dir*,
+    when it needs one: ``(file name, changes)``, or ``(None, [])``."""
+    from . import macrolib
+    try:
+        text = src.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, []
+    new, changes = macrolib.relax_liberty(text)
+    if not changes:
+        return None, []
+    name = src.name if src.parent.resolve() != macro_dir.resolve() else src.stem + ".lanex.lib"
+    _write_generated(macro_dir, name, new)
+    return name, changes
+
+
+def prepare_views(design_dir: str | Path, name: str, views: Dict[str, Any], *,
+                  libs: Optional[List[Path]] = None, pdk: Optional[str] = None,
+                  scl: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """The views LibreLane gets for a block, and a record of what LanEx made:
+
+    * ``vh``: a ports-only black-box header from the LEF, unless the block
+      came with one (a behavioural model becomes ``model``, for simulation);
+    * ``lib``: each run corner's timing file (``*_<corner>`` keys, or ``"*"``),
+      a relaxed copy where the file's input limits are under 0.1 ns.
+
+    *views* are the saved ``dir::``/``pdk_dir::`` paths; *libs* the timing
+    files to key per corner (absolute; a PDK block ships one per corner)."""
+    from . import macrolib
+    d = Path(design_dir).resolve()
+    macro_dir = _macro_dir(d, name)
+    if macro_dir is None:
+        return views, {}
+    out = dict(views)
+    gen: Dict[str, Any] = {}
+    lef = macrolib.resolve_view(out.get("lef") if isinstance(out.get("lef"), str) else "", str(d), pdk)
+    # the header
+    vh = out.get("vh")
+    vh_file = macrolib.resolve_view(vh if isinstance(vh, str) else "", str(d), pdk) if vh else None
+    if vh_file is not None and vh_file.is_file():
+        try:
+            if _BEHAVIOURAL_RX.search(vh_file.read_text(encoding="utf-8", errors="replace")):
+                out["model"] = vh
+                vh = None
+        except OSError:
+            pass
+    if not vh and not out.get("nl") and not out.get("pnl") and lef is not None and lef.is_file():
+        g = macrolib.macro_geometry(lef, name)
+        if g.get("ok"):
+            fname = _write_generated(macro_dir, f"{name}.bb.v", macrolib.blackbox_header(name, g["raw_pins"]))
+            out["vh"] = "dir::" + str((macro_dir / fname).relative_to(d)).replace("\\", "/")
+            gen["vh"] = {"from": "lef", "file": out["vh"]}
+    # timing, per corner, relaxed where it must be
+    if libs is None:
+        cur = out.get("lib")
+        if isinstance(cur, str):
+            p = macrolib.resolve_view(cur, str(d), pdk)
+            libs = [p] if p is not None and p.is_file() else []
+    if libs:
+        suffixes = macrolib.corner_suffixes(pdk, scl) if pdk and scl else []
+        cmap, notes = macrolib.lib_corner_map(libs, suffixes)
+        lib_views: Dict[str, str] = {}
+        relaxed: List[Dict[str, Any]] = []
+        done: Dict[str, str] = {}
+        for key, src in cmap.items():
+            if str(src) in done:
+                lib_views[key] = done[str(src)]
+                continue
+            rname, changes = _relaxed_copy(macro_dir, src)
+            if rname:
+                ref = "dir::" + str((macro_dir / rname).relative_to(d)).replace("\\", "/")
+                relaxed.append({"file": ref, "from": src.name, "changes": changes})
+            else:
+                ref = _ref_for(src, d, pdk)
+            done[str(src)] = ref
+            lib_views[key] = ref
+        out["lib"] = lib_views if not (len(lib_views) == 1 and "*" in lib_views) else {"*": lib_views["*"]}
+        gen["lib"] = {"corners": sorted(lib_views), "notes": notes, "relaxed": relaxed}
+    return out, gen
+
+
+def _ref_for(p: Path, d: Path, pdk: Optional[str]) -> str:
+    try:
+        return "dir::" + str(p.resolve().relative_to(d)).replace("\\", "/")
+    except ValueError:
+        pass
+    from . import celllib
+    pd = celllib.pdk_dir(pdk or "")
+    if pd is not None:
+        try:
+            return "pdk_dir::" + str(p.resolve().relative_to(pd.resolve())).replace("\\", "/")
+        except ValueError:
+            pass
+    return str(p)
+
+
+def add_pdk_macro(design_dir: str | Path, pdk: str, scl: Optional[str], name: str,
+                  library: Optional[str] = None, *, power: Optional[Dict[str, Any]] = None,
+                  instances: Optional[List[Dict[str, Any]]] = None, enabled: bool = True) -> Dict[str, Any]:
+    """Add one of the PDK's own blocks (an SRAM) by name: its GDS, LEF,
+    SPICE/CDL and Magic abstract referenced in place (``pdk_dir::``), a
+    ports-only header and per-corner timing (a relaxed copy where needed)
+    made in ``macros/<name>/``, and the power hookup from its LEF."""
+    from . import macrolib
+    found = macrolib.pdk_macro_files(pdk, name, library)
+    if not found.get("ok"):
+        return {"ok": False, "error": found.get("error") or f"{name} is not in {pdk}"}
+    f = found["files"]
+    d = Path(design_dir).resolve()
+    if _macro_dir(d, name) is None:
+        return {"ok": False, "error": "macro module name must be a valid Verilog identifier"}
+    pd = found["pdk_dir"]
+    rel = lambda p: "pdk_dir::" + str(p.relative_to(pd)).replace("\\", "/")
+    views: Dict[str, Any] = {"gds": rel(f["gds"]), "lef": rel(f["lef"])}
+    for k in ("spice", "maglef", "model"):
+        if f.get(k):
+            views[k] = rel(f[k])
+    views, gen = prepare_views(d, name, views, libs=f.get("libs") or [], pdk=pdk, scl=scl)
+    if power is None:
+        g = macrolib.macro_geometry(f["lef"], name)
+        power = default_power(d, pdk, scl, g.get("power") or {}) if g.get("ok") else None
+    label = f"{found['library']} ({pdk})"
+    return save_macro(d, name, instances=instances or [], refs=views, power=power, enabled=enabled,
+                      source={"kind": "pdk", "label": label, "pdk": pdk, "library": found["library"]},
+                      generated=gen)
+
+
+def default_power(design_dir: Path, pdk: Optional[str], scl: Optional[str],
+                  pins: Dict[str, List[str]]) -> Optional[Dict[str, Any]]:
+    """Every POWER pin of the block to the design's power net, every GROUND
+    pin to its ground net. Nets from the config's VDD_NETS/GND_NETS, else the
+    PDK's VDD_PIN/GND_PIN (VPWR/VGND on sky130 and IHP, VDD/VSS on gf180)."""
+    vdd, gnd = list(pins.get("vdd") or []), list(pins.get("gnd") or [])
+    if not vdd or not gnd:
+        return None
+    nets = design_nets(design_dir, pdk, scl)
+    return {"vdd_net": nets["vdd"], "gnd_net": nets["gnd"], "vdd_pins": vdd, "gnd_pins": gnd}
+
+
+def design_nets(design_dir: Path, pdk: Optional[str], scl: Optional[str]) -> Dict[str, str]:
+    from . import celllib, macrolib
+    doc = _user_config_doc(Path(design_dir))
+
+    def first(v: Any) -> Optional[str]:
+        if isinstance(v, list):
+            return str(v[0]) if v else None
+        if isinstance(v, str) and v.strip():
+            return v.split()[0]
+        return None
+    scl = scl or (macrolib._default_scl(pdk) if pdk else None)
+    pcfg = celllib.pdk_config(pdk, scl) if pdk and scl else {}
+    return {"vdd": first(doc.get("VDD_NETS")) or pcfg.get("VDD_PIN") or "VPWR",
+            "gnd": first(doc.get("GND_NETS")) or pcfg.get("GND_PIN") or "VGND"}
+
+
+def ensure_generated(design_dir: str | Path, pdk: Optional[str] = None, scl: Optional[str] = None) -> None:
+    """Make again any file LanEx generated for a macro that is gone (a project
+    copied without its macros/ folder, or a template): the header and the
+    relaxed Liberty copies."""
+    d = Path(design_dir).resolve()
+    macros = _load(d)
+    changed = False
+    for m in macros:
+        views = m.get("views") or {}
+        missing = False
+        for k in ("vh", "lib"):
+            v = views.get(k)
+            for p in (v.values() if isinstance(v, dict) else [v] if v else []):
+                if isinstance(p, str) and p.startswith("dir::") and not (d / p[5:]).is_file():
+                    missing = True
+        if not missing:
+            continue
+        src = m.get("source") or {}
+        if src.get("kind") == "pdk":
+            res = add_pdk_macro(d, src.get("pdk") or pdk or "", scl, m["name"], src.get("library"),
+                                power=m.get("power") or {}, instances=m.get("instances") or [],
+                                enabled=m.get("enabled", True))
+            changed = changed or bool(res.get("ok"))
+    if changed:
+        return
+
+
+def finish_upload(design_dir: str | Path, name: str, pdk: Optional[str], scl: Optional[str]) -> Dict[str, Any]:
+    """After an upload or a copy from another project: the generated header
+    and relaxed Liberty for a saved macro, and its power hookup from the LEF
+    when it has none yet."""
+    from . import macrolib
+    d = Path(design_dir).resolve()
+    m = next((x for x in _load(d) if x.get("name") == name), None)
+    if m is None:
+        return {"ok": False, "error": "macro not found"}
+    views, gen = prepare_views(d, name, dict(m.get("views") or {}), pdk=pdk, scl=scl)
+    power = m.get("power")
+    if not power:
+        lef = macrolib.resolve_view(views.get("lef") or "", str(d), pdk)
+        g = macrolib.macro_geometry(lef, name)
+        power = default_power(d, pdk, scl, g.get("power") or {}) if g.get("ok") else None
+    macros = [x for x in _load(d) if x.get("name") != name]
+    m = dict(m, views=views)
+    if gen:
+        m["generated"] = dict(m.get("generated") or {}, **gen)
+    if power:
+        m["power"] = norm_power(power) or m.get("power")
+    macros.append(m)
+    _save(d, macros)
+    return {"ok": True, "macro": m}
+
+
+def set_instances(design_dir: str | Path, placements: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Save every instance position at once (the Arrange canvas's Save):
+    ``[{macro, name, location, orientation}]``. All or nothing."""
+    d = Path(design_dir).resolve()
+    macros = _load(d)
+    by: Dict[str, List[Dict[str, Any]]] = {}
+    for p in placements or []:
+        by.setdefault(str(p.get("macro") or ""), []).append(p)
+    unknown = [k for k in by if not any(m.get("name") == k for m in macros)]
+    if unknown:
+        return {"ok": False, "error": "no macro named " + ", ".join(unknown)}
+    for m in macros:
+        if m["name"] not in by:
+            continue
+        prev = {i["name"]: i for i in m.get("instances") or []}
+        merged = []
+        for p in by[m["name"]]:
+            merged.append(dict(prev.get(str(p.get("name")), {}), name=p.get("name"), location=p.get("location"),
+                               orientation=p.get("orientation") or "N"))
+        names = {x["name"] for x in merged}
+        merged += [i for i in m.get("instances") or [] if i["name"] not in names]
+        clean, err = _clean_instances(merged)
+        if err:
+            return {"ok": False, "error": err}
+        m["instances"] = clean
+    _save(d, macros)
+    return {"ok": True}
+
+
+def run_problems(design_dir: str | Path, pdk: Optional[str] = None, scl: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The macro findings a run check shows, in the config check's shape
+    (``{code, message, fix, hard}``): hard ones refuse the start (no position,
+    outside the core, overlapping, unreachable by the power grid), the rest
+    ask first. Empty without enabled macros."""
+    d = Path(design_dir).resolve()
+    if not any(m.get("enabled", True) for m in _load(d)):
+        return []
+    from . import macrolib
+    try:
+        fp = macrolib.floorplan(str(d), pdk, scl)
+    except Exception as ex:
+        return [{"code": "macro", "message": f"LanEx couldn't check the macros' positions: {ex}", "fix": "", "hard": False}]
+    if not fp.get("ok"):
+        return [{"code": "macro", "message": fp.get("error") or "LanEx couldn't check the macros.", "fix": "", "hard": False}]
+    out = []
+    if not (fp.get("core") or {}).get("box"):
+        out.append({"code": "macro", "hard": False,
+                    "message": "The die is sized by the flow (FP_SIZING relative), so LanEx can't check the macro "
+                               "positions against the core before the run.",
+                    "fix": "Use a fixed die (Cells & macros, Macros) so the positions can be checked."})
+    for p in fp.get("problems") or []:
+        if p["code"] == "outside" and fp["die"].get("from") == "run":
+            p = dict(p, hard=False)
+        out.append({"code": "macro", "hard": bool(p["hard"]), "message": p["message"], "fix": p.get("fix") or ""})
+    for name, g in (fp.get("macros") or {}).items():
+        if not g.get("ok"):
+            out.append({"code": "macro", "hard": True, "message": f"Macro {name}: {g.get('error')}",
+                        "fix": "Fix its files on the Cells & macros tab."})
+        elif not any(i["macro"] == name for i in fp.get("instances") or []):
+            out.append({"code": "macro", "hard": True,
+                        "message": f"Macro {name} is switched on but lists no instance, so LibreLane wouldn't "
+                                   "place it; if your RTL uses it, the run stops at the power grid (PDN-0235).",
+                        "fix": "Add its instance (the name in your RTL) on the Cells & macros tab, or switch the macro off."})
+    return out
