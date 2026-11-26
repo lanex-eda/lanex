@@ -855,6 +855,7 @@ class ProjectIndex:
         self.error: Optional[str] = None
         self.progress = (0, 0)
         self._defs_cache: Optional[Tuple[int, Dict[str, List[Dict[str, Any]]]]] = None
+        self._dirty: Dict[Tuple[str, int, int], FileIndex] = {}
         self.version = 0
 
     # -------------------------------------------------- building
@@ -966,10 +967,20 @@ class ProjectIndex:
             rel = str(rel).replace("\\", "/")
             if len(text) > MAX_FILE_BYTES:
                 continue
+            text = text.replace("\r\n", "\n")
             old = files.get(rel)
             if old is not None and old.text == text:
                 continue
-            files[rel] = FileIndex(rel, text.replace("\r\n", "\n"))
+            # The same unsaved text comes with every hover and F12 until the
+            # next keystroke: tokenize it once (a 20k-line file takes ~80 ms).
+            key = (rel, len(text), hash(text))
+            fi = self._dirty.get(key)
+            if fi is None:
+                fi = FileIndex(rel, text)
+                self._dirty[key] = fi
+                while len(self._dirty) > 8:
+                    self._dirty.pop(next(iter(self._dirty)))
+            files[rel] = fi
         return files
 
     def status(self) -> Dict[str, Any]:

@@ -681,8 +681,11 @@ def command_text(argv: Sequence[str]) -> str:
     """The argv as one line someone can paste into a shell (the IDE shows it)."""
     import shlex
     if len(argv) >= 3 and argv[0] == "bash" and argv[1] == "-lc":
-        return str(argv[2])
-    return shlex.join([str(a) for a in argv])
+        text = str(argv[2])
+    else:
+        text = shlex.join([str(a) for a in argv])
+    # LanEx's own build/run marker means nothing to a person reading it.
+    return text.replace("echo " + RUN_MARK + "; ", "")
 
 
 def _vhdl_sources(design_dir: str | Path, testbench: str, benches: Sequence[str]) -> List[str]:
@@ -709,6 +712,33 @@ def _vhdl_sources(design_dir: str | Path, testbench: str, benches: Sequence[str]
                 out.append(f["rel"])
     skip = {testbench} | {b for b in benches if isinstance(b, str)}
     return [x for x in out if x not in skip]
+
+
+def vcd_unit(path: str | Path) -> Optional[str]:
+    """The ``$timescale`` of a VCD ("1ps"): the unit of the simulator's own
+    time stamps, so "46000" can be read as 46 ns."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(65536).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    m = re.search(r"\$timescale\s+(\d+)\s*([munpf]?s)\s+\$end", head)
+    return (m.group(1) + m.group(2)) if m else None
+
+
+def with_units(j: Dict[str, Any], design_dir: str | Path, wave: Optional[str]) -> Dict[str, Any]:
+    """Give a judged run's tick times the dump's unit (Icarus and Verilator
+    stamp messages in the simulation's precision, which is the VCD's)."""
+    if not j or not wave or not str(wave).lower().endswith(".vcd"):
+        return j
+    unit = None
+    for k in ("fail_time", "finish"):
+        t = j.get(k)
+        if isinstance(t, dict) and t.get("ticks") is not None and not t.get("unit"):
+            unit = unit or vcd_unit(Path(design_dir) / wave)
+            if unit:
+                t["unit"] = unit
+    return j
 
 
 def _limit_core() -> None:
@@ -856,6 +886,7 @@ class SimJob:
         try:
             judged = judge(lines, rc=rc, timed_out=timed_out, cancelled=cancelled, engine=self._sim_engine,
                            started=rc != 127 or any(l.strip() == RUN_MARK for l in lines))
+            judged = with_units(judged, design_dir, wave)
         except Exception:  # the verdict is a help, never a reason to lose the result
             judged = None
         events.publish("sim_done", {
@@ -1066,6 +1097,7 @@ class SimBatch:
                     pass
             j = judge(lines, rc=rc, timed_out=timed.is_set(), cancelled=cancelled, engine=pl.get("sim_engine") or "iverilog",
                       started=rc != 127 or any(l.strip() == RUN_MARK for l in lines))
+            j = with_units(j, d, wave)
             row.update(state=j["state"], line=j["line"], fail_time=j["fail_time"], finish=j["finish"],
                        fails=j["fails"], passes=j["passes"], rc=rc, vcd=wave,
                        ms=int((time.monotonic() - t0) * 1000), partial=bool(timed.is_set() and wave))
