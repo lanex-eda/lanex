@@ -213,9 +213,8 @@ def stamp_run(run_dir: str | Path, sweep_id: str, values: Dict[str, Any]) -> Non
         if not isinstance(doc, dict):
             doc = {}
         doc["sweep"] = {"id": sweep_id, "values": dict(values)}
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(p)
+        from . import safefs
+        safefs.write_text(p.parent, p.name, json.dumps(doc, indent=2) + "\n")   # a fresh temp, never a planted link
     except Exception:
         pass
 

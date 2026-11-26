@@ -40,7 +40,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -48,9 +47,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import safefs
+
 _log = logging.getLogger(__name__)
 
-SCRIPT_VERSION = "1"
+SCRIPT_VERSION = "2"   # 2: the final stage is timed with SIGNOFF_SDC_FILE
 _SCRIPT = Path(__file__).resolve().parent.parent / "data" / "openroad" / "lanex_export.tcl"
 
 _JOBS: Dict[str, "_Job"] = {}
@@ -122,8 +123,19 @@ def database_for(run_dir: Path, source: str) -> Dict[str, Any]:
     return {"odb": None, "step": None, "key": None, "note": ""}
 
 
+def _cache_name(key: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", key)[:100].lstrip(".") or "_"
+
+
 def cache_dir(run_dir: Path, key: str) -> Path:
-    return Path(run_dir) / ".lanex" / "analysis" / re.sub(r"[^A-Za-z0-9._-]+", "_", key)[:100]
+    return Path(run_dir) / ".lanex" / "analysis" / _cache_name(key)
+
+
+def _confined_cache(run_dir: Path, key: str) -> Path:
+    """The cache folder as a real folder inside the run (made when missing).
+    A run may hold links planted to send the export's writes, deletes and
+    its read-write mount elsewhere: any link on the way is refused."""
+    return safefs.confined_dir(run_dir, ".lanex", "analysis", _cache_name(key))
 
 
 def _resolved(run_dir: Path) -> Dict[str, Any]:
@@ -185,12 +197,59 @@ def _libs(cfg: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _signoff_sdc(run_dir: Path, cfg: Dict[str, Any]) -> Optional[Path]:
+    """The SIGNOFF_SDC_FILE sign-off STA reads (steps/openroad.py, STAPostPNR),
+    found again when the run was made in another folder: the same path under
+    this project instead of the DESIGN_DIR the run recorded."""
+    p = cfg.get("SIGNOFF_SDC_FILE")
+    if not isinstance(p, str) or not p:
+        return None
+    if Path(p).is_file():
+        return Path(p)
+    dd = str(cfg.get("DESIGN_DIR") or "").rstrip("/")
+    if dd and p.startswith(dd + "/"):
+        cand = Path(run_dir).parent.parent / p[len(dd) + 1:]
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _config_env(cfg: Dict[str, Any]) -> Dict[str, str]:
+    """The config as LibreLane hands it to its Tcl (``$::env(CLOCK_PERIOD)``…):
+    a sign-off SDC reads those. Scalars and flat lists only."""
+    out: Dict[str, str] = {}
+
+    def one(v: Any) -> Optional[str]:
+        if isinstance(v, bool):
+            return "1" if v else "0"
+        if isinstance(v, (int, float, str)):
+            return str(v)
+        return None
+
+    for k, v in cfg.items():
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", str(k)) or v is None:
+            continue
+        if isinstance(v, (list, tuple)):
+            parts = [one(x) for x in v]
+            if all(x is not None for x in parts):
+                out[k] = " ".join(parts)  # type: ignore[arg-type]
+            continue
+        s = one(v)
+        if s is not None and "\n" not in s and "\x00" not in s:
+            out[k] = s
+    return out
+
+
 def _inputs(run_dir: Path, db: Dict[str, Any]) -> Dict[str, Any]:
     cfg = _resolved(run_dir)
     step_dir = db["odb"].parent
-    sdc = _first(step_dir, "*.sdc") or _first(run_dir / "final" / "sdc", "*.sdc")
-    spef = None
     final_db = db["key"] == "final" and db["step"] == "final"
+    # The final layout is timed as sign-off times it: with SIGNOFF_SDC_FILE
+    # (spm: 0.1 ns uncertainty), not the place-and-route SDC final/sdc holds
+    # (0.25 ns). Earlier stages keep the constraints their step used.
+    signoff = _signoff_sdc(run_dir, cfg) if final_db else None
+    sdc = signoff or _first(step_dir, "*.sdc") or _first(run_dir / "final" / "sdc", "*.sdc")
+    spef = None
     if final_db and (run_dir / "final" / "spef").is_dir():
         corner = cfg.get("DEFAULT_CORNER") or ""
         token = corner.split("_")[0] if corner else "nom"
@@ -198,7 +257,12 @@ def _inputs(run_dir: Path, db: Dict[str, Any]) -> Dict[str, Any]:
     # Clocks are propagated only once a clock tree exists (as LibreLane's STA does).
     cts = any(_ordinal(d.name) <= _ordinal(step_dir.name) and "openroad-cts" in d.name for d in _step_dirs(run_dir)) \
         if step_dir.name != "odb" else True
-    return {"libs": _libs(cfg), "sdc": sdc, "spef": spef, "propagate": cts, "cfg": cfg}
+    corners = cfg.get("STA_CORNERS")
+    return {"libs": _libs(cfg), "sdc": sdc, "spef": spef, "propagate": cts, "cfg": cfg,
+            "env": _config_env(cfg) if signoff else {},
+            "timing": {"corner": cfg.get("DEFAULT_CORNER") or None, "signoff_sdc": bool(signoff),
+                       "sdc": sdc.name if sdc else None, "spef": bool(spef),
+                       "corners": len(corners) if isinstance(corners, list) else None}}
 
 
 # --------------------------------------------------------------------------- state
@@ -215,9 +279,7 @@ def _read_json(p: Path) -> Optional[Dict[str, Any]]:
 
 
 def _write_json(p: Path, data: Any) -> None:
-    tmp = p.with_name(p.name + ".%d.tmp" % os.getpid())
-    tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, p)
+    safefs.write_text(p.parent, p.name, json.dumps(data, separators=(",", ":")))
 
 
 def _jkey(run_dir: Path, key: str) -> str:
@@ -304,7 +366,7 @@ def _docker_rootless(engine: str) -> bool:
 def build_argv(engine: str, image: str, *, run_dir: Path, cdir: Path, script: Path, odb: Path,
                libs: List[str], sdc: Optional[Path], spef: Optional[Path], propagate: bool,
                name: str, timeout_s: int, mounts: List[str], user: Optional[str],
-               layers: Optional[Dict[str, str]] = None) -> List[str]:
+               layers: Optional[Dict[str, str]] = None, config_env: Optional[Dict[str, str]] = None) -> List[str]:
     """``<engine> run`` for one export: the run folder read-only, its cache
     folder writable, the PDK read-only, no network, OpenROAD's GUI offscreen."""
     argv = [engine, "run", "--rm", "--name", name, "--network", "none"]
@@ -313,9 +375,12 @@ def build_argv(engine: str, image: str, *, run_dir: Path, cdir: Path, script: Pa
     argv += ["-v", f"{run_dir}:{run_dir}:ro", "-v", f"{cdir}:{cdir}"]
     for m in mounts:
         argv += ["-v", f"{m}:{m}:ro"]
-    env = {"QT_QPA_PLATFORM": "offscreen", "HOME": str(cdir), "ODB": str(odb), "OUT": str(cdir),
+    # The config first (a sign-off SDC reads $::env(CLOCK_PERIOD)…), then
+    # the export's own inputs, which win on a clash.
+    env: Dict[str, str] = dict(config_env or {})
+    env.update({"QT_QPA_PLATFORM": "offscreen", "HOME": str(cdir), "ODB": str(odb), "OUT": str(cdir),
            "LIBS": " ".join(libs), "SDCF": str(sdc or ""), "SPEF": str(spef or ""),
-           "PROPAGATE": "1" if propagate else "0"}
+           "PROPAGATE": "1" if propagate else "0"})
     for k, v in (layers or {}).items():
         env[k] = str(v or "")
     for k, v in env.items():
@@ -394,7 +459,7 @@ class _Job:
     def _fail(self, msg: str, need: Optional[str] = None) -> None:
         self.error, self.need = msg, need
         try:
-            self.cdir.mkdir(parents=True, exist_ok=True)
+            self.cdir = _confined_cache(self.run_dir, self.db["key"])
             _write_json(self.cdir / "failed.json", {"key": _manifest_key(self.db["odb"]), "error": msg,
                                                     "need": need, "tail": self.tail, "when": int(time.time())})
         except Exception:
@@ -432,7 +497,7 @@ class _Job:
                        "then try again.", need="image")
             return
         inp = _inputs(self.run_dir, self.db)
-        self.cdir.mkdir(parents=True, exist_ok=True)
+        self.cdir = _confined_cache(self.run_dir, self.db["key"])
         for old in self.cdir.glob("heat-*.csv"):
             try:
                 old.unlink()
@@ -443,7 +508,7 @@ class _Job:
                 (self.cdir / old).unlink()
             except OSError:
                 pass
-        shutil.copyfile(_SCRIPT, self.cdir / "lanex_export.tcl")
+        safefs.write_bytes(self.cdir, "lanex_export.tcl", _SCRIPT.read_bytes())
         size_mb = odb.stat().st_size / 1e6
         timeout_s = int(min(900, 90 + 30 * size_mb / 100))
         user = None
@@ -455,7 +520,8 @@ class _Job:
                           libs=inp["libs"], sdc=inp["sdc"], spef=inp["spef"], propagate=inp["propagate"],
                           name=self.name, timeout_s=timeout_s, mounts=mounts, user=user,
                           layers={"RT_MIN": inp["cfg"].get("RT_MIN_LAYER"), "RT_MAX": inp["cfg"].get("RT_MAX_LAYER"),
-                                  "RT_CLOCK_MIN": inp["cfg"].get("RT_CLOCK_MIN_LAYER")})
+                                  "RT_CLOCK_MIN": inp["cfg"].get("RT_CLOCK_MIN_LAYER")},
+                          config_env=inp["env"])
         if eng.get("sg_wrap"):
             argv = tools_mod.sg_wrap_argv(argv)
         env = os.environ.copy()
@@ -463,7 +529,7 @@ class _Job:
         logp = self.cdir / "export.log"
         self.phase = "loading the database"
         t0 = time.time()
-        with open(logp, "w", encoding="utf-8", errors="replace") as logf:
+        with safefs.open_new(logp) as logf:
             logf.write("$ " + " ".join(argv) + "\n")
             logf.flush()
             self._proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -503,10 +569,14 @@ class _Job:
         self.phase = "preparing the overlays"
         out = convert(self.cdir, lines)
         # Qt and fontconfig leave caches in HOME (the cache folder): not results.
-        shutil.rmtree(self.cdir / ".cache", ignore_errors=True)
+        try:
+            safefs.remove_tree(self.cdir, ".cache")
+        except OSError:
+            pass
         out["seconds"] = seconds
         out["step"] = self.db["step"]
         out["note"] = self.db["note"]
+        out["timing"] = inp["timing"]
         _write_json(self.cdir / "analysis.json", out)
         size = sum(f.stat().st_size for f in self.cdir.iterdir() if f.is_file())
         _write_json(self.cdir / "manifest.json", {

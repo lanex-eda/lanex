@@ -1388,7 +1388,8 @@ def render_dot(run_dir: str | Path, rel_path: str, *, force: bool = False) -> Di
                 "error": "rendered SVG is too large to display in the browser — "
                          "download the .dot and view it in a desktop viewer."}
     try:
-        svg_file.write_bytes(proc.stdout)
+        from . import safefs
+        safefs.write_bytes(svg_file.parent, svg_file.name, proc.stdout)   # never through a link
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
     touch_run(run)  # the run's file listing just gained a file
@@ -1446,7 +1447,8 @@ def render_dot_png(run_dir: str | Path, rel_path: str, *, force: bool = False) -
     if not proc.stdout:
         return {"ok": False, "error": "graphviz produced an empty PNG"}
     try:
-        png_file.write_bytes(proc.stdout)
+        from . import safefs
+        safefs.write_bytes(png_file.parent, png_file.name, proc.stdout)   # never through a link
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
     touch_run(run)  # the run's file listing just gained a file
@@ -2103,7 +2105,8 @@ def write_watch(design_dir: str | Path, rules: List[Dict[str, Any]]) -> Dict[str
     p = Path(design_dir) / _WATCH_FILE
     try:
         if clean:
-            p.write_text(json.dumps(clean, indent=2) + "\n", encoding="utf-8")
+            from . import safefs
+            safefs.write_text(p.parent, p.name, json.dumps(clean, indent=2) + "\n")
         elif p.is_file():
             p.unlink()
         return {"ok": True, "rules": clean}
@@ -2168,7 +2171,9 @@ def set_pin(run_dir: str | Path, pinned: bool) -> Dict[str, Any]:
     marker = rd / _PIN_MARKER
     try:
         if pinned:
-            marker.touch()
+            from . import safefs
+            if not marker.is_file() or marker.is_symlink():
+                safefs.write_bytes(rd, marker.name, b"")
         elif marker.is_file():
             marker.unlink()
         return {"ok": True, "pinned": bool(pinned)}
@@ -2285,7 +2290,8 @@ def write_note(run_dir: str | Path, text: str) -> Dict[str, Any]:
     try:
         p = rd / _NOTE_FILE
         if text.strip():
-            p.write_text(text, encoding="utf-8")
+            from . import safefs
+            safefs.write_text(rd, p.name, text)   # a link there is replaced, not written through
         elif p.is_file():
             p.unlink()  # empty note → remove the file
         return {"ok": True, "note": text}
