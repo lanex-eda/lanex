@@ -434,6 +434,84 @@ def _worst(run: _Run, base: str) -> Optional[float]:
     return _num(run.metrics.get(base))
 
 
+_SENTINEL = 1e29   # OpenSTA's "no path" slack (about 1e30)
+_FMAX_RE = re.compile(r"^(\S+) period_min = (" + r"-?\d+(?:\.\d+)?" + r") fmax = (\S+)")
+_UNCLOCKED_RE = re.compile(r"There (?:are|is) (\d+) unclocked register/latch pins?")
+
+
+def _sta_corner_dirs(run: _Run) -> Dict[str, Path]:
+    """The per-corner folders of the sign-off STA step (OpenROAD.STAPostPNR)
+    when it finished: ``{corner: folder}``."""
+    s = run.step("OpenROAD.STAPostPNR")
+    if not s or s["status"] != "done":
+        return {}
+    try:
+        return {p.name: p for p in sorted(s["path"].iterdir()) if p.is_dir() and (p / "max.rpt").is_file()}
+    except OSError:
+        return {}
+
+
+def _min_period(d: Path) -> Optional[Dict[str, Any]]:
+    """``clock.rpt``'s ``report_clock_min_period`` line: the fastest clock the
+    register-to-register paths of this corner allow (LibreLane runs it without
+    ``-include_port_paths``, so input and output paths are not in it)."""
+    f = d / "clock.rpt"
+    try:
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
+    except OSError:
+        return None
+    for ln in reversed(lines):
+        m = _FMAX_RE.match(ln.strip())
+        if m:
+            fmax = m.group(3)
+            try:
+                fv = float(fmax)
+            except ValueError:
+                fv = None
+            if fv is not None and not math.isfinite(fv):
+                fv = None
+            return {"clock": m.group(1), "period_min": float(m.group(2)), "fmax": fv}
+    return None
+
+
+def _unclocked(dirs: Dict[str, Path]) -> Optional[int]:
+    """How many register clock pins OpenSTA found no clock on (its
+    ``check_setup -no_clock`` line in sta.log; LibreLane doesn't relay it)."""
+    for d in dirs.values():
+        f = d / "sta.log"
+        try:
+            with f.open("r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read(4_000_000)
+        except OSError:
+            continue
+        m = _UNCLOCKED_RE.search(text)
+        return int(m.group(1)) if m else 0
+    return None
+
+
+def _no_clock(run: _Run) -> Optional[Dict[str, Any]]:
+    """``{clock_port, registers, unclocked}`` when sign-off STA ran on a design
+    with flip-flops but no path was timed in any corner (no clock reached
+    them), else None."""
+    dirs = _sta_corner_dirs(run)
+    if not dirs:
+        return None
+    seq = _finite(run.metrics.get("design__instance__count__class:sequential_cell"))
+    if not seq:
+        return None
+    vals = list(_by_corner(run.metrics, "timing__setup__ws").values()) or [run.metrics.get("timing__setup__ws")]
+    if any(_num(v) is not None and abs(_num(v)) < _SENTINEL for v in vals):
+        return None
+    for d in dirs.values():
+        try:
+            with (d / "max.rpt").open("r", encoding="utf-8", errors="replace") as fh:
+                if "Startpoint:" in fh.read(2_000_000):
+                    return None
+        except OSError:
+            continue
+    return {"clock_port": run.conf("CLOCK_PORT"), "registers": int(seq), "unclocked": _unclocked(dirs)}
+
+
 # ---------------------------------------------------------------- the checks
 def _antenna_final(run: _Run) -> bool:
     """True once the antenna check after detailed routing has run (Classic
@@ -642,6 +720,28 @@ def _checks(run: _Run) -> List[Dict[str, Any]]:
         rec["note"] = "This run recorded no violation counts; judged on the worst hold slack instead."
         rec["detail"] = ""
     out.append(rec)
+    # A design whose clock never reached its registers has nothing timed:
+    # every corner reports "No paths found." and zero violations, which
+    # LibreLane's checkers pass. That is a vacuous result, never "clean"
+    # (LibreLane issue #1028): setup and hold become "Not checked", so the
+    # verdict reads "Not enough to call it" with the reason.
+    nc = _no_clock(run)
+    sta_dirs = _sta_corner_dirs(run)
+    for r in out[-2:]:
+        if nc:
+            r["status"] = _NOT_RUN
+            r["no_clock"] = nc
+            port = nc.get("clock_port")
+            r["detail"] = ("No clock reached the registers, so OpenSTA timed no path in any corner and "
+                           "\"0 violations\" means nothing was checked. "
+                           + (f"CLOCK_PORT is \"{port}\": check it names the clock input of {run.conf('DESIGN_NAME') or 'the top module'}."
+                              if port else "CLOCK_PORT is not set: set it to the clock input of the top module."))
+        elif r["id"] == "setup" and sta_dirs:
+            n_unclk = _unclocked(sta_dirs)
+            if n_unclk:
+                r["unclocked"] = n_unclk
+                r["note"] = ((r.get("note") or "") + f" {n_unclk} flip-flop clock pin{'s have' if n_unclk != 1 else ' has'} "
+                             "no clock, so paths through them were not timed (OpenSTA's check in sta.log).").strip()
     out.append(_timing_checker(run, _rec("slew", "timing", "Max slew violations"),
                base="design__max_slew_violation__count", specific_var="MAX_SLEW_VIOLATION_CORNERS",
                checker="Checker.MaxSlewViolations", what="Slew violations"))
@@ -1076,13 +1176,21 @@ def _timing_table(run: _Run, checks: Dict[str, Dict[str, Any]]) -> Dict[str, Any
         for row in checks.get(cid, {}).get("corners", []):
             gate.setdefault(row["corner"], {})[cid] = row["gating"]
     rows = []
+    dirs = _sta_corner_dirs(run)
     for c in sorted(per):
         r = per[c]
         r["gates"] = gate.get(c, {})
+        # The fastest clock this corner's register-to-register paths allow.
+        mp = _min_period(dirs[c]) if c in dirs else None
+        if mp and mp.get("fmax") is not None:
+            r["fmax"] = mp["fmax"]
+            r["period_min"] = mp["period_min"]
         rows.append(r)
     clk = run.cfg.get("CLOCK_PERIOD")
     sta = run.step("OpenROAD.STAPostPNR")
+    nc = (checks.get("setup") or {}).get("no_clock")
     return {
+        "no_clock": nc,
         # "signoff" when the post-route STA step finished; otherwise these are
         # the last estimates an earlier STA step left in the metrics.
         "source": "signoff" if sta and sta["status"] == "done" else ("estimate" if per else "none"),
@@ -1347,7 +1455,12 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
                          f" ({miss['kind']} {miss['ws']:.2f} ns)")
         return out
     if v["state"] == "incomplete":
-        out.update(state="incomplete", label="Not enough to call it")
+        # No clock reached the registers: LibreLane passed a run that timed
+        # nothing. Say why on the verdict line itself, not only in Verify.
+        nc = next((c.get("no_clock") for c in checks if c["id"] == "setup" and c.get("no_clock")), None)
+        out.update(state="incomplete", label="Timing not checked: no clock" if nc else "Not enough to call it")
+        if nc:
+            out["no_clock"] = True
         return out
     w = len(v["warning_ids"])
     out.update(state="passed", label="Clean" + (f", {w} warning{'s' if w != 1 else ''}" if w else ""))
