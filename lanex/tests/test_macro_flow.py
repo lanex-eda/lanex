@@ -211,6 +211,19 @@ def test_overlay_never_overrides_the_users_own_settings(tmp_path):
     assert not (tmp_path / ".gui-macros-pdn.tcl").exists()
 
 
+def test_run_check_asks_about_an_instance_the_rtl_lacks(tmp_path):
+    # LibreLane 3.0.4, Check Macro Instances: "No macro instance u_wrong found." (forced on a real run)
+    _fake_macro(tmp_path, inst=[{"name": "u_wrong", "location": [110.4, 100.64]}], maglef=False)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "top.v").write_text("module top(input clk);\n  m u_m (.clk(clk));\nendmodule\n")
+    (tmp_path / "config.yaml").write_text("DESIGN_NAME: top\nVERILOG_FILES: dir::src/top.v\n")
+    ps = cm.run_problems(str(tmp_path))
+    hit = [p for p in ps if "No macro instance u_wrong found." in p["message"]]
+    assert hit and not hit[0]["hard"] and "names it u_m" in hit[0]["message"]
+    # a LEF without a SIZE is said, never a crash
+    assert any(p["hard"] and "no SIZE" in p["message"] for p in ps)
+
+
 def test_set_instances_saves_all_or_nothing(tmp_path):
     _fake_macro(tmp_path, inst=[{"name": "u_m", "location": None}])
     assert not cm.set_instances(str(tmp_path), [{"macro": "nope", "name": "u", "location": [1, 2]}])["ok"]

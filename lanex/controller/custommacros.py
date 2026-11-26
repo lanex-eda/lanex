@@ -1071,4 +1071,21 @@ def run_problems(design_dir: str | Path, pdk: Optional[str] = None, scl: Optiona
                         "message": f"Macro {name} is switched on but lists no instance, so LibreLane wouldn't "
                                    "place it; if your RTL uses it, the run stops at the power grid (PDN-0235).",
                         "fix": "Add its instance (the name in your RTL) on the Cells & macros tab, or switch the macro off."})
+    # Instance names the RTL doesn't have: LibreLane's Check Macro Instances
+    # step stops with "No macro instance <name> found." The RTL is read by a
+    # light parser, so this asks first instead of refusing.
+    try:
+        names = sorted({i["macro"] for i in fp.get("instances") or []})
+        scan = macrolib.find_instances(str(d), None, names) if names else {}
+        if scan.get("ok") and scan.get("top_found"):
+            for i in fp.get("instances") or []:
+                found = (scan.get("instances") or {}).get(i["macro"]) or []
+                if i["name"] not in found:
+                    out.append({"code": "macro", "hard": False,
+                                "message": f"{i['name']} is listed as an instance of {i['macro']}, but the RTL "
+                                           + (f"names it {', '.join(found)}" if found else "doesn't instantiate it")
+                                           + f". LibreLane would stop with \"No macro instance {i['name']} found.\"",
+                                "fix": "Use the RTL's names on the Cells & macros tab."})
+    except Exception:
+        pass
     return out

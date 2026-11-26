@@ -1163,6 +1163,8 @@ def floorplan(design_dir: str, pdk: Optional[str] = None, scl: Optional[str] = N
         lefv = (m.get("views") or {}).get("lef")
         p = resolve_view(lefv if isinstance(lefv, str) else "", str(d), pdk or (m.get("source") or {}).get("pdk"))
         g = macro_geometry(p, m["name"])
+        if g.get("ok") and not (g.get("w") and g.get("h")):
+            g = {"ok": False, "error": "its LEF gives the block no SIZE"}
         if not g.get("ok"):
             macros[m["name"]] = {"ok": False, "error": g.get("error")}
             continue
