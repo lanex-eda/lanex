@@ -326,7 +326,17 @@ def replace(design_dir: str | Path, query: str, replacement: str, edits: Sequenc
         except OSError as ex:
             results.append({"rel": rel, "ok": False, "why": str(ex)})
             continue
-        disk = raw.decode("utf-8", errors="replace")
+        # Only text that is exactly UTF-8 is rewritten: a Latin-1 "©" or "µ"
+        # would come back as U+FFFD everywhere in the file, and Undo (which
+        # writes the decoded text back) couldn't restore the bytes.
+        try:
+            disk = raw.decode("utf-8")
+        except UnicodeDecodeError as ex:
+            results.append({"rel": rel, "ok": False, "encoding": True,
+                            "why": f"isn't UTF-8 text (byte 0x{raw[ex.start]:02X} at offset {ex.start}), so Replace "
+                                   "left it alone; edit it in an editor that knows its encoding, or save it "
+                                   "as UTF-8 first"})
+            continue
         text = disk.replace("\r\n", "\n").replace("\r", "\n")
         if editor.text_hash(text) != e.get("hash"):
             results.append({"rel": rel, "ok": False, "why": "changed on disk since the search", "changed": True})
