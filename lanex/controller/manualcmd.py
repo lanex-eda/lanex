@@ -443,7 +443,13 @@ def _safe_librelane_line(line: Any) -> Optional[str]:
     people (an imported bundle or folder): its ``cli_command`` must not be able
     to smuggle ``; curl … | sh`` into "Copy as script". Re-quoting turns every
     shell operator into a literal argument; anything that is not a librelane
-    command is dropped (None)."""
+    command is dropped (None).
+
+    The program is checked by its whole path, not its last name: a recorded
+    ``/tmp/x/librelane`` (a planted program called librelane) is not run. A
+    path is kept only as the tool's own name (``librelane``, ``python3 -m
+    librelane``), which the reader's PATH finds; a program by another name, or
+    one with a path that isn't the tool's, is dropped."""
     if not isinstance(line, str) or not line.strip() or "\n" in line or "\r" in line or "\0" in line:
         return None
     try:
@@ -452,10 +458,33 @@ def _safe_librelane_line(line: Any) -> Optional[str]:
         return None
     if not argv:
         return None
-    prog = Path(argv[0]).name
-    if prog != "librelane" and not (prog in _PYTHON and argv[1:3] == ["-m", "librelane"]):
+    prog = argv[0]
+    if prog == "librelane":
+        pass
+    elif prog in _PYTHON and argv[1:3] == ["-m", "librelane"]:
+        pass
+    elif _is_tool_path(prog, "librelane"):
+        argv = ["librelane"] + argv[1:]
+    elif argv[1:3] == ["-m", "librelane"] and any(_is_tool_path(prog, p) for p in _PYTHON):
+        argv = ["python3"] + argv[1:]
+    else:
         return None
     return " ".join(shlex.quote(a) for a in argv)
+
+
+# Where a librelane or python a run recorded may live: a venv's or pipx's bin
+# folder, ~/.local/bin, /usr(/local)/bin, /opt/.../bin. Anything else (a run
+# folder, /tmp, a project) is not the tool.
+_TOOL_DIRS = re.compile(r"^(/usr(/local)?/bin|/opt(/[^/\0]+)+/bin|/home/[^/\0]+/\.local/bin|"
+                        r"(/home/[^/\0]+|/root|/Users/[^/\0]+)(/[^/\0]+)*/(venv|\.venv|venvs/[^/\0]+|pipx/venvs/[^/\0]+)/bin)$")
+
+
+def _is_tool_path(path: str, name: str) -> bool:
+    """*path* is the program *name* in a folder programs are installed in."""
+    p = Path(path)
+    if not p.is_absolute() or p.name != name or ".." in p.parts:
+        return False
+    return bool(_TOOL_DIRS.match(str(p.parent)))
 
 
 def _comment(v: Any) -> str:

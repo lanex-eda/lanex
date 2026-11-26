@@ -327,6 +327,21 @@ def test_sweep_run_names_stay_inside_runs(tmp_path):
 
 
 # ------------------------------------------------------------------ reproduce from someone else's run
+def test_reproduce_checks_the_whole_program_path():
+    # Z2 leftover: the base name alone let a planted ".../librelane" through.
+    from lanex.controller.manualcmd import _safe_librelane_line as safe
+    assert safe("librelane config.json --run-tag r1") == "librelane config.json --run-tag r1"
+    assert safe("python3 -m librelane config.json") == "python3 -m librelane config.json"
+    for evil in ("/tmp/x/librelane config.json", "./librelane config.json", "runs/r1/librelane x",
+                 "/home/u/proj/librelane x", "/usr/bin/../../tmp/librelane x", "/tmp/python3 -m librelane x",
+                 "/home/u/proj/bin/python -m librelane x"):
+        assert safe(evil) is None, evil
+    # A recorded install path is kept as the tool's own name (the reader's PATH finds it).
+    assert safe("/home/u/.local/bin/librelane config.json") == "librelane config.json"
+    assert safe("/home/u/.local/share/pipx/venvs/lanex/bin/python -m librelane c.json") == "python3 -m librelane c.json"
+    assert safe("/usr/local/bin/librelane c.json") == "librelane c.json"
+
+
 def test_reproduce_script_from_an_imported_run_cannot_run_extra_commands(tmp_path):
     meta = {
         "tag": "r1\nrm -rf ~",
