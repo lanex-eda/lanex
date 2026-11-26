@@ -617,6 +617,27 @@ def test_waiver_file_changed_by_another_program_mid_save_is_not_overwritten(tmp_
     assert "# edited elsewhere" in (tmp_path / runwarnings.WAIVER_FILE).read_text()
 
 
+# ------------------------------------------------------------------ run routes read only known projects
+def test_run_log_and_reports_read_only_known_projects(server, tmp_path, monkeypatch):
+    """F1 confined /api/runs-meta to known projects; the run log, run reports,
+    runs and trends routes take a folder from the URL too."""
+    port, proj = server
+    other = tmp_path / "someone-else"
+    for d in (proj, other):
+        (d / "runs" / "r1").mkdir(parents=True, exist_ok=True)
+        (d / "runs" / "r1" / "flow.log").write_text("log of " + d.name + "\n")
+    monkeypatch.setattr(routes, "_runs_known_designs", lambda: [str(proj.resolve())])
+    monkeypatch.setattr(routes, "_runs_live_dirs", lambda: [])
+    st, _, body = _req(port, "GET", f"/api/run/log?tag=r1&design_dir={proj}")
+    assert st == 200 and b"log of proj" in body
+    for path in (f"/api/run/log?tag=r1&design_dir={other}", f"/api/run/log?tag=r1&design_dir={other}&raw=1",
+                 f"/api/run-reports?design_dir={other}&run_tag=r1", f"/api/runs?design_dir={other}",
+                 f"/api/trends?design_dir={other}"):
+        st, _, body = _req(port, "GET", path)
+        assert st == 403 and b"log of" not in body, path
+    assert _req(port, "GET", f"/api/run-reports?design_dir={proj}&run_tag=r1")[0] == 200
+
+
 # ------------------------------------------------------------------ R3 and F3 follow-ups in my files
 def test_power_total_is_named_after_the_last_sta_corner(tmp_path):
     rep = signoff.build(_run(tmp_path))

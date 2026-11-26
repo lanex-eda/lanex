@@ -375,7 +375,14 @@ def h_runs(handler: Any) -> None:
     # active one — used by the Runs tab's "All history" scope, which fans out over
     # the user's recent design dirs. Read-only metadata under <dir>/runs/.
     explicit = _query_param(handler.path, "design_dir")
-    design_dir = explicit if (explicit and Path(explicit).expanduser().is_dir()) else _get_active_design_dir()
+    if explicit:
+        known = _known_design_dir(explicit)
+        if known is None:
+            _respond(handler, _NOT_KNOWN, 403)
+            return
+        design_dir: Optional[str] = str(known)
+    else:
+        design_dir = _get_active_design_dir()
     if not design_dir:
         _respond(handler, [])
         return
@@ -641,11 +648,16 @@ def h_walk_sources(handler: Any) -> None:
 
 
 def h_run_reports(handler: Any) -> None:
-    design_dir = _query_param(handler.path, "design_dir")
+    raw = _query_param(handler.path, "design_dir")
     run_tag = _query_param(handler.path, "run_tag")
-    if not design_dir or not run_tag:
+    if not raw or not run_tag or _bad_tag(run_tag):
         _respond(handler, "missing design_dir or run_tag", 400)
         return
+    known = _known_design_dir(raw)
+    if known is None:
+        _respond(handler, _NOT_KNOWN, 403)
+        return
+    design_dir = str(known)
     try:
         _respond(handler, history.cached_run_result(
             "reports", os.path.join(design_dir, "runs", run_tag),
@@ -2359,9 +2371,13 @@ def h_run_log(handler: Any) -> None:
     (``lanex-console.log``) when there is one, else LibreLane's ``flow.log``.
     Nothing is read whole into memory: a big run's log is tens of MB."""
     tag = _query_param(handler.path, "tag")
-    dd = _queue_design({"design_dir": _query_param(handler.path, "design_dir")})
-    if not dd or not tag or _bad_tag(tag):
+    raw = _query_param(handler.path, "design_dir") or _get_active_design_dir()
+    if not raw or not tag or _bad_tag(tag):
         _respond(handler, "missing or bad tag / design_dir", 400)
+        return
+    dd = _known_design_dir(raw)
+    if dd is None:
+        _respond(handler, _NOT_KNOWN, 403)
         return
     run = Path(dd) / "runs" / tag
     which = _query_param(handler.path, "source")
@@ -3647,7 +3663,11 @@ def h_run_bundle(handler: Any) -> None:
 
 def h_trends(handler: Any) -> None:
     """Per-metric trend series across the active design's runs (for line charts)."""
-    design_dir = _query_param(handler.path, "design_dir") or _get_active_design_dir()
+    explicit = _query_param(handler.path, "design_dir")
+    if explicit and _known_design_dir(explicit) is None:
+        _respond(handler, _NOT_KNOWN, 403)
+        return
+    design_dir = str(_known_design_dir(explicit)) if explicit else _get_active_design_dir()
     if not design_dir:
         _respond(handler, {"ok": True, "runs": [], "series": {}, "keys": []})
         return
@@ -3709,6 +3729,33 @@ def _runs_design_arg(raw: Any) -> Optional[Path]:
     if str(p) in _runs_known_designs():
         return p
     return None
+
+
+_NOT_KNOWN = ("LanEx only reads the runs of projects it has open. Open this project on Setup "
+              "(or pick it in the project list) first.")
+
+
+def _known_design_dir(raw: Any) -> Optional[Path]:
+    """A design folder named in a request (a Windows path is converted), when
+    LanEx knows it: opened on Setup, the active one, or one a run is writing
+    into now. The read routes that take a folder from the URL (run log, run
+    reports, runs, trends) use it, so none of them lists or streams the files
+    of an arbitrary folder (the rule F1 gave /api/runs-meta)."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        raw = platform_env.to_host_path(raw) or raw
+    except Exception:
+        pass
+    p = _runs_design_arg(raw)
+    if p is not None:
+        return p
+    try:
+        q = Path(raw).expanduser().resolve()
+        live = {str(Path(d).resolve().parent.parent) for d in _runs_live_dirs()}
+    except (OSError, RuntimeError):
+        return None
+    return q if str(q) in live and q.is_dir() else None
 
 
 def purge_old_trash(design_dirs: Optional[List[str]] = None, *, background: bool = True) -> None:

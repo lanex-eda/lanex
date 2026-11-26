@@ -1140,6 +1140,7 @@ def test_log_download_and_load_full_are_streamed(tmp_path, monkeypatch):
     rd = _log_run(tmp_path, 9 * 1024 * 1024)
     monkeypatch.setattr(Path, "read_bytes", lambda self: (_ for _ in ()).throw(AssertionError("read whole")))
     d = tmp_path / "p"
+    monkeypatch.setattr(routes, "_runs_known_designs", lambda: [str(d.resolve())])   # an open project
     h = _LogH(f"/api/run/log?tag=r1&design_dir={d}&download=1")
     routes.h_run_log(h)
     assert h.sent["path"] == str(rd / "lanex-console.log")
@@ -1151,6 +1152,7 @@ def test_log_download_and_load_full_are_streamed(tmp_path, monkeypatch):
 
 def test_a_log_range_is_at_most_8_mb(tmp_path, monkeypatch):
     _log_run(tmp_path, 9 * 1024 * 1024)
+    monkeypatch.setattr(routes, "_runs_known_designs", lambda: [str((tmp_path / "p").resolve())])
     got = {}
     monkeypatch.setattr(routes, "_respond", lambda h, payload, code=200: got.update(payload=payload, code=code))
     routes.h_run_log(_LogH(f"/api/run/log?tag=r1&design_dir={tmp_path / 'p'}"))
