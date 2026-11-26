@@ -825,13 +825,13 @@ function startedFromHtml(sw, runs, verdictOf, failCode) {
   else if (fin(hs) && hs < 0) { cause = "Hold slack " + F.showText("timing__hold__ws", hs) + "."; hint = "A hold miss is fixed by buffering, not by a slower clock."; }
   else if (/GRT/.test(code)) { cause = "Routing was too congested (" + code + ")."; hint = "A study can try a lower utilisation; if every value fails, the design needs fewer cells or more metal layers."; }
   else if (/DPL|GPL/.test(code)) { cause = "Placement failed (" + code + ")."; hint = "A bigger die or a lower utilisation often fixes this; if not, look at the macro placement."; }
-  else if (v.state === "failed") { cause = (v.label || "It failed") + (code && !String(v.label || "").includes(code) ? " (" + code + ")" : "") + "."; hint = "Fix the cause first: a study can't fix a design that doesn't build."; }
+  else if (v.state === "failed") { cause = code && !String(v.label || "").includes(code) ? "(" + code + ")" : ""; hint = "Fix the cause first: a study can't fix a design that doesn't build."; }
   const tone = { passed: "pass", warning: "warn", failed: "fail" }[v.state] || "warn";
   return "<div class='sw-from is-" + tone + "'><span class='sw-from-k'>Started from</span><code>" + esc(before.tag) + "</code>" +
     "<span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(v.label || v.state) + "</span>" +
     (cause ? "<span class='sw-from-c'>" + esc(cause) + "</span>" : fin(ws) ? "<span class='sw-from-c'>" + esc(F.showText("timing__setup__ws", ws)) + " setup slack</span>" : "") +
     (hint ? "<span class='sw-from-h'>" + esc(hint) + "</span>" : "") +
-    (cause ? "<button class='btn btn-ghost btn-sm' data-from='" + esc(before.tag) + "'>" + icon("check", { size: 13 }) + " Open it in Verify</button>" : "") + "</div>";
+    (cause || hint ? "<button class='btn btn-ghost btn-sm' data-from='" + esc(before.tag) + "'>" + icon("check", { size: 13 }) + " Open it in Verify</button>" : "") + "</div>";
 }
 
 // Which runs "Compare" sends: all of them up to twelve; past that the best by

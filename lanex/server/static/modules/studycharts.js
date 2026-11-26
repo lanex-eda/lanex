@@ -56,8 +56,9 @@ export function byValueOption({ xvar, xunit = "", metric, points, clock = false,
     axisTick: { show: true, customValues: ticks, lineStyle: { color: k.grid } }, splitLine: { show: false } };
   const xAxis = [{ ...xAxisBase, position: "bottom", name: xvar + (xunit ? " (" + xunit + ")" : ""), nameLocation: "middle", nameGap: 28,
     nameTextStyle: { color: k.text, fontSize: 11.5, fontFamily: k.mono } }];
-  if (clock) xAxis.push({ ...xAxisBase, position: "top", name: "MHz", nameTextStyle: { color: k.text, fontSize: 11 },
-    axisLabel: { ...xAxisBase.axisLabel, formatter: (v) => mhz(v).replace(" MHz", "") } });
+  // The same periods read as frequencies along the top ("125 MHz").
+  if (clock) xAxis.push({ ...xAxisBase, position: "top", name: "",
+    axisLabel: { ...xAxisBase.axisLabel, formatter: (v) => mhz(v) } });
   const ys = ok.map((p) => p.y);
   const series = [{
     type: line ? "line" : "scatter", name: metric.label, data: ok.slice().sort((a, b) => a.x - b.x).map((p) => ({ value: [p.x, p.y], p })),
@@ -70,7 +71,7 @@ export function byValueOption({ xvar, xunit = "", metric, points, clock = false,
       data: [[{ name: "fails timing" }, { yAxis: 0 }]] } : undefined,
   }];
   if (best) series.push({ type: "scatter", name: "best", data: [{ value: [best.x, best.y], p: best }], symbol: "circle", symbolSize: 16, z: 4,
-    itemStyle: { color: "transparent", borderColor: k.accent, borderWidth: 2 }, label: { show: true, position: "top", color: k.strong, fontSize: 11, formatter: "best" } });
+    itemStyle: { color: "transparent", borderColor: k.accent, borderWidth: 2 }, label: { show: true, position: "left", color: k.strong, fontSize: 11, formatter: "best" } });
   // Failed points have no number: crosses on a rail at the bottom (a hidden
   // second y axis pinned 0..1), so they are seen, never silently dropped.
   if (failed.length) series.push({ type: "scatter", name: "failed", yAxisIndex: 1, data: failed.map((p) => ({ value: [p.x, 0.04], p })), clip: false,
