@@ -293,6 +293,9 @@ def _run_signature(run_dir: Path) -> tuple:
         # the Runs table showed the run still pinned.
         _mtime_ns(os.path.join(rd, _PIN_MARKER)),
         _mtime_ns(os.path.join(rd, _IMPORT_MARKER)),
+        # Tags and the archive marker (runsmeta), the same way.
+        _mtime_ns(os.path.join(rd, _TAGS_FILE)),
+        _mtime_ns(os.path.join(rd, _ARCHIVE_MARKER)),
     )
 
 
@@ -366,7 +369,9 @@ def _fast_signature(run_dir: Path, st: Optional[os.stat_result] = None) -> tuple
     return (st.st_mtime_ns, st.st_ino,
             _mtime_ns(os.path.join(rd, _PIN_MARKER)),
             _mtime_ns(os.path.join(rd, _NOTE_FILE)),
-            _mtime_ns(os.path.join(rd, "final", "metrics.json")))
+            _mtime_ns(os.path.join(rd, "final", "metrics.json")),
+            _mtime_ns(os.path.join(rd, _TAGS_FILE)),
+            _mtime_ns(os.path.join(rd, _ARCHIVE_MARKER)))
 
 
 # Who is writing a run right now. The server registers the run controller's
@@ -755,6 +760,8 @@ def _summarise(run_dir: Path) -> RunSummary:
         pinned=(run_dir / _PIN_MARKER).is_file(),
         origin=run_origin(run_dir),
         note=read_note(run_dir)[:200],
+        tags=_runsmeta.read_tags(run_dir),
+        archived=(run_dir / _ARCHIVE_MARKER).is_file(),
     )
 
 
@@ -1736,7 +1743,10 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
     # optimisation direction is KNOWN from the registry — guessing a direction
     # for an unregistered/renamed metric could highlight the worse run as "best"
     # (a silent Fear-A/J trap), so an unknown metric gets no highlight.
-    meta = _metric_meta()
+    # Directions from LibreLane's registry, looked up by the metric's base
+    # name the way LibreLane's own compare does (a per-corner row reads like
+    # its base metric), with LibreLane's "no direction" kept as unknown.
+    dirs = _runsmeta.metric_directions()
     best: Dict[str, str] = {}
     metric_meta: Dict[str, Dict[str, Any]] = {}
     # Only a run that passed can be the best at anything: a failed or stopped
@@ -1744,12 +1754,12 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
     # short) would otherwise win.
     passed = {r["col"] for r in runs if r.get("success")}
     for metric, per_col in metric_union.items():
-        m = meta.get(metric)
-        known = m is not None
-        hib = bool(m.get("higher_is_better", True)) if known else True
+        m = _runsmeta.direction_of(metric, dirs)
+        known = m is not None and isinstance(m.get("higher_is_better"), bool)
+        hib = bool(m["higher_is_better"]) if known else True
         metric_meta[metric] = {
             "higher_is_better": hib,
-            "critical": bool(m.get("critical", False)) if known else False,
+            "critical": bool(m.get("critical", False)) if m else False,
             "direction_known": known,
         }
         if not known:
@@ -2012,6 +2022,11 @@ _IMPORT_MARKER = "gui-imported.json"
 
 # Empty marker file present iff the user pinned/starred the run (E4.5).
 _PIN_MARKER = ".gui-pin"
+
+# Tags and the archived state (controller/runsmeta.py).
+from . import runsmeta as _runsmeta  # noqa: E402
+_TAGS_FILE = _runsmeta.TAGS_FILE
+_ARCHIVE_MARKER = _runsmeta.ARCHIVE_MARKER
 
 
 # Per-design metric watch-list (E4.2): rules of the form "this metric must stay
