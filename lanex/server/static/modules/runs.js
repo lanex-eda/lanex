@@ -2217,12 +2217,62 @@ function sideSettingsHtml(r) {
   return (from ? "<h4 class='rn-side-h'>Where it came from</h4>" + from : "") + changed;
 }
 
+// ---- LibreLane's SynthesisExploration: its nine recipes, read from the run
+// folder (controller/synthexplore.py), folded where the netlists are the same.
+const isExploration = (r) => !!((r.verdict && r.verdict.exploration) || r.flow === "SynthesisExploration");
+async function paintRecipes(r, my) {
+  const host = document.getElementById("rn-side-se");
+  let d;
+  try { d = await api.synthExplore(r.run_dir); } catch (ex) {
+    if (host) host.innerHTML = "<h4 class='rn-side-h'>Synthesis recipes</h4><p class='rn-side-line'>Couldn't read them: " + esc(ex.message || ex) + "</p>";
+    return;
+  }
+  if (my !== _sideSeq || !host || !host.isConnected) return;
+  const n = (v, dd = 2) => (typeof v === "number" && Number.isFinite(v) ? (Math.abs(v) >= 1000 ? Math.round(v).toLocaleString("en-US") : v.toFixed(dd)) : v === Infinity ? "none" : "");
+  const rows = (d.rows || []).map((x) => {
+    const m = x.metrics || {};
+    const best = [x.strategies.includes(d.best_area) ? "smallest" : "", x.strategies.includes(d.best_slack) ? "most slack" : ""].filter(Boolean).join(", ");
+    return "<tr" + (best ? " class='is-best'" : "") + "><td class='sw-res-v'>" + esc(x.strategies.join(" · ")) + (best ? " <small>" + esc(best) + "</small>" : "") + "</td>" +
+      (x.ok ? "<td class='sw-num'>" + esc(n(m.design__instance__count, 0)) + "</td><td class='sw-num'>" + esc(n(m.design__instance__area, 0)) + "</td>" +
+        "<td class='sw-num" + (m.timing__setup__ws < 0 ? " is-neg" : "") + "'>" + esc((m.timing__setup__ws >= 0 ? "+" : "") + n(m.timing__setup__ws)) + "</td>"
+        : "<td colspan='3'><span class='rn-v is-fail'><i aria-hidden='true'></i>Failed at " + esc(x.step_words || x.step || "") + "</span> <span class='muted'>" + esc(x.reason || "") + "</span></td>") + "</tr>";
+  }).join("");
+  // The best by area and the best by slack; when one recipe is both, the
+  // runner-up by slack from a different netlist (a folded row is one netlist).
+  const rowOfS = (s) => (d.rows || []).find((x) => x.strategies.includes(s));
+  const pickRows = [...new Set([d.best_area, d.best_slack].filter(Boolean).map(rowOfS).filter(Boolean))];
+  if (pickRows.length === 1) {
+    const next = (d.rows || []).filter((x) => x.ok && x !== pickRows[0])
+      .sort((a, b) => ((b.metrics || {}).timing__setup__ws ?? -1e9) - ((a.metrics || {}).timing__setup__ws ?? -1e9))[0];
+    if (next) pickRows.push(next);
+  }
+  const picks = pickRows.map((x) => x.strategies[0]);
+  host.innerHTML = "<h4 class='rn-side-h'>Synthesis recipes <small>" + esc(d.ok_count + " of " + d.count + " synthesised") + "</small></h4>" +
+    (d.all_failed
+      ? "<p class='rn-side-line'><b>None of the " + d.count + " recipes synthesised.</b> " +
+        (d.common_failure ? "All failed at " + esc(d.common_failure.step_words || "") + (d.common_failure.reason ? ": " + esc(d.common_failure.reason) : "") + ". " : "") +
+        "That's a design problem, not a recipe problem: fix it on Setup (DESIGN_NAME, or the Verilog files).</p>"
+      : "<div class='sw-res-wrap rn-se'><table class='sw-res'><thead><tr><th>Recipe</th><th class='sw-num'>Gates</th><th class='sw-num'>Area <small>µm²</small></th><th class='sw-num'>Setup WNS <small>ns</small></th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
+        "<p class='rn-side-line muted'>" + esc(d.note || "") + "</p>" +
+        (picks.length ? "<div class='rn-actions'><button class='btn btn-primary btn-sm' data-se-run='" + esc(picks.join(", ")) + "'>" + icon("play", { size: 13 }) + " Run " + esc(picks.join(" and ")) + " in full</button></div>" : ""));
+  host.querySelector("[data-se-run]")?.addEventListener("click", (e) => {
+    const vals = e.currentTarget.dataset.seRun;
+    import("./sweeps.js").then((m) => m.openSweepSheet("synth", { values: vals, full: true }));
+  });
+}
+
 // How it ended, in the words Flow and Verify use for the same run.
 function sideTopHtml(r, rx, vf) {
   const v = verdictOf(r);
   const tone = VERDICT_TONE[v.state] || "warn";
   let title = v.label || v.state, why = "", act = "", extra = "";
   const flowBtn = (label) => "<button class='btn btn-primary btn-sm' data-ra='flow'>" + icon("flow", { size: 13 }) + " " + label + "</button>";
+  // An exploration has no layout: Flow's "stopped at step 1" reading of its
+  // folder is not what happened. Its recipes say it (below).
+  if (isExploration(r)) {
+    return "<div class='rn-side-verdict is-" + tone + "'><span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(title) + "</span>" +
+      "<p>LibreLane's SynthesisExploration: each synthesis recipe run through synthesis and timing before layout, in one run folder. It builds no layout.</p></div>";
+  }
   if (rx && (rx.kind === "clean" || rx.kind === "checks-failed")) {
     const cv = cardVerdict(vf, rx);
     if (cv) { title = rx.kind === "checks-failed" ? "The layout is done, but " + (cv.short || "checks failed") : cv.title; why = cv.sub || ""; }
@@ -2257,7 +2307,8 @@ function sideHtml(r, base) {
     "<button class='iconbtn' data-side='close' aria-label='Close the run details (Esc)' title='Close (Esc)'>" + icon("x", { size: 16 }) + "</button></div>" +
     "<div class='rn-side-body'>" +
     "<div id='rn-side-top'>" + sideTopHtml(r, RX.get(keyOf(r)) || null, null) + "</div>" +
-    "<section id='rn-side-nums'>" + sideNumsHtml(r, base) + "</section>" +
+    (isExploration(r) ? "<section id='rn-side-se'><h4 class='rn-side-h'>Synthesis recipes</h4><p class='rn-side-line muted'>Reading the nine recipes…</p></section>"
+      : "<section id='rn-side-nums'>" + sideNumsHtml(r, base) + "</section>") +
     "<section id='rn-side-set'>" + sideSettingsHtml(r) + "</section>" +
     "<section><h4 class='rn-side-h'>Open this run in</h4><div class='rn-open-in'>" +
       b("flow", "Flow", "flow", "") + b("layout", "Layout", "grid", "") + b("analytics", "Analytics", "chart", "") + b("verify", "Verify", "check", "") + "</div></section>" +
@@ -2292,6 +2343,7 @@ async function paintSide(r) {
   const active = normDir(r._design) === normDir(state.designDir);
   host.innerHTML = sideHtml(r, base);
   paintSideTags(r);
+  if (isExploration(r)) paintRecipes(r, my);
   const ta = host.querySelector("#rn-note-ta");
   ta.value = r.note || "";
   ta.addEventListener("blur", async () => {

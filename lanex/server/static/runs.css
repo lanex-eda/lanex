@@ -246,6 +246,10 @@ body.theme-light .rn-viewing { color: var(--accent); border-color: color-mix(in 
 .sw-chart { width: 100%; min-height: 220px; }
 .sw-chart-note { margin: 4px 0 0; font-size: 12.5px; }
 .sw-chart-note:empty { display: none; }
+/* An exploration's recipes in the run panel (the best rows carry the spine). */
+.rn-se .sw-res th, .rn-se .sw-res td { padding: 6px 10px; height: auto; white-space: normal; }
+.rn-se .sw-res tr.is-best > td:first-child { box-shadow: inset 2px 0 0 var(--met1); }
+.rn-se .sw-res-v small { display: block; margin: 2px 0 0; color: var(--met1); }
 
 /* ---------- views, filters, tags, archive, baseline row (lane 2) ---------- */
 /* View: the saved view this table shows, a dot when it has changed since. */

@@ -3897,6 +3897,21 @@ def h_compare_image(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_synth_explore(handler: Any) -> None:
+    """The recipes of a SynthesisExploration run (controller/synthexplore.py),
+    by its folder. GET ``?run_dir=``."""
+    from ..controller import runsmeta, synthexplore
+    try:
+        run = runsmeta.check_run_dir(_query_param(handler.path, "run_dir"), known=_runs_known_designs())
+    except ValueError as ex:
+        _respond(handler, str(ex), 404)
+        return
+    if not synthexplore.is_exploration(run):
+        _respond(handler, "that run is not a synthesis exploration", 404)
+        return
+    _respond(handler, synthexplore.read(run))
+
+
 def serve_view(spec: str) -> Optional[Dict[str, Any]]:
     if "/" in spec:
         tag, fmt = spec.split("/", 1)
@@ -6544,6 +6559,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/runs-keys", h_runs_keys),
     ("/api/runs-export", h_runs_export),
     ("/api/compare-image", h_compare_image),
+    ("/api/synth-explore", h_synth_explore),
     ("/api/known-designs", h_known_designs),
     ("/api/run-step-log", h_run_step_log),
     ("/api/run-files", h_run_files),
@@ -6703,7 +6719,7 @@ _GET_ROUTES = {
     "/api/reports/drc", "/api/reports/lvs", "/api/fs/roots", "/api/fs/list", "/api/walk-sources",
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
     "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
-    "/api/runs-keys", "/api/compare-image",
+    "/api/runs-keys", "/api/compare-image", "/api/synth-explore",
     "/api/timing/paths", "/api/timing/path", "/api/warnings", "/api/verify/summary",
     # Layout (lane 3)
     "/api/layout/nets", "/api/layout/net", "/api/layout/analysis", "/api/layout/viewer-status",

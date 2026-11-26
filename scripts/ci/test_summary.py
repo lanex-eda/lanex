@@ -108,6 +108,8 @@ IMPLICATIONS: Dict[str, str] = {
     "test_ide_navigation": "Go to definition and references find the right declaration across files (ports, instances, macros, VHDL), project search and replace never touch a newer file, a simulation's PASS/FAIL comes from the simulator's own words, and the schematic reads the design as synthesis does.",
     "test_fixloop": "A fix names the first step that reads its setting and resumes the run there; config edits land in the right section and Undo restores the file byte for byte; timing and DRC diagnoses say only what LibreLane's reports support.",
     "test_watch_pin": "Run watch/pin/notes persist and read back correctly.",
+    "test_runsmeta": "Runs keeps tags, archive, the project's one baseline and saved views; bulk delete goes to a trash that Undo restores and only LanEx's own run folders are touched; Compare and Runs read better/worse by LibreLane's base metric; exports open right in Excel.",
+    "test_synthexplore": "The best-synthesis-recipe study reads LibreLane's SynthesisExploration from its folders, folds identical netlists, and survives the all-recipes-failed crash.",
     "test_dse_reverify": "DSE sweeps + targeted re-verify launch through the SAME assembly path as a normal run (Fear B).",
     "test_viewers_plugins": "Cell parsing + desktop-tool launch guards behave; plugin surface stays removed.",
     "test_viewer_handoff": "Every layout viewer receives ALL the run data it can render: OpenROAD gets db+liberty+sdc+spef and the marker/DRC inventory (clean-vs-violations said out loud); KLayout gets the DRC/XOR marker databases; Magic/GDS3D flags stay existence-guarded.",

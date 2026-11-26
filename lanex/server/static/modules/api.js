@@ -230,6 +230,7 @@ export const api = {
   runsChanged: (base, runDirs) => _fetch("/api/runs-changed", { method: "POST", body: JSON.stringify({ base, run_dirs: runDirs }), timeout: 120000 }),
   runsKeys: (designDir) => _fetch("/api/runs-keys?design_dir=" + encodeURIComponent(designDir || "")),
   runsExport: (body) => _fetch("/api/runs-export", { method: "POST", body: JSON.stringify(body), timeout: 120000 }),
+  synthExplore: (runDir) => _fetch("/api/synth-explore?run_dir=" + encodeURIComponent(runDir || "")),
   setRunNote: (tag, note) => _fetch("/api/run-note", { method: "POST", body: JSON.stringify({ tag, note }) }),
   setRunPin: (tag, pinned) => _fetch("/api/run-pin", { method: "POST", body: JSON.stringify({ tag, pinned }) }),
   getWatch: (design) => _fetch("/api/watch" + (design ? "?design=" + encodeURIComponent(design) : "")),

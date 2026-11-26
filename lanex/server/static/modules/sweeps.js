@@ -150,7 +150,7 @@ const asText = (v) => (Array.isArray(v) ? v.join(" ") : v == null ? "" : String(
 // ------------------------------------------------------------------ sheet
 // `goal` (a GOALS id such as "clock") opens the sheet on that preset;
 // `values` fills its first setting's values (e.g. "12.5, 10, 8").
-export async function openSweepSheet(goal, { values } = {}) {
+export async function openSweepSheet(goal, { values, full = false } = {}) {
   if (!state.designDir) { toast.show("Open a project first: a sweep runs the open design.", "info"); return; }
   if (!S.el) build();
   S.ctx = {};
@@ -158,6 +158,9 @@ export async function openSweepSheet(goal, { values } = {}) {
   S.touched = !!values;
   pickGoal(GOALS.some((g) => g.id === goal) ? goal : S.goal);
   if (values && S.axes[0]) { S.axes[0].values = values; paintAxes(); }
+  // From an exploration's table: run the picked recipes in full now.
+  const ex = S.el.querySelector("#sw-explore");
+  if (ex) ex.checked = !full;
   S.el.hidden = false;
   // A dialog on the overlay stack: Tab stays in the sheet, Esc closes it (and
   // only it), closing puts focus back.
@@ -225,6 +228,8 @@ function build() {
     "<label><input type='radio' name='sw-mode' value='grid' checked/> Every combination</label>" +
     "<label><input type='radio' name='sw-mode' value='list'/> Paired, value by value</label></div>" +
     "<label class='sw-stop' id='sw-stop-row'><input type='checkbox' id='sw-stop'/> Stop at the first run that is clean (timing met and every check passed)</label>" +
+    "<label class='sw-stop' id='sw-explore-row' hidden><input type='checkbox' id='sw-explore' checked/> <span>Explore all 9 recipes first, in seconds: LibreLane's SynthesisExploration synthesises the design with each one and times it before layout. " +
+      "Then run the best one or two in full from its table in Runs. It stops before layout, so the config's layout settings are not read. <span class='muted'>Untick to run the recipes above in full now.</span></span></label>" +
     "<div class='sw-riders' id='sw-riders' aria-live='polite'></div>" +
     "</div>" +
     "<footer class='sw-foot'><div class='sw-est' id='sw-est' aria-live='polite'></div><span class='sw-spacer'></span>" +
@@ -243,6 +248,7 @@ function build() {
   });
   el.querySelectorAll("input[name='sw-mode']").forEach((r) => r.addEventListener("change", () => { S.mode = r.value; paintEst(); requestPlan(); }));
   el.querySelector("#sw-stop").addEventListener("change", (e) => { S.stop = e.target.checked; });
+  el.querySelector("#sw-explore").addEventListener("change", () => paintEst());
   el.querySelector("#sw-start").addEventListener("click", start);
 }
 
@@ -257,6 +263,7 @@ function pickGoal(id) {
   S.stop = false;
   S.el.querySelector("#sw-stop").checked = false;
   S.el.querySelector("#sw-stop-row").hidden = id === "clock";
+  S.el.querySelector("#sw-explore-row").hidden = id !== "synth";
   S.el.querySelectorAll(".sw-goal").forEach((b) => { const on = b.dataset.goal === id; b.classList.toggle("is-on", on); b.setAttribute("aria-checked", on); });
   paintAxes();
 }
@@ -472,9 +479,46 @@ function paintEst() {
     warns.map((w) => "<div class='sw-warn'>" + esc(w) + "</div>").join("");
   paintRiders();
   const b = S.el.querySelector("#sw-start");
-  const running = state.status && state.status.running;
-  b.disabled = !!err || S.busy || running;
-  b.title = running ? "A run is going: start the sweep when it ends." : "";
+  const explore = exploring();
+  if (explore) {
+    est.innerHTML = "<b>1 exploration of 9 recipes</b> <span class='muted'>seconds to a few minutes: synthesis and timing before layout only</span>";
+    b.innerHTML = icon("play", { size: 13 }) + " Explore 9 recipes";
+    b.disabled = S.busy;
+    b.title = "";
+    return;
+  }
+  b.innerHTML = icon("play", { size: 13 }) + " Start sweep";
+  // The queue takes a sweep while runs are going (lane 1): it waits its turn.
+  b.disabled = !!err || S.busy;
+  b.title = "";
+}
+const exploring = () => S.goal === "synth" && !!S.el && !!S.el.querySelector("#sw-explore")?.checked;
+
+// Best synthesis recipe, step one: LibreLane's SynthesisExploration as one
+// queue job (its recipes are read from the run folder: synthexplore.py).
+async function startExploration() {
+  S.busy = true;
+  paintEst();
+  try {
+    const { collectRunPayload } = await import("./setup.js");
+    const base = collectRunPayload();
+    const d = new Date(), p = (x) => String(x).padStart(2, "0");
+    const tag = "synthx-" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+    // The exploration stops before layout, so the config's layout settings
+    // (utilisation, pins, power grid) are not read: the config check's "this
+    // flow never reads X" notes are expected here, never a reason to refuse.
+    const spec = { ...base, flow: "SynthesisExploration", tag, frm: null, to: null, only: null, skip: [], checks_ack: true };
+    const res = await api.queueAdd({ design_dir: state.designDir, spec, kind: "run", label: "Synthesis recipes (9)" });
+    if (res && res.ok === false) throw new Error(res.reason || "the config check refused it");
+    toast.show("Exploring LibreLane's 9 synthesis recipes as " + tag + ". Its table opens from the run in Runs when it ends.", "success", 8000);
+    closeSweepSheet();
+    document.dispatchEvent(new CustomEvent("g:sweep", { detail: { started: { run_tags: [tag] } } }));
+  } catch (ex) {
+    toast.show("The exploration didn't start: " + (ex.message || ex), "error", 0);
+  } finally {
+    S.busy = false;
+    if (S.el) paintEst();
+  }
 }
 
 // Setup's one-off settings go with every point: the sheet says so, by name.
@@ -490,6 +534,7 @@ function paintRiders() {
 }
 
 async function start() {
+  if (exploring()) { if (!S.busy) await startExploration(); return; }
   if (problems() || S.busy) return;
   // The server still has the previous project active: a sweep now would run there.
   if (state.designMissing) {

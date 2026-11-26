@@ -750,6 +750,15 @@ def _summarise(run_dir: Path) -> RunSummary:
     except Exception:
         reused = 0
 
+    # LibreLane's SynthesisExploration: nine recipes, no final/ folder. Its
+    # verdict and name come from its recipes (synthexplore.py); it has no
+    # final numbers (its pre-layout ones would read like a finished chip's).
+    if (run_dir / "1-synthesis-area-0").is_dir():
+        from . import synthexplore
+        verdict = synthexplore.verdict(run_dir)
+        flow_name = "SynthesisExploration"
+        key = {}
+
     return RunSummary(
         tag=run_dir.name,
         run_dir=str(run_dir),
