@@ -170,6 +170,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--all", action="store_true",
                         help="with --uninstall: same as --remove-pdks --remove-image "
                              "(projects still need --remove-projects)")
+    parser.add_argument("--set-wsl-memory", metavar="GB", default=None,
+                        help=argparse.SUPPRESS)   # Windows Setup's "Memory for Linux"
     parser.add_argument("--verbose", action="store_true")
     # Not argparse's `action="version"`: that evaluates its version string while
     # the parser is being built, and get_version() imports librelane — a cost
@@ -184,6 +186,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         from ._version import get_version_line
 
         sys.stdout.write(f"lanex {get_version_line()}\n")
+        return 0
+
+    if args.set_wsl_memory is not None:
+        from .controller import wslconfig
+
+        raw = str(args.set_wsl_memory).strip().lower()
+        try:
+            gb = None if raw in ("default", "windows") else int(raw)
+            res = wslconfig.write_memory(gb, total_gb=wslconfig._windows_total_gb())
+        except (ValueError, wslconfig.WslConfigError) as ex:
+            sys.stderr.write(f"Memory for Linux was not changed: {ex}\n")
+            return 1
+        sys.stdout.write(
+            (f"Memory for Linux set to {res['value']} in {res['path']}" if res.get("value")
+             else f"Memory for Linux left to Windows in {res['path']}")
+            + (f" (backup: {res['backup']})" if res.get("backup") else "")
+            + ". It applies the next time WSL starts.\n")
         return 0
 
     if args.uninstall:
