@@ -236,7 +236,7 @@ function paintLive(btn, tag) {
   if (!btn) return;
   btn.querySelector(".rb-mark").className = "rb-mark is-run";
   btn.querySelector(".rb-name").textContent = tag;
-  btn.querySelector(".rb-meta").textContent = "running";
+  btn.querySelector(".rb-meta").textContent = runVerdict("running").word;
   btn.querySelector(".rb-tags").innerHTML = "<span class='rb-tag is-new'>live</span>";
   btn.disabled = false;
 }
