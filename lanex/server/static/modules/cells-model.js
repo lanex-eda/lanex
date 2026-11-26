@@ -379,6 +379,59 @@ export function globMatcher(pats) {
   return fn;
 }
 
+// ---------- the exclusion guard ------------------------------------------------
+// What an exclusion would take from the flow: excluding every buffer, every
+// clock-tree buffer, the clock tree's root, every inverter or flip-flop, or a
+// cell synthesis inserts by name stops the run (OpenROAD: "No clock buffer
+// candidates could be found from any libraries.", "No buffers found."; Yosys:
+// "Cannot find buffer cell in abc library"). Physical cells the flow places by
+// name (fill, decap, tap, end cap) only warn. *lib* is /api/celllib; the result
+// counts only what the change from *before* to *after* (user patterns) removes.
+const _BLOCK_ROLES = {
+  CTS_ROOT_BUFFER: "the clock tree's root buffer",
+  SYNTH_BUFFER_CELL: "the buffer synthesis inserts",
+  SYNTH_TIEHI_CELL: "the tie-high cell synthesis uses",
+  SYNTH_TIELO_CELL: "the tie-low cell synthesis uses",
+  SYNTH_DRIVING_CELL: "the cell timing assumes drives every input",
+  SYNTH_CLK_DRIVING_CELL: "the cell timing assumes drives the clock",
+  DIODE_CELL: "the antenna diode the flow inserts",
+};
+const _WARN_ROLES = { FILL_CELLS: "fill", DECAP_CELLS: "decap", WELLTAP_CELL: "well tap", ENDCAP_CELL: "end cap" };
+
+export function exclusionImpact(before, after, lib) {
+  const cells = (lib && lib.cells) || [];
+  const prefix = (lib && lib.prefix) || "";
+  const short = (n) => (prefix && n.startsWith(prefix) ? n.slice(prefix.length) : n);
+  const was = globMatcher(before || []), now = globMatcher(after || []);
+  const outBefore = (c) => !!(c.excluded && (c.excluded.synth || c.excluded.pnr || c.excluded.swap)) || c.dont_use || was(c.cell);
+  const outAfter = (c) => !!(c.excluded && (c.excluded.synth || c.excluded.pnr || c.excluded.swap)) || c.dont_use || now(c.cell);
+  const by = new Map(cells.map((c) => [c.cell, c]));
+  const blocks = [], warns = [];
+  const lost = (list) => list.length > 0 && list.some((c) => !outBefore(c)) && list.every(outAfter);
+  const roles = ((lib && lib.rules) || {}).roles || [];
+  for (const r of roles) {
+    const rc = (r.cells || []).map((n) => by.get(n)).filter(Boolean);
+    if (!rc.length) continue;
+    if (r.key === "CTS_CLK_BUFFERS" && lost(rc)) {
+      blocks.push({ key: r.key, text: "every clock tree buffer (" + rc.map((c) => short(c.cell)).join(", ") + ")", tool: "No clock buffer candidates could be found from any libraries." });
+    } else if (_BLOCK_ROLES[r.key]) {
+      const hit = rc.filter((c) => !outBefore(c) && outAfter(c));
+      if (hit.length && rc.every(outAfter)) blocks.push({ key: r.key, text: _BLOCK_ROLES[r.key] + ", " + hit.map((c) => short(c.cell)).join(", "), tool: r.key === "CTS_ROOT_BUFFER" ? "No clock buffer candidates could be found from any libraries." : "" });
+    } else if (_WARN_ROLES[r.key]) {
+      const hit = rc.filter((c) => !outBefore(c) && outAfter(c));
+      if (hit.length) warns.push({ key: r.key, text: "the " + _WARN_ROLES[r.key] + " cell" + (hit.length === 1 ? "" : "s") + " the flow places by name (" + hit.map((c) => short(c.cell)).join(", ") + ")" });
+    }
+  }
+  const usable = (cat) => cells.filter((c) => c.category === cat && c.has_lib !== false);
+  const kinds = [["buffer", "every buffer the resizer can use", "No buffers found."], ["inverter", "every inverter", ""], ["flipflop", "every flip-flop, so synthesis has nothing to build registers from", ""]];
+  for (const [cat, text, tool] of kinds) {
+    const list = usable(cat);
+    if (lost(list)) blocks.push({ key: cat, text, tool });
+  }
+  const removed = cells.filter((c) => !outBefore(c) && outAfter(c)).map((c) => c.cell);
+  return { blocks, warns, removed };
+}
+
 // ---------- formatting ---------------------------------------------------------
 export function fmtNum(v, digits = 2) {
   if (v === null || v === undefined || !Number.isFinite(Number(v))) return "–";
