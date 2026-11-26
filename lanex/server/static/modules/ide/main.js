@@ -1222,6 +1222,7 @@ function renderStart() {
   // Check syntax and Simulate act on a project: off while none is open.
   const none = !state.designDir;
   byId("ide-lint", (b) => { if (!state.linting) b.disabled = none; });
+  document.querySelector("#ide-diags [data-pb='lint']")?.toggleAttribute("disabled", none && !state.linting);
   for (const id of ["ide-sim", "ide-sim-pick"]) byId(id, (b) => { if (!state.simRunning) b.disabled = none; });
   el.hidden = state.tabs.length > 0;
   byId("ide-cursor", (c) => { c.hidden = !state.tabs.length; });
@@ -1817,7 +1818,7 @@ function renderProblems() {
   if (!checked) {
     host.innerHTML = "<div class='pb-empty'><p><b>Not checked yet.</b> Check syntax runs Verilator over the files the config " +
       "builds into the chip, with its defines, and over the testbenches. It takes seconds and catches most mistakes before you simulate.</p>" +
-      "<button class='btn btn-sm' data-pb='lint'>Check syntax</button></div>";
+      "<button class='btn btn-sm' data-pb='lint'" + (state.designDir ? "" : " disabled title='Open a project first'") + ">Check syntax</button></div>";
     return;
   }
   const f = state.pbFilter || (state.pbFilter = { error: true, warning: true });
@@ -1953,11 +1954,11 @@ function setSimBusy(busy) {
   const run = document.getElementById("ide-sim");
   const stop = document.getElementById("ide-sim-stop");
   if (run) {
-    run.disabled = !!busy;
+    run.disabled = !!busy || !state.designDir;
     run.innerHTML = busy ? "Simulating…"
       : "<svg viewBox='0 0 24 24' width='13' height='13' fill='currentColor' aria-hidden='true'><path d='M7 4l13 8-13 8z'/></svg> Simulate";
   }
-  byId("ide-sim-pick", (b) => { b.disabled = !!busy; });
+  byId("ide-sim-pick", (b) => { b.disabled = !!busy || !state.designDir; });
   if (stop) stop.hidden = !busy;
 }
 
