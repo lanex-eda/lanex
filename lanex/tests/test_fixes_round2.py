@@ -149,3 +149,29 @@ def test_vhdl_editable():
     from lanex.controller import editor
 
     assert ".vhd" in editor.EDITABLE_EXTS and ".vhdl" in editor.EDITABLE_EXTS
+
+
+def test_event_ring_is_bounded_by_size_as_well_as_count():
+    # A big design's log batches (hundreds of lines each) must not fill a
+    # 20,000-event ring with hundreds of MB: the ring also caps total text.
+    from lanex.controller import events
+
+    b = events.EventBus(maxlen=20000, max_chars=200_000)
+    batch = ["x" * 200] * 100  # ~20,000 chars per event
+    for _ in range(50):
+        b.emit("run:log", {"lines": batch})
+    kept = b.events_since(-1)
+    assert 5 <= len(kept) <= 11
+    assert b._chars <= 200_000
+    # The newest event is always kept and the sequence stays ordered.
+    assert kept[-1]["seq"] == b.max_seq
+    assert b.min_seq == kept[0]["seq"]
+    # A single event larger than the budget is still kept (never an empty ring).
+    b.emit("run:log", {"lines": ["y" * 300_000]})
+    assert len(b.events_since(-1)) == 1
+    # The count bound still holds for small events.
+    c = events.EventBus(maxlen=10, max_chars=10_000_000)
+    for i in range(25):
+        c.emit("tick", {"i": i})
+    got = c.events_since(-1)
+    assert len(got) == 10 and got[-1]["i"] == 24
