@@ -47,7 +47,8 @@ def test_run_words_match_the_server_labels():
 def test_check_statuses_have_words():
     js = _js_table("CHECK")
     missing = set(verify.CHECK_STATUSES) - set(js)
-    # "not_run" is said with the "absent" words ("Not run") by checkVerdict's fallback
-    assert missing <= {"not_run"}, missing
-    assert js["absent"][1] == "Not run"
+    # Z2: the check words are Verify's on every page ("Not checked", "Turned off");
+    # a status this build doesn't know is said as "Not checked".
+    assert not missing, missing
+    assert js["not_run"][1] == js["absent"][1] == "Not checked" and js["skipped"][1] == "Turned off"
     assert "CHECK[status] || CHECK.absent" in JS
