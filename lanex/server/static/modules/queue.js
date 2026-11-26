@@ -14,6 +14,7 @@ import { openLayer, closeLayer, isLayerOpen } from "./overlay.js";
 import { toast } from "./toast.js";
 import * as FS from "./flowstages.js";
 import { followJob } from "./runfollow.js";
+import { runVerdict } from "./verdict.js";
 
 const esc = (s) => fmt.escape(String(s == null ? "" : s));
 let snap = null;          // the last /api/queue answer
@@ -278,9 +279,14 @@ function rowInterrupted(j) {
   "</li>";
 }
 
+// How a job ended, in the run words (verdict.js): the run's own verdict when
+// the queue read it ("Clean", "Warnings"), else the job's end.
 function rowEnded(j) {
-  const tone = j.state === "done" ? (j.outcome && j.outcome.ok === false ? "is-warn" : "is-pass") : j.state === "failed" ? "is-fail" : "";
-  const word = j.state === "done" ? "Finished" : j.state === "failed" ? "Failed" : j.state === "skipped" ? "Not run" : "Stopped";
+  const o = j.outcome || {};
+  const st = o.verdict || (j.state === "done" ? (o.ok === false ? "incomplete" : "passed") : j.state === "failed" ? "failed" : j.state === "skipped" ? "" : "stopped");
+  const rv = st ? runVerdict(st) : { cls: "none", word: "Skipped" };
+  const tone = "is-" + rv.cls;
+  const word = rv.word;
   return "<li class='q-row is-end' data-id='" + esc(j.id) + "'>" +
     "<div class='q-row-top'><span class='rn-v " + tone + "'><i></i>" + word + "</span>" +
     "<span class='q-lbl'>" + esc(j.project || "") + " · " + esc(j.tag || j.label || "") + "</span>" +

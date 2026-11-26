@@ -97,7 +97,7 @@ def test_raised_step_is_failed_and_cancel_is_stopped(tmp_path):
     steps = (("Yosys.Synthesis", True), ("OpenROAD.CTS", False))
     failed = _run(tmp_path, "F", final=False, steps=steps, error_log="[ERROR] boom\n")
     v = verify.run_verdict(failed)
-    assert v["state"] == "failed" and v["label"] == "Failed at step 2" and v["stage"] == "cts"
+    assert v["state"] == "failed" and v["label"] == "Failed at Clock tree (step 2)" and v["stage"] == "cts"
     stopped = _run(tmp_path, "S", final=False, steps=steps, gui={"outcome": {"result": "cancelled"}})
     v = verify.run_verdict(stopped)
     assert v["state"] == "stopped" and v["label"] == "Stopped at step 2"

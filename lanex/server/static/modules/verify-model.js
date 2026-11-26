@@ -6,13 +6,17 @@
 // Every variable named in a fix exists in LibreLane 3 (checked against
 // /api/variables); defaults quoted are LibreLane's.
 
+import { checkVerdict, failedWhere } from "./verdict.js";
+
+// The words are verdict.js's check words, the same on every page.
+const CW = (st) => checkVerdict(st).word;
 export const STATUS = {
-  pass: { label: "Passed", order: 4 },
-  fail: { label: "Failed", order: 0 },
-  warn: { label: "Warning", order: 1 },
-  info: { label: "Info", order: 3 },
-  skipped: { label: "Turned off", order: 5 },
-  not_run: { label: "Not checked", order: 2 },
+  pass: { label: CW("pass"), order: 4 },
+  fail: { label: CW("fail"), order: 0 },
+  warn: { label: CW("warn"), order: 1 },
+  info: { label: CW("info"), order: 3 },
+  skipped: { label: CW("skipped"), order: 5 },
+  not_run: { label: CW("not_run"), order: 2 },
 };
 
 export const GATE = {
@@ -254,7 +258,10 @@ export function drcDisagree(rv) {
     text: "The DRC report files list " + m + " but LibreLane's metric says 0" };
 }
 
-export function verdictCopy(rep) {
+// `cause`: the failure card Flow shows for this run (run-explain's card:
+// {title, plain}), so a failed run reads the same on Flow, Verify and
+// Analytics: Flow's cause as the title, where it failed under it.
+export function verdictCopy(rep, { cause = null } = {}) {
   const v = rep.verdict, f = rep.flow_state || {};
   const by = new Map((rep.checks || []).map((c) => [c.id, c]));
   const names = (ids) => ids.map((id) => (by.get(id) || {}).name || id);
@@ -297,9 +304,15 @@ export function verdictCopy(rep) {
   }
   if (v.state === "stopped") {
     const failed = rv && rv.state === "failed";
-    return { tone: "fail", title: (failed ? "Failed at step " : rv && rv.state === "stopped" ? "Stopped at step " : "The flow stopped at step ") + (stop ? stop.n : "?"),
-      short: failed ? "failed" : "not checked",
-      sub: (stop ? (stop.id || stop.dir) + " didn't finish. " : "") + ran + " of " + v.total + " checks ran before it stopped. The run log has the reason." };
+    const where = failed ? failedWhere(rv) : (rv && rv.state === "stopped" ? "Stopped at step " : "The flow stopped at step ") + (stop ? stop.n : "?");
+    const counted = ran + " of " + v.total + " checks ran before it stopped.";
+    if (failed && cause && cause.title) {
+      // Flow's reading of the failure: its title, then where, then the fix.
+      return { tone: "fail", title: cause.title, eyebrow: where, short: "failed", flowFix: true,
+        sub: (cause.plain ? cause.plain + " " : "") + counted };
+    }
+    return { tone: failed ? "fail" : "warn", title: where, short: failed ? "failed" : "not checked", flowFix: failed,
+      sub: (stop ? (stop.id || stop.dir) + " didn't finish. " : "") + counted + (failed ? " Flow has the cause and the fix." : " The run log has the reason.") };
   }
   if (v.state === "incomplete" && (by.get("setup") || {}).no_clock) {
     // LibreLane passed a run that timed nothing: never "clean" (LibreLane #1028).

@@ -25,6 +25,7 @@ import { toCsv, downloadCsv } from "./csvutil.js";
 import { localeNum } from "./intlcache.js";
 import * as SM from "./studymodel.js";
 import * as SQ from "./studyqueue.js";
+import { runVerdict } from "./verdict.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const MAX_RUNS = 64;               // controller/dse.py MAX_COMBOS
@@ -1076,8 +1077,9 @@ function byValue(pts, axes) {
   });
 }
 
-const STATE_WORD = { passed: "Clean", warning: "Warnings", failed: "Failed", stopped: "Stopped", incomplete: "Incomplete", running: "Running", notrun: "Not run" };
-const STATE_TONE = { passed: "pass", warning: "warn", failed: "fail", stopped: "warn", incomplete: "warn", running: "live", notrun: "warn" };
+// A run state's word and tone are verdict.js's; a point that never ran is "Skipped".
+const stateWord = (s) => (s === "notrun" ? SM.POINT.skipped.word : runVerdict(s).word);
+const stateTone = (s) => (s === "notrun" ? "warn" : runVerdict(s).cls);
 
 // The table a sweep exists for: the swept value(s) against how each point
 // came out and its key numbers, sorted by value.
@@ -1087,8 +1089,8 @@ function resultsHtml(pts, sw, { scale, areaId, failCode }) {
   const cols = ["wns", "hold", areaId === "die" ? "die" : "cells", areaId === "die" ? "cells" : "die", "util", "power", "runtime"];
   const rows = byValue(pts, axes).map((p) => {
     const P = SM.POINT[p.key] || {};
-    const word = p.word || P.word || STATE_WORD[p.state] || p.state;
-    const tone = P.tone === "muted" ? "none" : P.tone || STATE_TONE[p.state] || "warn";
+    const word = p.word || P.word || stateWord(p.state);
+    const tone = P.tone === "muted" ? "none" : P.tone || stateTone(p.state);
     const sup = p.superseded ? "<span class='muted'> · rerun as " + esc(p.superseded) + "</span>" : "";
     return "<tr" + (p.r ? " data-open='" + esc(p.tag) + "' class='sw-res-row" + (p.superseded ? " is-old" : "") + "' title='" + esc("Open " + p.tag) + "'" : " class='is-missing'") + ">" +
       axes.map((a) => "<td class='sw-res-v'>" + esc(p.v ? p.v[a.var] : "") + (a.var === "CLOCK_PERIOD" && p.v && Number(p.v[a.var]) > 0 ? " <small>" + esc(mhz(Number(p.v[a.var]))) + "</small>" : "") + "</td>").join("") +
@@ -1128,7 +1130,7 @@ function exportSweepCsv(sw, pts, failCode) {
   const axes = sw.axes || [];
   const head = [...axes.map((a) => a.var), "run", "result", "reason", ...METRICS.map((m) => m.key ? m.key + " (" + (F.unitOf(m.key) === "ratio" ? "fraction" : F.unitOf(m.key)) + ")" : "runtime (s)")];
   const rows = [head, ...byValue(pts, axes).map((p) => [
-    ...axes.map((a) => (p.v ? p.v[a.var] : "")), p.tag, p.word || STATE_WORD[p.state] || p.state,
+    ...axes.map((a) => (p.v ? p.v[a.var] : "")), p.tag, p.word || stateWord(p.state),
     p.superseded ? "rerun as " + p.superseded : p.detail || (p.r && p.failed ? (failCode && failCode(p.r)) || "" : ""),
     ...METRICS.map((m) => (p.r ? metricOf(p, m.id) ?? "" : "")),
   ])];

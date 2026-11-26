@@ -12,6 +12,7 @@ import { state, safeStorage } from "./state.js";
 import { toast } from "./toast.js";
 import * as FS from "./flowstages.js";
 import { runSummary, fmtDur } from "./reportcard.js";
+import { runVerdict, failedWhere, TIMING_MISSED } from "./verdict.js";
 
 const BASE_TITLE = (typeof document !== "undefined" && document.title) || "LanEx";
 let _result = null;          // the last run's result line, kept in the title until seen
@@ -57,7 +58,7 @@ export function clearRunResult() {
   if (pill) {
     pill.classList.remove("pill-running", "pill-pass", "pill-warn", "pill-fail");
     pill.classList.add("pill-pending");
-    pill.textContent = "idle";
+    pill.textContent = "Idle";
   }
 }
 
@@ -167,7 +168,8 @@ export async function runFinished(ev) {
   if (pill) {
     pill.classList.remove("pill-running", "pill-pass", "pill-warn", "pill-fail", "pill-pending");
     pill.classList.add(out.tone === "pass" ? "pill-pass" : out.tone === "warn" ? "pill-warn" : out.tone === "fail" ? "pill-fail" : "pill-pending");
-    pill.textContent = rv && rv.state === "stopped" ? "stopped" : "done";
+    // The run's verdict word ("Clean", "Failed", "Stopped"), as Runs says it.
+    pill.textContent = rv && rv.state ? runVerdict(rv.state).word : out.tone === "pass" ? runVerdict("passed").word : out.tone === "fail" ? runVerdict("failed").word : "Ended";
   }
   // The title goes back to normal once the user has had the window in front
   // for a few seconds after the run ended.
@@ -189,7 +191,9 @@ export async function runFinished(ev) {
   if (rv && rv.state === "warning") acts.splice(0, acts.length, { label: "Show timing", run: () => go("verify") }, { label: "See chip", run: () => go("layout") });
   const msg = out.title + (out.body ? (/: /.test(out.title) ? ". " : ": ") + out.body : "");
   const ttype = { pass: "success", warn: "warn", fail: "error", info: "info" }[out.tone] || "info";
-  toast.show(msg, ttype, out.tone === "pass" ? 10000 : out.tone === "warn" ? 16000 : out.tone === "info" ? 6000 : 0, acts);
+  // A stopped run is amber like everywhere, but needs no long look.
+  const stoppedRun = rv && rv.state === "stopped";
+  toast.show(msg, ttype, out.tone === "pass" ? 10000 : stoppedRun ? 6000 : out.tone === "warn" ? 16000 : out.tone === "info" ? 6000 : 0, acts);
 
   if (prefs.chime()) chime(out.tone === "pass");
   if (prefs.notify() && !(document.visibilityState === "visible" && document.hasFocus())) notify(out, out.tone === "pass" ? "clean" : kind);
@@ -213,14 +217,14 @@ export function withVerdict(sum, rv, { tag = "", rx = null, name = (id) => id, n
   }
   if (s === "warning") {
     const m = rv.timing_miss;
-    const short = m && typeof m.ws === "number" ? "Timing misses (" + m.kind + " " + (m.ws < 0 ? "−" : "+") + Math.abs(m.ws).toFixed(2) + " ns)" : "";
+    const short = m && typeof m.ws === "number" ? TIMING_MISSED + " (" + m.kind + " " + (m.ws < 0 ? "−" : "+") + Math.abs(m.ws).toFixed(3) + " ns)" : "";
     return { tone: "warn", mark: "▲", label: short || rv.label || "Finished with timing misses", tail: time,
       title: who + ": " + (rv.label || "finished with timing misses"),
       // The label already gives the slack: the body keeps size and time.
       body: nums.split(" · ").filter((x) => !/^(setup|hold) /.test(x)).join(" · ") };
   }
   if (s === "failed") {
-    const label = rv.label || "Failed";
+    const label = failedWhere(rv);
     const at = rx && rx.kind === "halted" && rx.step ? name(rx.step.id) : "";
     return { tone: "fail", mark: "✗", label: label + (at && !label.includes(at) ? " (" + at + ")" : ""),
       tail: halt && !label.toLowerCase().includes(halt.toLowerCase()) ? halt : "",
@@ -228,7 +232,7 @@ export function withVerdict(sum, rv, { tag = "", rx = null, name = (id) => id, n
   }
   if (s === "stopped") {
     const mine = rx && rx.kind === "stopped";
-    return { tone: "info", mark: "■", label: mine ? "Stopped by you" : rv.label || "Stopped", tail: "",
+    return { tone: "warn", mark: "■", label: mine ? "Stopped by you" : rv.label || "Stopped", tail: "",
       title: who + (mine ? ": you stopped it" : ": " + (rv.label || "stopped").toLowerCase()), body: "" };
   }
   if (s === "incomplete") {
@@ -236,7 +240,7 @@ export function withVerdict(sum, rv, { tag = "", rx = null, name = (id) => id, n
       title: who + ": " + (rv.label || "not enough to call it").toLowerCase(), body: nums };
   }
   // No verdict: the report's summary.
-  const tone = sum.ok ? (sum.tone === "warn" ? "warn" : "pass") : rx && rx.kind === "stopped" ? "info" : sum.tone === "warn" ? "warn" : "fail";
+  const tone = sum.ok ? (sum.tone === "warn" ? "warn" : "pass") : rx && rx.kind === "stopped" ? "warn" : sum.tone === "warn" ? "warn" : "fail";
   const label = sum.ok ? (tone === "warn" ? "Clean, with warnings" : "Clean")
     : rx && rx.kind === "stopped" ? "Stopped by you"
     : rx && rx.kind === "halted" ? "Stopped" + (rx.step ? " at " + name(rx.step.id) : "")

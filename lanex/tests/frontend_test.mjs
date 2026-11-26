@@ -857,7 +857,9 @@ check("study: a point's state in plain words, from its job or its run", () => {
   assert.equal(SMod.pointKey({ run: { ...done, verdict: { state: "warning", timing_miss: { ws: -0.1 } }, key_metrics: {} } }), "missed");
   const w = SMod.pointWords("failed", { run: { verdict: { state: "failed", stage: "placement" } }, stageLabel: () => "Placement", code: "DPL-0036" });
   assert.equal(w.word, "Failed at Placement"); assert.equal(w.detail, "DPL-0036");
-  assert.equal(SMod.pointWords("missed", { run: { key_metrics: { timing__setup__ws: -0.42 } } }).detail, "setup -0.42 ns");
+  assert.equal(SMod.pointWords("missed", { run: { key_metrics: { timing__setup__ws: -0.42 } } }).detail, "setup −0.420 ns");
+  // The server's own words, and a step number, read the same as Runs and the run bar.
+  assert.equal(SMod.pointWords("failed", { run: { verdict: { state: "failed", stage: "cts", label: "Failed at step 35" } } }).word, "Failed at Clock tree (step 35)");
   assert.equal(SMod.clockText(8), "8 ns (125 MHz)");
 });
 check("study: fail fast fires on two of the first three failing the same way, never on timing missed", () => {
@@ -1068,6 +1070,29 @@ check("verdict: the server's words win, an unknown state is amber, never a guess
   assert.equal(VD.verdictOfRun({ verdict: { state: "brand-new" } }).cls, "warn");
   assert.equal(VD.verdictOfRun({ success: false }).cls, "fail");
   assert.equal(VD.verdictOfRun({ success: true }, { live: true }).cls, "run");
+});
+check("Z2 verdict: one failure sentence and one set of check words on every page", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  // Where a run failed: the stage by its flow name, the step in brackets.
+  assert.equal(VD.failedWhere({ state: "failed", stage: "cts", label: "Failed at step 35" }), "Failed at Clock tree (step 35)");
+  assert.equal(VD.failedWhere({ state: "failed", stage: "placement" }), "Failed at Placement");
+  assert.equal(VD.failedWhere({ state: "failed", label: "Failed at Clock tree (step 35)", stage: "cts" }), "Failed at Clock tree (step 35)", "the server's sentence stands");
+  assert.equal(VD.failedWhere({ state: "failed", label: "2 checks failed", stage: "signoff" }), "2 checks failed", "a finished run whose checks failed is not 'failed at Sign-off'");
+  assert.equal(VD.failedWhere({ state: "failed", label: "Failed at step 4" }), "Failed at step 4");
+  assert.equal(VD.verdictOfRun({ verdict: { state: "failed", stage: "routing", label: "Failed at step 44" } }).word, "Failed at Routing (step 44)");
+  // Stopped is amber everywhere.
+  assert.equal(VD.runVerdict("stopped").cls, "warn");
+  // Check words: Verify's, and verify-model's STATUS reads them.
+  assert.deepEqual(["pass", "fail", "warn", "info", "skipped", "not_run"].map((s) => VD.checkVerdict(s).word),
+    ["Passed", "Failed", "Warning", "Info", "Turned off", "Not checked"]);
+  for (const f of ["runs.js", "studymodel.js", "sweeps.js", "queue.js", "runend.js", "problems.js", "verify-model.js", "analytics.js"]) {
+    assert.match(src(f), /from "\.\/verdict\.js"/, f + " takes its words from verdict.js");
+  }
+  // The lowercase words are gone: the run pill, the Runs checks column, the queue.
+  assert.doesNotMatch(src("runend.js"), /textContent = "(idle|done|stopped)"/);
+  assert.doesNotMatch(src("runs.js"), /'rn-clean'>clean</);
+  assert.doesNotMatch(src("queue.js"), /"Finished" :/);
+  assert.doesNotMatch(src("verify.js"), /"Failing"|"PASS"/);
 });
 
 const PREFS_MOD = await import(toUrl(resolve(MOD, "prefs.js")));
@@ -2290,7 +2315,7 @@ check("one verdict: Verify and Flow say 'Clean', never 'tape-out ready'", () => 
   assert.equal(v.title, "Clean");
   assert.equal(v.short, "clean");
   const vjs = readFileSync(resolve(MOD, "verify.js"), "utf8");
-  assert.ok(/V\.verdictCopy\(_rep\)/.test(vjs) && !/Tape-out ready/.test(vjs), "Verify words its verdict through verify-model.js");
+  assert.ok(/V\.verdictCopy\(_rep[,)]/.test(vjs) && !/Tape-out ready/.test(vjs), "Verify words its verdict through verify-model.js");
   const blocked = VM.verdictCopy({ verdict: { state: "blocked", blocker_ids: ["setup", "hold"], warning_ids: [], missing_core: [], total: 23 },
     flow_state: { state: "deferred_errors" }, checks: [{ id: "setup", name: "Setup" }, { id: "hold", name: "Hold" }] });
   assert.equal(blocked.short, "2 checks failed");
@@ -2347,7 +2372,7 @@ check("status bar badge: counts and colour follow the shared run verdict", () =>
   assert.deepEqual(PX.badgeOf({ state: "failed", label: "2 checks failed", blockers: 2, warnings: 1 }, many), { tone: "fail", text: "2 checks failed" });
   assert.deepEqual(PX.badgeOf({ state: "passed", label: "Clean, 1 warning", blockers: 0, warnings: 1 }, many), { tone: "warn", text: "1 warning" });
   assert.equal(PX.badgeOf({ state: "passed", label: "Clean", blockers: 0, warnings: 0 }, many), null, "a clean run shows no badge");
-  assert.deepEqual(PX.badgeOf({ state: "warning", label: "Finished: timing misses", timing_miss: { kind: "setup" }, warnings: 1 }, many), { tone: "warn", text: "Timing misses" });
+  assert.deepEqual(PX.badgeOf({ state: "warning", label: "Finished: timing misses", timing_miss: { kind: "setup" }, warnings: 1 }, many), { tone: "warn", text: "Timing missed" });
   assert.equal(PX.badgeOf({ state: "stopped", label: "Stopped" }, many), null);
   assert.deepEqual(PX.badgeOf(null, { counts: { fail: 0, warn: 2 } }), { tone: "warn", text: "2 warnings" });
 });

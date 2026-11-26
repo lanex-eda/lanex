@@ -36,6 +36,7 @@ const esc = (s) => fmt.escape(s == null ? "" : String(s));
 let _tag = "";
 let _baseTag = "";
 let _rep = null;          // this run's /api/verify payload
+let _cause = null;        // a failed run's failure card (run-explain), the one Flow shows
 let _base = null;         // baseline's payload (or null)
 let _diff = null;         // V.statusDiff(_rep, _base)
 let _filter = "all";      // all | problems | passed | unchecked
@@ -263,6 +264,16 @@ async function selectRun(tag) {
   try { rep = await api.verify(tag); } catch (_e) { rep = null; }
   if (my !== _token) return;
   _rep = rep;
+  _cause = null;
+  // A run that failed reads as Flow reads it: the same cause, then the fix in Flow.
+  if (rep && rep.run_verdict && rep.run_verdict.state === "failed" && rep.verdict && rep.verdict.state === "stopped") {
+    api.runExplain(tag).then((rx) => {
+      if (my !== _token || !rx || !rx.card || !rx.card.title) return;
+      _cause = rx.card;
+      renderOverview();
+      wireProvBtns(document.getElementById("vf-overview"));
+    }).catch(() => {});
+  }
   if (_px && _px.tag !== tag) _px = null;
   // The diagnosis arrives after the checks: the rows and sections fill in.
   const paintPx = (px) => {
@@ -348,7 +359,7 @@ function jumpTo(id, openCheck) {
 
 // The verdict's words come from verify-model.js, so Flow and the end-of-run
 // toast say the same thing about the same run.
-const verdictCopy = () => V.verdictCopy(_rep);
+const verdictCopy = () => V.verdictCopy(_rep, { cause: _cause });
 
 function renderOverview() {
   const el = document.getElementById("vf-overview");
@@ -377,11 +388,11 @@ function renderOverview() {
   }
   if (_rep.metrics_from) flowNote += "<p class='vf-note'>This run has no final metrics, so the values are the ones LibreLane saved after step " + esc(_rep.metrics_from.n + " (" + (_rep.metrics_from.id || _rep.metrics_from.dir) + ")") + ", the last step that finished.</p>";
   if (_rep.has_config === false) flowNote += "<p class='vf-note'>This run has no resolved.json, so LibreLane's defaults were assumed for which checks fail the run.</p>";
-  const acts = (f.state === "stopped" ? btn("Open the run log", "data-go='runs'") : "") +
+  const acts = (cp.flowFix ? btn("The fix, in Flow", "data-go='pipeline'", { primary: true }) : f.state === "stopped" ? btn("Open the run log", "data-go='runs'") : "") +
     (v.blocker_ids.length ? btn("Go to first problem", "data-vf-jump='vf-checks' data-vf-open='" + esc(v.blocker_ids[0]) + "'", { primary: true }) : "");
   const verdict =
     "<div class='an-verdict vf-verdict is-" + cp.tone + "'>" +
-      "<div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(_rep.tag) + "</div>" +
+      "<div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(_rep.tag) + (cp.eyebrow ? " · " + esc(cp.eyebrow) : "") + "</div>" +
         "<h2 class='an-title'>" + esc(cp.title) + "</h2>" +
         "<p class='an-lede'>" + esc(cp.sub) + "</p>" +
         "<div class='an-runmeta'>" + meta + "</div>" + flowNote +
@@ -470,7 +481,7 @@ function pillar(p) {
       ["Worst IR drop", worstIr ? worstIr.pct + " % of supply" : "—", null,
         worstIr ? mprov("design_powergrid__drop__worst__net:" + worstIr.net, "Show the worst drop on " + worstIr.net + " in this run's metrics.json") : ""]];
   }
-  const stLabel = ({ pass: "Clean", partial: "Clean so far", fail: "Failing", warn: "Warnings", not_run: "Not checked", skipped: "Turned off" }[st] || "") + drcFlag;
+  const stLabel = ({ pass: "Clean", partial: "Clean so far", fail: "Failed", warn: "Warnings", not_run: "Not checked", skipped: "Turned off" }[st] || "") + drcFlag;
   // A card that jumps to its section; its title is the keyboard target, so
   // the source buttons inside can be real buttons too.
   return "<div class='vf-pillar is-" + esc(st) + "' data-vf-jump='" + p.jump + "'>" +
@@ -1076,13 +1087,14 @@ async function openKlayout(btnEl) {
 async function copySummary() {
   if (!_rep) return;
   const cp = verdictCopy();
-  const sym = { pass: "PASS", fail: "FAIL", warn: "WARN", info: "INFO", not_run: "----", skipped: "OFF " };
+  // The check words every page uses (verdict.js): Passed, Failed, Warning, …
+  const sym = (st) => (V.STATUS[st] || {}).label || st;
   const lines = ["Sign-off: " + cp.title + " (" + _rep.tag + (_rep.design ? ", " + _rep.design : "") + (_rep.pdk ? ", " + _rep.pdk : "") + ")", ""];
   for (const g of _rep.groups || []) {
     lines.push((V.GROUPS[g.id] || g).title);
     for (const id of g.checks) {
       const c = _rep.checks.find((x) => x.id === id);
-      if (c) lines.push("  [" + sym[c.status] + "] " + c.name + ": " + valueText(c));
+      if (c) lines.push("  [" + sym(c.status) + "] " + c.name + ": " + valueText(c));
     }
   }
   lines.push("", "Judged by LibreLane's checkers with this run's settings (LanEx).");

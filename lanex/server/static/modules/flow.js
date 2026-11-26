@@ -597,7 +597,8 @@ function failHtml(rx, stages) {
   const ev = ((c.evidence && c.evidence.length ? c.evidence : rx.errors) || []).slice(0, 3).join("\n") || (rx.at && rx.at.text) || "";
   const fixes = (c.fixes || []).length ? fixListHtml(c.fixes, { tag: F.tag, title }) : "";
   const layoutSrc = stageSource(rx.stage, true);
-  return "<div class='an-verdict fl-hero fl-fail is-fail'><div class='an-verdict-main" + (fixes ? " fl-split" : "") + "'>" +
+  // Stopped is amber on every page (verdict.js); a step that raised is red.
+  return "<div class='an-verdict fl-hero fl-fail is-" + (word === "Stopped" ? "warn" : "fail") + "'><div class='an-verdict-main" + (fixes ? " fl-split" : "") + "'>" +
     "<div class='fl-split-a'><div class='an-eyebrow'>" + word + " · " + esc(where) + "</div>" +
     "<h2 class='an-title'>" + esc(title) + "</h2>" + branchHtml() +
     "<p class='an-lede'>" + esc(plain) + "</p>" +

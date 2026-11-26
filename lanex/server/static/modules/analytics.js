@@ -28,6 +28,8 @@ import { fmtDur } from "./reportcard.js";
 import * as C from "./analytics-charts.js";
 import { localeNum, localeDateTime } from "./intlcache.js";
 import { loadingStart, skel } from "./loading.js";
+import { verdictOfRun } from "./verdict.js";
+import * as SM from "./studymodel.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -230,12 +232,15 @@ async function selectRun(tag) {
   body.classList.add("is-loading");
 
   const designDir = (row && row._design) || state.designDir;
-  const [view, stages, cells, trends, signoff] = await Promise.all([
+  // A failed run's cause is Flow's (run-explain's card): the same title on every page.
+  const failed = !!(row && row.verdict && row.verdict.state === "failed");
+  const [view, stages, cells, trends, signoff, rx] = await Promise.all([
     api.run(tag).catch(() => null),
     api.runStages(tag).catch(() => null),
     api.cellUsage(tag).then((r) => (r && r.cells) || []).catch(() => []),
     loadTrends(designDir),
     api.verify(tag).catch(() => null),
+    failed ? api.runExplain(tag).catch(() => null) : Promise.resolve(null),
   ]);
   if (my !== _token) return;
   _v = (view && view.metrics && view.metrics.values) || {};
@@ -250,7 +255,7 @@ async function selectRun(tag) {
     const last = [...steps].reverse().find((s) => s.status === "done" && s.metrics && Object.keys(s.metrics).length);
     if (last) { _v = last.metrics; _partial = { n: last.n, name: M.stepName(last), dir: last.dir }; }
   }
-  _ctx = { row: row || {}, view: view || {}, stages: stages || {}, steps, cells, trends, designDir, signoff };
+  _ctx = { row: row || {}, view: view || {}, stages: stages || {}, steps, cells, trends, designDir, signoff, cause: (rx && rx.card) || null };
   body.classList.remove("is-loading");
   loadDone();             // before drawing: the charts measure their boxes
   if (!view && !_partial) {
@@ -328,9 +333,10 @@ function renderOverview() {
   const stopped = stoppedStep();
   const completed = stages.completed !== undefined ? stages.completed : row.success;
 
-  let tone, title, lede;
+  let tone, title, lede, eyebrow = "", flowFix = false;
   if (!completed || stopped) {
-    tone = "fail";
+    // Stopped is amber everywhere (verdict.js); a step that raised is red.
+    tone = _ctx.row.verdict && _ctx.row.verdict.state === "failed" ? "fail" : "warn";
     title = stopped
       ? "Run stopped at " + esc(M.stepName(stopped)) + " <span class='an-title-sub'>step " + stopped.n + " · " + esc(stopped.stage || "") + "</span>"
       : "Run did not finish";
@@ -347,7 +353,7 @@ function renderOverview() {
     lede = "No errors. The amber checks are not fatal for LibreLane, but they are worth a look.";
   } else {
     tone = "pass";
-    title = "Clean run: all " + ran.length + " checks passed";
+    title = "Clean";
     lede = "Every check LibreLane ran on this layout came back at zero.";
   }
   // The headline is Verify's verdict whenever Verify answered: one verdict
@@ -356,9 +362,11 @@ function renderOverview() {
   const so = _ctx.signoff;
   const vTotal = so && so.verdict ? so.verdict.total : 0;
   if (so && so.verdict) {
-    const vc = V.verdictCopy(so);
+    const vc = V.verdictCopy(so, { cause: _ctx.cause });
     tone = vc.tone;
     title = esc(vc.title);
+    eyebrow = vc.eyebrow || "";
+    flowFix = !!vc.flowFix;
     const stopLede = (!completed || stopped) && _partial
       ? " The numbers below are the metrics LibreLane saved after step " + _partial.n + " (" + esc(_partial.name) + "), the last step that finished."
       : "";
@@ -406,10 +414,10 @@ function renderOverview() {
 
   el.innerHTML =
     "<div class='an-verdict is-" + tone + "'>" +
-      "<div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(_tag) + "</div>" +
+      "<div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(_tag) + (eyebrow ? " · " + esc(eyebrow) : "") + "</div>" +
       "<h2 class='an-title'>" + title + "</h2><p class='an-lede'>" + lede + "</p>" +
       "<div class='an-runmeta'>" + meta.join("<span class='sep'>·</span>") + "</div></div>" +
-      "<div class='an-verdict-act'>" + (stopped || !completed ? goBtn("runs", "Open the run log") : goBtn("verify", "Details in Verify")) +
+      "<div class='an-verdict-act'>" + (flowFix ? goBtn("pipeline", "The fix, in Flow") : stopped || !completed ? goBtn("runs", "Open the run log") : goBtn("verify", "Details in Verify")) +
       "<span class='an-disclaim'>LanEx shows what LibreLane's tools reported. It is not a sign-off.</span></div>" +
     "</div>" + strip + subsetNote +
     "<div class='an-kpis'>" + kpiTiming() + kpiArea() + kpiPower() + kpiRouting() + "</div>" +
@@ -1007,8 +1015,9 @@ async function drawHistoryBy(by, t, runs, xOf) {
     // A run that isn't clean but has the number (it finished and missed
     // timing, or has warnings) is plotted; one with no number is a cross.
     const key = r.success ? "clean" : y == null ? "failed" : unitK === "ns" && y < 0 ? "missed" : "warnings";
+    // The study words (studymodel.js / verdict.js); a cross says how that run ended.
     return { x: xOf(r, _histX), y: y == null ? null : y * k, key, tag: r.tag,
-      word: key === "clean" ? "Clean" : key === "failed" ? "Failed or stopped" : key === "missed" ? "Timing missed" : "Not clean" };
+      word: key === "failed" ? verdictOfRun(r).word : SM.POINT[key].word };
   }).filter((p) => p.x != null);
   const opt = SC.byValueOption({ xvar: _histX, xunit: _histX === "CLOCK_PERIOD" ? "ns" : "", clock: _histX === "CLOCK_PERIOD",
     metric: { key: _histM, label, unit, dir: M.directionOf(_meta, _histM) }, points: pts, line: false });

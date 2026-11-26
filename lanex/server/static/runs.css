@@ -386,7 +386,7 @@ button.rn-tagchip:hover { border-color: var(--accent); }
 .rn-side-verdict.is-pass { border-top-color: var(--pass); }
 .rn-side-verdict.is-fail { border-top-color: var(--fail); background: color-mix(in srgb, var(--fail) 7%, var(--bg-2)); }
 .rn-side-verdict.is-warn { border-top-color: var(--warn); }
-.rn-side-verdict.is-live { border-top-color: var(--met1); }
+.rn-side-verdict.is-live, .rn-side-verdict.is-run { border-top-color: var(--met1); }
 .rn-side-verdict .rn-v { font-size: 16px; font-weight: 600; color: var(--text-strong); align-items: baseline; }
 .rn-side-verdict .rn-v i { align-self: center; }
 .rn-side-verdict p { margin: 8px 0 0; font-size: 14px; line-height: 1.5; color: var(--text); text-wrap: pretty; }

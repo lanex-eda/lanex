@@ -38,6 +38,7 @@ import { toCsv, downloadCsv, downloadText } from "./csvutil.js";
 import { singleKeysOn } from "./prefs.js";
 import * as SM from "./studymodel.js";
 import * as SQ from "./studyqueue.js";
+import { runVerdict, failedWhere, checkVerdict } from "./verdict.js";
 
 // The last step of a stage in the Classic flow (matches setup.js's --to).
 function lastStepOfStage(stageId) {
@@ -366,22 +367,25 @@ function defOn(c) {
 
 // ------------------------------------------------------------------ verdict
 const RX = new Map();          // keyOf(run) -> runExplain result (failed runs only)
+// The words are verdict.js's (the run picker, Compare, studies and Verify say
+// the same): "Clean", "Failed at Clock tree (step 35)", "Stopped".
 function verdictOf(r) {
-  if (r.verdict && r.verdict.state) return r.verdict;
+  if (r.verdict && r.verdict.state) return r.verdict.state === "failed" ? { ...r.verdict, label: failedWhere(r.verdict) } : r.verdict;
+  const word = (st) => runVerdict(st).word;
   if (state.status && state.status.running && state.liveTag && r.tag === state.liveTag && normDir(r._design) === normDir(state.designDir)) {
-    return { state: "running", label: "running" };
+    return { state: "running", label: word("running") };
   }
-  if (r.success) return { state: "passed", label: "passed" };
+  if (r.success) return { state: "passed", label: word("passed") };
   const rx = RX.get(keyOf(r));
   if (rx) {
-    if (rx.kind === "stopped") return { state: "stopped", label: "stopped" };
-    if (rx.kind === "incomplete") return { state: "incomplete", label: "incomplete" };
-    if (rx.kind === "checks-failed") return { state: "failed", label: "checks failed", stage: "signoff" };
-    if (rx.stage) return { state: "failed", label: "failed at " + FS.stageLabel(rx.stage), stage: rx.stage };
+    if (rx.kind === "stopped") return { state: "stopped", label: word("stopped") };
+    if (rx.kind === "incomplete") return { state: "incomplete", label: word("incomplete") };
+    if (rx.kind === "checks-failed") return { state: "failed", label: "Checks failed", stage: "signoff" };
+    if (rx.stage) return { state: "failed", label: failedWhere({ stage: rx.stage, label: rx.step && rx.step.n ? "step " + rx.step.n : "" }), stage: rx.stage };
   }
-  return { state: "failed", label: "failed" };
+  return { state: "failed", label: word("failed") };
 }
-const VERDICT_TONE = { passed: "pass", warning: "warn", failed: "fail", stopped: "warn", incomplete: "warn", running: "live" };
+const VERDICT_TONE = Object.fromEntries(["passed", "warning", "failed", "stopped", "incomplete", "running"].map((s) => [s, runVerdict(s).cls]));
 const finished = (r) => /passed|warning/.test(verdictOf(r).state);
 
 // ------------------------------------------------------------------ origin
@@ -1247,13 +1251,15 @@ function cellHtml(c, r, base) {
     const k = checksOf(r);
     if (!k) return "<td class='" + cls + " is-num muted'></td>";
     const dd = r.verdict && r.verdict.drc_disagree;
+    // Check words (verdict.js): "Passed", "Failed: DRC 3", drawn with the via.
+    const word = (st, w) => { const cv = checkVerdict(st); return "<span class='rn-v is-" + cv.cls + "'><i aria-hidden='true'></i>" + esc(w || cv.word) + "</span>"; };
     if (!k.total && dd && dd.markers) {
-      return "<td class='" + cls + " is-num'><span class='rn-clean'>clean</span> <button class='rn-drcflag' data-act='drc' title='" +
+      return "<td class='" + cls + " is-num'>" + word("pass") + " <button class='rn-drcflag' data-act='drc' title='" +
         esc("The DRC report files list " + dd.markers + " markers but LibreLane's metric says 0. Open Verify's Design rules.") + "'>· report: " + dd.markers + "</button></td>";
     }
-    if (!k.total) return "<td class='" + cls + " is-num'><span class='rn-clean'>clean</span></td>";
-    const parts = [k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "ant " + k.ant : ""].filter(Boolean);
-    return "<td class='" + cls + " is-num'><span class='rn-bad'>" + esc(parts.join(" · ")) + "</span></td>";
+    if (!k.total) return "<td class='" + cls + " is-num'>" + word("pass") + "</td>";
+    const parts = [k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "Antenna " + k.ant : ""].filter(Boolean);
+    return "<td class='" + cls + " is-num'>" + word("fail", checkVerdict("fail").word + ": " + parts.join(" · ")) + "</td>";
   }
   // A run in which no flip-flop had a clock: its slack says nothing about the clock.
   if ((TIMING.has(c.id) || c.timing) && untimed(r)) return "<td class='" + cls + " is-num muted rn-untimed' title='" + esc(UNTIMED_TIP) + "'>not timed</td>";
@@ -1398,9 +1404,10 @@ function groupRowHtml(g, cols, gk, open, { tag, title, why = "", verdictCell = "
     if (c.id === "origin") return "<td class='" + cls + "'>" + esc(origin) + "</td>";
     if (c.id === "design") return "<td class='" + cls + "'>" + esc(designLabel(rs[0] && rs[0]._design)) + "</td>";
     if (c.id === "checks") {
-      if (failed.length) return "<td class='" + cls + " is-num'><span class='rn-bad'>" + esc(rsn.length ? "failed: " + rsn.join(", ") : failed.length + " failed") + "</span></td>";
+      const cw = (st, w) => "<span class='rn-v is-" + checkVerdict(st).cls + "'><i aria-hidden='true'></i>" + esc(w || checkVerdict(st).word) + "</span>";
+      if (failed.length) return "<td class='" + cls + " is-num'>" + cw("fail", rsn.length ? "Failed: " + rsn.join(", ") : failed.length + " failed") + "</td>";
       const ks = passed.map(checksOf).filter(Boolean);
-      return "<td class='" + cls + " is-num'>" + (ks.length && ks.every((k) => !k.total) ? "<span class='rn-clean'>clean</span>" : "") + "</td>";
+      return "<td class='" + cls + " is-num'>" + (ks.length && ks.every((k) => !k.total) ? cw("pass") : "") + "</td>";
     }
     if (c.id === "runtime") {
       const t = rs.map((r) => num(r.wall_time_s)).filter((v) => v != null);
@@ -2197,7 +2204,7 @@ function sideNumsHtml(r, base) {
   }).join("");
   const k = checksOf(r);
   const checks = !k ? "" : "<div class='rn-num'><dt title='Design-rule errors (worst of Magic, KLayout and the router), LVS errors and antenna violations'>DRC · LVS · Antenna</dt><dd class='" +
-    (k.total ? "is-neg" : "") + "'>" + (k.total ? esc([k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "ant " + k.ant : ""].filter(Boolean).join(" · ")) : "<span class='rn-clean'>clean</span>") + "</dd><span class='rn-d'></span></div>";
+    (k.total ? "is-neg" : "") + "'>" + (k.total ? esc(checkVerdict("fail").word + ": " + [k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "Antenna " + k.ant : ""].filter(Boolean).join(" · ")) : "<span class='rn-clean'>" + esc(checkVerdict("pass").word) + "</span>") + "</dd><span class='rn-d'></span></div>";
   if (!rows && !checks) return "<p class='rn-side-line muted'>This run ended before it had numbers to show.</p>";
   return "<h4 class='rn-side-h'>Numbers" + (base ? " <small>against the baseline <code>" + esc(base.tag) + "</code></small>" : isBaseline(r) ? " <small>this run is the baseline</small>" : "") + "</h4><dl class='rn-nums'>" + rows + checks + "</dl>";
 }

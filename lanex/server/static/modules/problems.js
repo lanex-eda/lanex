@@ -13,6 +13,7 @@ import { icon } from "./icons.js";
 import * as FS from "./flowstages.js";
 import * as ctx from "./context.js";
 import { state } from "./state.js";
+import { failedWhere, TIMING_MISSED } from "./verdict.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const _cache = new Map();          // tag -> { p: Promise, at }
@@ -198,8 +199,8 @@ export function countText(res) {
 export function badgeOf(v, res) {
   const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
   if (v && v.state) {
-    if (v.state === "failed") return { tone: "fail", text: v.blockers ? plural(v.blockers, "check") + " failed" : (v.label || "Failed") };
-    if (v.state === "warning") return { tone: "warn", text: v.timing_miss ? "Timing misses" : (v.label || "Warnings") };
+    if (v.state === "failed") return { tone: "fail", text: v.blockers ? plural(v.blockers, "check") + " failed" : failedWhere(v) };
+    if (v.state === "warning") return { tone: "warn", text: v.timing_miss ? TIMING_MISSED : (v.label || "Warnings") };
     if (v.state === "passed") return v.warnings ? { tone: "warn", text: plural(v.warnings, "warning") } : null;
     if (v.state === "incomplete") return { tone: "warn", text: v.label || "Not enough to call it" };
     return null;   // running, stopped: no problems to count

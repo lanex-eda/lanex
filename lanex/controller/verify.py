@@ -1439,6 +1439,15 @@ def _stage_of(step_id: Optional[str]) -> Optional[str]:
         return None
 
 
+def _stage_words(stage_id: str) -> str:
+    """``cts`` -> ``Clock tree`` (flowstages' label; the id when unknown)."""
+    try:
+        from . import flowstages
+        return flowstages.stage(stage_id)["label"]
+    except Exception:
+        return stage_id
+
+
 def _corner_words(corner: Optional[str]) -> str:
     """``max_ss_100C_1v60`` -> ``the slow corner (max_ss_100C_1v60)``."""
     if not corner:
@@ -1520,9 +1529,13 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
         # the PC closed mid-run): stopped, not a failure of the design.
         raised = bool(flow.get("error_log")) or outcome.get("result") == "error"
         n = stop["n"] if stop else None
-        out.update(state="failed" if raised else "stopped",
-                   label=(("Failed" if raised else "Stopped") + (f" at step {n}" if n else "")))
         st = _stage_of(stop.get("id") or stop.get("dir")) if stop else None
+        # A failure names its stage, the way every page says it (verdict.js
+        # failedWhere): "Failed at Clock tree (step 35)".
+        label = ("Failed" if raised else "Stopped") + (f" at step {n}" if n else "")
+        if raised and st:
+            label = f"Failed at {_stage_words(st)}" + (f" (step {n})" if n else "")
+        out.update(state="failed" if raised else "stopped", label=label)
         if st:
             out["stage"] = st
         return out

@@ -1451,14 +1451,14 @@ export function paintRunning(running) {
     if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); g.dataset.tip = "Stop the run"; }
     pill?.classList.remove("pill-pending");
     pill?.classList.add("pill-running");
-    if (pill) pill.textContent = "running";
+    if (pill) pill.textContent = "Running";
   } else {
     if (b) b.disabled = !state.designDir || !!state.designMissing;
     if (c) { c.disabled = true; c.hidden = true; }   // Stop shows only while a run is live
     if (g) { g.disabled = !state.designDir || !!state.designMissing; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); paintRunLabel(); }
     pill?.classList.add("pill-pending");
     pill?.classList.remove("pill-running");
-    if (pill) pill.textContent = "idle";
+    if (pill) pill.textContent = "Idle";
   }
 }
 
