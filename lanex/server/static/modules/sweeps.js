@@ -50,7 +50,7 @@ const GOALS = [
 const CONTEXT_KEYS = ["CLOCK_PERIOD", "FP_CORE_UTIL", "FP_SIZING", "DIE_AREA", "CORE_AREA", "PL_TARGET_DENSITY_PCT", "SYNTH_STRATEGY",
   "PNR_SDC_FILE", "SIGNOFF_SDC_FILE"];
 
-const S = { el: null, goal: "area", axes: [], mode: "grid", stop: false, vars: null, busy: false,
+const S = { el: null, goal: "area", axes: [], mode: "grid", stop: false, vars: null, busy: false, drop: new Set(),
   plan: null, planSeq: 0, planTimer: 0, ctx: {}, touched: false, note: "" };
 
 // ------------------------------------------------------------------ values
@@ -91,6 +91,22 @@ function valueError(v, kind, choices) {
   if (kind === "numbers" && !v.split(/[;\s]+/).filter(Boolean).every(isnum)) return "'" + v + "' should be numbers separated by spaces, like 0 0 200 200.";
   return "";
 }
+
+// The planned points, as the server expands them (dse.expand_sweep): every
+// combination in order, or paired value by value. [] when the axes are not
+// ready.
+export function planPoints(axes, mode) {
+  const vals = axes.map((a) => parseValues(a.values));
+  if (!axes.length || vals.some((v) => !v.length) || axes.some((a) => !a.var)) return [];
+  if (mode === "list" && axes.length > 1) {
+    if (!vals.every((v) => v.length === vals[0].length)) return [];
+    return vals[0].map((_, i) => Object.fromEntries(axes.map((a, j) => [a.var, vals[j][i]])));
+  }
+  let out = [{}];
+  axes.forEach((a, j) => { out = out.flatMap((p) => vals[j].map((v) => ({ ...p, [a.var]: v }))); });
+  return out;
+}
+const pointKeyOf = (pt) => JSON.stringify(Object.keys(pt).sort().map((k) => [k, String(pt[k])]));
 
 // How many runs the axes make: grid = product, paired = the common length.
 export function countRuns(axes, mode) {
@@ -156,6 +172,7 @@ export async function openSweepSheet(goal, { values, full = false } = {}) {
   S.ctx = {};
   S.plan = null;
   S.touched = !!values;
+  S.drop = new Set();
   pickGoal(GOALS.some((g) => g.id === goal) ? goal : S.goal);
   if (values && S.axes[0]) { S.axes[0].values = values; paintAxes(); }
   // From an exploration's table: run the picked recipes in full now.
@@ -227,6 +244,7 @@ function build() {
     "<div class='sw-mode' id='sw-mode' hidden><span class='sw-lbl'>Combine</span>" +
     "<label><input type='radio' name='sw-mode' value='grid' checked/> Every combination</label>" +
     "<label><input type='radio' name='sw-mode' value='list'/> Paired, value by value</label></div>" +
+    "<div class='sw-preview' id='sw-preview' aria-live='polite'></div>" +
     "<label class='sw-stop' id='sw-stop-row'><input type='checkbox' id='sw-stop'/> Stop at the first run that is clean (timing met and every check passed)</label>" +
     "<label class='sw-stop' id='sw-explore-row' hidden><input type='checkbox' id='sw-explore' checked/> <span>Explore all 9 recipes first, in seconds: LibreLane's SynthesisExploration synthesises the design with each one and times it before layout. " +
       "Then run the best one or two in full from its table in Runs. It stops before layout, so the config's layout settings are not read. <span class='muted'>Untick to run the recipes above in full now.</span></span></label>" +
@@ -249,6 +267,16 @@ function build() {
   el.querySelectorAll("input[name='sw-mode']").forEach((r) => r.addEventListener("change", () => { S.mode = r.value; paintEst(); requestPlan(); }));
   el.querySelector("#sw-stop").addEventListener("change", (e) => { S.stop = e.target.checked; });
   el.querySelector("#sw-explore").addEventListener("change", () => paintEst());
+  // The preview table: untick a point and it isn't run.
+  el.querySelector("#sw-preview").addEventListener("change", (e) => {
+    const cb = e.target.closest("input[data-pt]");
+    if (!cb) return;
+    if (cb.checked) S.drop.delete(cb.dataset.pt); else S.drop.add(cb.dataset.pt);
+    paintEst();
+  });
+  el.querySelector("#sw-preview").addEventListener("click", (e) => {
+    if (e.target.closest("[data-pt-all]")) { S.drop.clear(); paintEst(); }
+  });
   el.querySelector("#sw-start").addEventListener("click", start);
 }
 
@@ -460,8 +488,12 @@ function paintEst() {
     const info = S.el.querySelector("[data-info='" + i + "']");
     if (info) info.innerHTML = infoHtml(a.var);
   });
-  const n = countRuns(S.axes, S.mode);
-  const err = problems();
+  const n0 = countRuns(S.axes, S.mode);
+  const planned = n0 > 0 && n0 <= MAX_RUNS ? planPoints(S.axes, S.axes.length > 1 ? S.mode : "grid") : [];
+  for (const k of [...S.drop]) if (!planned.some((pt) => pointKeyOf(pt) === k)) S.drop.delete(k);
+  const n = planned.length ? planned.length - S.drop.size : n0;
+  paintPreview(planned);
+  const err = problems() || (planned.length && !n ? "Every planned point is unticked: tick at least one." : "");
   const secs = typicalRunSecs();
   const est = S.el.querySelector("#sw-est");
   const warns = (S.plan && S.plan._for === planKey() && S.plan.warnings) || [];
@@ -521,6 +553,27 @@ async function startExploration() {
   }
 }
 
+// The planned points, one row each, in the order they will be handed to the
+// queue: untick any that isn't worth a run.
+function paintPreview(planned) {
+  const host = S.el.querySelector("#sw-preview");
+  if (!host) return;
+  if (exploring() || planned.length < 2) { host.innerHTML = ""; return; }
+  const axes = Object.keys(planned[0]);
+  const ticked = planned.length - S.drop.size;
+  host.innerHTML = "<div class='sw-lbl'>Planned points <span class='muted'>" + ticked + " of " + planned.length + " will run. Untick any that isn't worth a run.</span></div>" +
+    "<div class='sw-prev-wrap'><table class='sw-res sw-prev'><thead><tr><th scope='col'><span class='sr-only'>Run it</span></th>" +
+    axes.map((a) => "<th scope='col'>" + esc(a) + "</th>").join("") + "<th scope='col'></th></tr></thead><tbody>" +
+    planned.map((pt) => {
+      const k = pointKeyOf(pt), on = !S.drop.has(k);
+      return "<tr class='" + (on ? "" : "is-off") + "'><td><input type='checkbox' data-pt='" + esc(k) + "'" + (on ? " checked" : "") +
+        " aria-label='" + esc("Run " + axes.map((a) => a + " " + pt[a]).join(", ")) + "'/></td>" +
+        axes.map((a) => "<td class='sw-res-v'>" + esc(pt[a]) + (a === "CLOCK_PERIOD" && Number(pt[a]) > 0 ? " <small>" + esc(mhz(Number(pt[a]))) + "</small>" : "") + "</td>").join("") +
+        "<td class='muted'>" + (on ? "" : "unticked: won't run") + "</td></tr>";
+    }).join("") + "</tbody></table></div>" +
+    (S.drop.size ? "<button class='linklike' data-pt-all>Tick them all again</button>" : "");
+}
+
 // Setup's one-off settings go with every point: the sheet says so, by name.
 function paintRiders() {
   const host = S.el.querySelector("#sw-riders");
@@ -553,6 +606,8 @@ async function start() {
       axes, mode: S.axes.length > 1 ? S.mode : "grid", run_mode: state.runMode, flow_name: base.flow || null,
       base_overrides: base.overrides, sources: base.sources, extras: base.extras,
       stop_when_good: S.goal !== "clock" && S.stop, goal: S.goal,
+      // Points unticked in the preview (their values); the server leaves them out.
+      drop: planPoints(S.axes, S.axes.length > 1 ? S.mode : "grid").filter((pt) => S.drop.has(pointKeyOf(pt))),
     });
     const d = r && (r.data || r);
     toast.show("Sweep started: " + d.count + " run" + (d.count === 1 ? "" : "s") + ", " + (d.run_tags || []).join(", ") + ".", "success", 8000);
@@ -1265,4 +1320,4 @@ export async function checkRun(p) {
   document.addEventListener("g:queue", onQ);
 }
 
-export const _test = { parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, typedValue, stillWins, stageLabel: FS.stageLabel };
+export const _test = { planPoints, parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, typedValue, stillWins, stageLabel: FS.stageLabel };

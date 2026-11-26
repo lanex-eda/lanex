@@ -257,6 +257,14 @@ body.theme-light .rn-viewing { color: var(--accent); border-color: color-mix(in 
 .sw-chart { width: 100%; min-height: 220px; }
 .sw-chart-note { margin: 4px 0 0; font-size: 12.5px; }
 .sw-chart-note:empty { display: none; }
+/* The sheet's planned points: untick one and it isn't run. */
+.sw-preview:empty { display: none; }
+.sw-prev-wrap { max-height: min(calc(34vh / var(--ll-zoom, 1)), 300px); overflow: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.sw-prev th, .sw-prev td { height: 30px; padding: 0 10px; }
+.sw-prev thead th { position: sticky; top: 0; background: var(--bg-2); z-index: 1; }
+.sw-prev input { accent-color: var(--accent); }
+.sw-prev tr.is-off td.sw-res-v { color: var(--text-muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-muted) 60%, transparent); }
+.sw-preview .linklike { margin-top: 6px; font-size: 13px; }
 /* An exploration's recipes in the run panel (the best rows carry the spine). */
 .rn-se .sw-res th, .rn-se .sw-res td { padding: 6px 10px; height: auto; white-space: normal; }
 .rn-se .sw-res tr.is-best > td:first-child { box-shadow: inset 2px 0 0 var(--met1); }

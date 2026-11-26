@@ -4867,6 +4867,11 @@ def h_dse_start(handler: Any) -> None:
         except ValueError as ex:
             _respond(handler, str(ex), 400)
             return
+        # The sheet's preview table: points unticked there are not run.
+        overrides_list = dse.drop_points(overrides_list, body.get("drop") or [])
+        if not overrides_list:
+            _respond(handler, "Every planned point is unticked: tick at least one to run.", 400)
+            return
     base_overrides = dict(body.get("base_overrides") or {})
     # The whole sweep is checked before the first point: a fixed die that
     # FP_CORE_UTIL cannot change, a DIE_AREA that would cut into CORE_AREA.

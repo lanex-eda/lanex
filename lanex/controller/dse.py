@@ -462,6 +462,18 @@ def value_problems(axes: Sequence[Dict[str, Any]], limit: int = 8) -> List[Dict[
     return out
 
 
+def drop_points(points: List[Dict[str, Any]], drop: Any) -> List[Dict[str, Any]]:
+    """The planned points less the ones unticked in the sheet's preview
+    (each given as its values, ``{VAR: value}``; compared as text)."""
+    if not isinstance(drop, list) or not drop:
+        return points
+    gone = []
+    for d in drop[:4096]:
+        if isinstance(d, dict):
+            gone.append({str(k): str(v) for k, v in d.items()})
+    return [p for p in points if {str(k): str(v) for k, v in p.items()} not in gone]
+
+
 def expand_sweep(spec: Dict[str, Any]) -> List[Dict[str, str]]:
     """Expand a sweep spec into the list of per-run override dicts.
 

@@ -907,6 +907,15 @@ check("sweeps: a range typo is an error, never one text value; values are type-c
   assert.equal(SW.countRuns([{ values: "35:65:x" }], "grid"), 0);
 });
 
+check("sweeps: the preview lists the points the server will run, in its order", () => {
+  const grid = SW.planPoints([{ var: "A", values: "1, 2" }, { var: "B", values: "x, y" }], "grid");
+  assert.deepEqual(grid, [{ A: "1", B: "x" }, { A: "1", B: "y" }, { A: "2", B: "x" }, { A: "2", B: "y" }], "itertools.product order");
+  assert.deepEqual(SW.planPoints([{ var: "A", values: "1, 2" }, { var: "B", values: "x, y" }], "list"), [{ A: "1", B: "x" }, { A: "2", B: "y" }]);
+  assert.deepEqual(SW.planPoints([{ var: "A", values: "1, 2" }, { var: "B", values: "x" }], "list"), [], "paired needs equal lengths");
+  assert.deepEqual(SW.planPoints([{ var: "", values: "1" }], "grid"), []);
+  assert.equal(SW.planPoints([{ var: "CLOCK_PERIOD", values: "10:8:1" }], "grid").length, 3);
+});
+
 check("sweeps: the fastest-clock preset starts at this design's clock and goes down", () => {
   assert.deepEqual(SW.clockValues(10), [10, 9, 8, 7]);
   // A past run's slack says where the limit is: the steps reach it.

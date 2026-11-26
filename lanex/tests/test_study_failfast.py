@@ -87,6 +87,14 @@ def test_different_failures_do_not_stop_it():
     assert job.end_reason == "done", "the same code at different steps is not the same failure"
 
 
+def test_points_unticked_in_the_preview_are_not_run():
+    pts = dse.expand_sweep({"axes": [{"var": "CLOCK_PERIOD", "values": ["1", "2"]}, {"var": "FP_CORE_UTIL", "values": ["40", "50"]}],
+                            "mode": "grid"})
+    left = dse.drop_points(pts, [{"CLOCK_PERIOD": "1", "FP_CORE_UTIL": "50"}, {"CLOCK_PERIOD": 2, "FP_CORE_UTIL": "40"}, "junk"])
+    assert left == [{"CLOCK_PERIOD": "1", "FP_CORE_UTIL": "40"}, {"CLOCK_PERIOD": "2", "FP_CORE_UTIL": "50"}]
+    assert dse.drop_points(pts, None) == pts
+
+
 def test_failure_fingerprints():
     fp = dse.failure_fingerprint({"ok": False, "kind": "halted", "step": "OpenROAD.DetailedPlacement",
                                   "reason": "Detailed placement failed (DPL-0036)"})
