@@ -456,6 +456,36 @@ def _tool_command(tool: str, *, gds: Optional[Path], pdk: Optional[str],
     return [tool]
 
 
+_USER_FLAGS_CACHE: Dict[str, List[str]] = {}
+
+
+def user_flags(engine: str) -> List[str]:
+    """Run a container as the person, not as root, where it would otherwise be root.
+
+    LibreLane's own rule (``librelane/container.py permission_args``): rootful
+    Docker on Linux (WSL included) gets ``--user <uid>:<gid>``; rootless Docker
+    and Podman already map root in the container to the person. Without it a
+    viewer or a simulation leaves root-owned files in the project (KLayout's
+    settings, a waveform, a compiled testbench) that the person then cannot
+    edit or delete. ``HOME=/tmp`` gives the tools a writable home inside the
+    container, since that uid has none."""
+    if engine in _USER_FLAGS_CACHE:
+        return list(_USER_FLAGS_CACHE[engine])
+    flags: List[str] = []
+    if sys.platform.startswith("linux") and "docker" in Path(engine).name and hasattr(os, "getuid"):
+        rootless = False
+        try:
+            r = subprocess.run([engine, "info", "--format", "{{.SecurityOptions}}"],
+                               capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+            rootless = "rootless" in (r.stdout or "")
+        except Exception:
+            pass
+        if not rootless and os.getuid() != 0:
+            flags = ["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"]
+    _USER_FLAGS_CACHE[engine] = flags
+    return list(flags)
+
+
 def build_argv(
     engine: str,
     image: str,
@@ -473,6 +503,7 @@ def build_argv(
 ) -> List[str]:
     """Assemble the full ``<engine> run --rm … <image> <tool> …`` command."""
     argv: List[str] = [engine, "run", "--rm", "-i"]
+    argv += user_flags(engine)
     argv += _x11_flags(engine)
     # Mount the design dir (covers the run + its GDS/odb) at its own path.
     argv += _mount(design_dir)

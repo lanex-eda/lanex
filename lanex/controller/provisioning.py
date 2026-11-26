@@ -192,9 +192,10 @@ def load_plan(
     }
 
 
-def _command_probe(argv: List[str], timeout: float = 30.0) -> Dict[str, Any]:
+def _command_probe(argv: List[str], timeout: float = 30.0,
+                   env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
         return {
             "ready": proc.returncode == 0,
             "rc": proc.returncode,
@@ -204,13 +205,31 @@ def _command_probe(argv: List[str], timeout: float = 30.0) -> Dict[str, Any]:
         return {"ready": False, "detail": str(exc)}
 
 
+def _headless_env() -> Dict[str, str]:
+    """This environment without a display. A GTK program (GTKWave) asked for
+    ``--version`` still starts GTK first; with WSLg's display set but the
+    user's session not up yet (a cold WSL start, Setup's verify step) that
+    waits well past the probe's 30 s, so a VM install failed on a GTKWave that
+    was installed. Without a display it answers at once."""
+    env = dict(os.environ)
+    for k in ("DISPLAY", "WAYLAND_DISPLAY"):
+        env.pop(k, None)
+    return env
+
+
+# Probed without a display: they're GUI programs and the question is only
+# "is it installed and does it run".
+_HEADLESS_PROBES = {"gtkwave"}
+
+
 def _binary_probe(name: str, args: Iterable[str] = ("--version",)) -> Dict[str, Any]:
     from . import platform_env
 
     path = platform_env.usable_which(name)
     if not path:
         return {"ready": False, "missing": [name]}
-    result = _command_probe([path, *args])
+    env = _headless_env() if name in _HEADLESS_PROBES and sys.platform != "darwin" else None
+    result = _command_probe([path, *args], env=env)
     result["path"] = path
     return result
 

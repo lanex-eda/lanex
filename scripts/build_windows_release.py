@@ -55,6 +55,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build verified Windows release artifacts")
     parser.add_argument("--output-dir", default=str(REPO_ROOT / "installer-workspace" / "outputs"), help="Output directory for compiled artifacts")
     parser.add_argument("--source-sha", default="", help="Explicit source commit SHA")
+    parser.add_argument("--release-tag", default=os.environ.get("LANEX_RELEASE_TAG", ""),
+                        help="Build a release: stamp this tag (vX.Y.Z) into the Unix installers "
+                             "and refuse the build if any installer it packs still says main")
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -85,10 +88,16 @@ def main() -> int:
               "does not describe this build exactly:\n" + dirty)
     print(f"[*] Source ref: {source_ref}")
     # The Unix one-liner installs the ref stamped in scripts/install.sh. A
-    # tagged release build whose stamp is not its own tag would send Linux and
-    # macOS users to main (or an older release): refuse it here.
-    stamp = subprocess.run([sys.executable, "-I", str(REPO_ROOT / "scripts" / "stamp_release_ref.py"),
-                            "--check"], cwd=REPO_ROOT)
+    # release build stamps its tag there (commit that change before tagging),
+    # and a tagged release build whose stamp is not its own tag would send
+    # Linux and macOS users to main (or an older release): refuse it here.
+    stamper = str(REPO_ROOT / "scripts" / "stamp_release_ref.py")
+    if args.release_tag:
+        run_cmd([sys.executable, "-I", stamper, args.release_tag])
+        run_cmd([sys.executable, "-I", stamper, "--check-artifact", str(REPO_ROOT / "scripts"),
+                 "--tag", args.release_tag])
+        print(f"[*] Stamped {args.release_tag} into the Unix installers; commit it before tagging.")
+    stamp = subprocess.run([sys.executable, "-I", stamper, "--check"], cwd=REPO_ROOT)
     if stamp.returncode != 0:
         raise SystemExit("The installers' LANEX_RELEASE_REF does not match this release; see above.")
 

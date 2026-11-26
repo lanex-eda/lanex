@@ -130,6 +130,8 @@ async function aboutHtml() {
     "<div class='about-warn'><b>Not a sign-off tool.</b> Every number LanEx shows comes from the EDA tools. " +
     "Before you fabricate, check your design against your foundry's official sign-off decks.</div>" +
     "<div class='st-acts'><button class='btn btn-sm' data-st='notices'>License and notices</button>" +
+    // Updates, what's new, disk, network and memory live on Tools.
+    "<button class='btn btn-sm btn-ghost' data-st='system'>Updates, disk and network</button>" +
     "<a class='btn btn-sm btn-ghost' href='https://librelane.org/' target='_blank' rel='noopener'>LibreLane docs</a>" +
     "<a class='btn btn-sm btn-ghost' href='https://github.com/lanex-eda/lanex' target='_blank' rel='noopener'>LanEx on GitHub</a></div>";
 }
@@ -212,6 +214,7 @@ function wireOnce(host) {
     if (act === "first-chip" || act === "tour") document.dispatchEvent(new CustomEvent("g:guide", { detail: { action: act } }));
     else if (act === "reset-start") document.dispatchEvent(new CustomEvent("g:guide", { detail: { action: "reset" } }));
     else if (act === "notices") (await import("./shell.js")).openHelp("about");
+    else if (act === "system") (await import("./nav.js")).go("tools", { item: "tl-sys-lanex" });
     else if (act === "update-now") {
       a.disabled = true;
       const line = document.getElementById("st-update-line");
