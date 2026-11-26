@@ -396,17 +396,32 @@ class LintJob:
         except Exception:  # pragma: no cover - the Verilog check still stands
             pass
         summary = summarize(diags)
-        self.last_result = {"diagnostics": diags, "summary": summary}
-        # rc==0 means verilator ran and found no *errors* (warnings don't fail
-        # --lint-only). A non-zero rc with parsed errors is a real lint failure;
-        # rc 127 means verilator wasn't found.
+        verdict = lint_verdict(rc, summary, out_lines, timed_out=self._timed_out.is_set())
+        self.last_result = {"diagnostics": diags, "summary": summary, **verdict}
         events.publish("lint_done", {
-            "ok": (rc == 0 or summary["errors"] == 0) and not self._timed_out.is_set(),
+            **verdict,
             "returncode": rc,
             "diagnostics": diags,
             "summary": summary,
             "timed_out": self._timed_out.is_set(),
         })
+
+
+def lint_verdict(rc: int, summary: Dict[str, Any], out_lines: Sequence[str], *,
+                 timed_out: bool = False) -> Dict[str, Any]:
+    """``{ok, message?}`` for one lint. Verilator runs with ``-Wno-fatal``, so
+    exit 0 means it ran and found no error. A non-zero exit is never a pass:
+    with parsed errors it is a lint failure; with none (127: Verilator wasn't
+    found; a crash; an error line LanEx can't parse) nothing was checked, so
+    the raw output is the message."""
+    ok = rc == 0 and not summary.get("errors") and not timed_out
+    out: Dict[str, Any] = {"ok": ok}
+    if not ok and not summary.get("errors") and not timed_out:
+        tail = [ln for ln in out_lines if ln.strip()][-12:]
+        what = ("Verilator wasn't found" if rc == 127
+                else f"Verilator stopped with exit code {rc} and no error LanEx could read")
+        out["message"] = what + ((": " + "\n".join(tail)) if tail else ".")
+    return out
 
 
 # Process-wide singleton.
