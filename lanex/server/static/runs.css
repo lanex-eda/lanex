@@ -215,6 +215,38 @@ body.theme-light .rn-viewing { color: var(--accent); border-color: color-mix(in 
 .rn-sw-sum { container-type: inline-size; position: sticky; left: 0; max-width: calc(100vw / var(--ll-zoom, 1) - 160px); padding: var(--s-4) var(--s-4) var(--s-4) 44px; }
 .has-side .rn-sw-sum { max-width: calc(100vw / var(--ll-zoom, 1) - 620px); }
 
+/* ---------- study points: a strip of marks, one per point (studymodel.js) ---------- */
+/* The mark says the state, so colour is never the only signal: filled = clean,
+   ! = timing missed, cross = failed, pulse = running, hollow = queued,
+   dash = skipped, half = stopped. */
+.sv-strip { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
+.sv-strip.is-bar { width: 120px; height: 8px; gap: 1px; border-radius: 2px; overflow: hidden; }
+.sv-seg { height: 100%; background: var(--text-muted); }
+.sv-seg.is-pass { background: var(--pass); } .sv-seg.is-warn { background: var(--warn); } .sv-seg.is-fail { background: var(--fail); }
+.sv-seg.is-live { background: var(--met1); } .sv-seg.is-muted { background: var(--border-strong); }
+.sv-pt { position: relative; width: 9px; height: 9px; border-radius: 2px; box-sizing: border-box; flex: none; background: var(--text-muted); }
+.sv-pt.is-pass { background: var(--pass); }
+.sv-pt.is-warn { background: var(--warn); }
+.sv-pt.is-fail { background: transparent; }
+.sv-pt.is-live { background: var(--met1); animation: rn-pulse 1.4s ease-in-out infinite; }
+.sv-pt.is-muted { background: transparent; border: 1px solid var(--text-muted); }
+.sv-pt.m-cross::before, .sv-pt.m-cross::after { content: ""; position: absolute; left: 4px; top: -1px; width: 1.6px; height: 11px; background: var(--fail); transform: rotate(45deg); }
+.sv-pt.m-cross::after { transform: rotate(-45deg); }
+.sv-pt.m-bang::after { content: ""; position: absolute; left: 3.5px; top: 1.5px; width: 2px; height: 4px; background: var(--surface); box-shadow: 0 5px 0 0 var(--surface); }
+.sv-pt.m-dash { border: 0; background: none; }
+.sv-pt.m-dash::after { content: ""; position: absolute; left: 1px; right: 1px; top: 4px; height: 1.5px; background: var(--text-muted); }
+.sv-pt.m-half { background: linear-gradient(90deg, var(--warn) 50%, transparent 50%); border: 1px solid var(--warn); }
+@media (prefers-reduced-motion: reduce) { .sv-pt.is-live { animation: none; } }
+.rn-v .sv-strip { margin-right: 4px; }
+.sw-pts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 var(--s-3); font-size: 13.5px; color: var(--text); }
+.sw-pts .sv-pt { width: 11px; height: 11px; }
+.sw-pts-t { color: var(--text-muted); }
+.sw-chart-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sw-plot.sw-echart { max-width: none; padding: 10px 12px 8px; }
+.sw-chart { width: 100%; min-height: 220px; }
+.sw-chart-note { margin: 4px 0 0; font-size: 12.5px; }
+.sw-chart-note:empty { display: none; }
+
 /* ---------- views, filters, tags, archive, baseline row (lane 2) ---------- */
 /* View: the saved view this table shows, a dot when it has changed since. */
 .rn-view-btn {

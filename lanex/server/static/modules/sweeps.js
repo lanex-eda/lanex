@@ -23,6 +23,8 @@ import * as FS from "./flowstages.js";
 import * as F from "./metricfmt.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
 import { localeNum } from "./intlcache.js";
+import * as SM from "./studymodel.js";
+import * as SQ from "./studyqueue.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const MAX_RUNS = 64;               // controller/dse.py MAX_COMBOS
@@ -511,21 +513,27 @@ function cellText(id, v, scale, unit = true) {
 
 // The points of a sweep in the order they were planned: one entry per run,
 // plus each planned point that has no run (stopped, or LanEx closed first).
-export function sweepPoints(sw, runs, verdictOf) {
+export function sweepPoints(sw, runs, verdictOf, jobs = null) {
   const tags = sw.tags || [];
   const reruns = sw.reruns || {};
   const byTag = new Map(runs.map((r) => [r.tag, r]));
   const idx = (t) => { const i = tags.indexOf(t); return i < 0 ? 1e9 : i; };
+  const J = jobs || new Map();
+  // The point's state in the study's words (studymodel.js): Queued, Running,
+  // Clean, Warnings, Timing missed, Failed, Stopped, Skipped, Incomplete.
+  const keyOf = (r, job) => SM.pointKey({ run: r ? { ...r, verdict: verdictOf(r) } : null, job, active: !!sw.active });
   const pts = runs.slice().sort((a, b) => idx(a.tag) - idx(b.tag) || String(a.started_at).localeCompare(String(b.started_at)))
     .map((r) => {
       const st = verdictOf(r).state;
-      return { r, tag: r.tag, v: valuesOf(r, sw), state: st, ok: st === "passed", failed: st === "failed",
-        finished: /passed|warning/.test(st), superseded: reruns[r.tag] && byTag.has(reruns[r.tag]) ? reruns[r.tag] : "" };
+      const key = keyOf(r, J.get(r.tag) || null);
+      return { r, tag: r.tag, v: valuesOf(r, sw), state: st, key, ok: st === "passed", failed: key === "failed",
+        finished: SM.hasNumbers(key), superseded: reruns[r.tag] && byTag.has(reruns[r.tag]) ? reruns[r.tag] : "" };
     });
   tags.forEach((t, i) => {
     if (byTag.has(t)) return;
     if (reruns[t] && byTag.has(reruns[t])) return;
-    pts.push({ r: null, tag: t, v: (sw.points || [])[i] || null, state: "notrun", ok: false, failed: false, finished: false, missing: true });
+    const key = keyOf(null, J.get(t) || null);
+    pts.push({ r: null, tag: t, v: (sw.points || [])[i] || null, state: "notrun", key, ok: false, failed: false, finished: false, missing: true });
   });
   return pts;
 }
@@ -565,7 +573,14 @@ export function endReason(sw, pts) {
 // configuration"), what failed and why, why it ended short, the results by
 // value, the trend charts and its actions.
 export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, selectRuns } = {}) {
-  const pts = sweepPoints(sw, runs, verdictOf);
+  const pts = sweepPoints(sw, runs, verdictOf, SQ.jobsOf(sw.id));
+  // A point's words, once: the strip, the table, the charts and the CSV.
+  for (const p of pts) {
+    const w = SM.pointWords(p.key, { run: p.r ? { ...p.r, verdict: verdictOf(p.r) } : null, job: SQ.jobsOf(sw.id).get(p.tag) || null,
+      stageLabel: FS.stageLabel, code: p.r && p.key === "failed" && failCode ? failCode(p.r) : "",
+      reason: p.missing && !sw.active ? endReason(sw, pts) : "" });
+    Object.assign(p, { word: w.word, detail: w.detail, label: p.v ? Object.values(p.v).join(" × ") : p.tag });
+  }
   const live = pts.filter((p) => p.r && !p.superseded);
   const passed = live.filter((p) => p.ok);
   const axes = sw.axes || [];
@@ -610,15 +625,32 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
   const left = pts.filter((p) => p.missing).map((p) => p.tag);
   const busy = !!(state.status && state.status.running) || !!sw.active;
   const busyT = busy ? " disabled title='A run or sweep is going'" : "";
-  const toCompare = live.map((p) => p.r);
-  const plots = plotsHtml(pts.filter((p) => p.r && !p.superseded), sw, scale);
-  el.innerHTML = "<div class='sw-sum" + (plots ? "" : " no-plot") + "'><div class='sw-sum-l'>" +
+  // Compare takes up to twelve: past that, the reference (the best by the
+  // sweep's goal) and the next eleven by the same goal, and the button says so.
+  const toCompare = compareSet(live, one, areaId);
+  const finishedN = live.length;
+  const plots = chartsHtml(sw, pts);
+  // The points at a glance: one mark per point in value order, how many ran.
+  const ordered = byValue(pts.filter((p) => !p.superseded), sw.axes || []);
+  const counts = {};
+  for (const p of ordered) counts[p.key] = (counts[p.key] || 0) + 1;
+  const progress = ordered.filter((p) => !["queued", "running", "skipped"].includes(p.key)).length + " of " + ordered.length +
+    Object.entries(counts).filter(([k]) => k !== "clean").map(([k, n]) => " · " + n + " " + SM.POINT[k].word.toLowerCase()).join("");
+  const same = sw.active ? SM.sameFailure(live.filter((p) => !p.missing).map((p) => ({ ...p, fp: p.key === "failed" ? SM.fingerprint((failCode && failCode(p.r)) || "", (verdictOf(p.r) || {}).stage || "") : "" }))) : null;
+  const queued = SQ.queueAvailable() && ordered.some((p) => p.key === "queued" || p.key === "running");
+  el.innerHTML = "<div class='sw-pts'>" + SM.stripHtml(ordered, esc) + "<span class='sw-pts-t'>" + esc(progress) + "</span>" +
+    (queued ? "<span class='rn-spacer'></span><button class='btn btn-ghost btn-sm' data-qstop='after' title='The points waiting are skipped; the ones running finish'>" + icon("stop", { size: 13 }) + " Stop after the running points</button>" +
+      "<button class='btn btn-ghost btn-sm' data-qstop='now'>" + icon("stop", { size: 13 }) + " Stop now</button>" : "") + "</div>" +
+    (same ? "<p class='sw-why'>" + icon("alert", { size: 14 }) + " Two of the first points failed the same way (" + esc(same.fingerprint.split("|").filter(Boolean).join(", ")) +
+      "): the rest will likely fail too. Stop after the running points and fix the cause first.</p>" : "") +
+    "<div class='sw-sum" + (plots ? "" : " no-plot") + "'><div class='sw-sum-l'>" +
     (why ? "<p class='sw-why'>" + icon("alert", { size: 14 }) + " " + esc(why) + "</p>" : "") +
     "<div class='sw-bests'>" + head + areaTile + failTile + "</div>" +
     (passed.length || one === "CLOCK_PERIOD" ? "" : "<p class='muted sw-none'>No point finished clean. Open a failed one for why, or fix the design before sweeping again.</p>") +
     "<div class='sw-sum-act'>" +
-      "<button class='btn btn-ghost btn-sm' data-cmp" + (toCompare.length < 2 ? " disabled title='A sweep with one run has nothing to compare'" : "") + ">" + icon("diff", { size: 13 }) + " Compare " +
-        (toCompare.length > 2 ? (toCompare.length > COMPARE_MAX ? COMPARE_MAX + " of " + toCompare.length : "all " + toCompare.length) : "these runs") + "</button>" +
+      "<button class='btn btn-ghost btn-sm' data-cmp" + (toCompare.length < 2 ? " disabled title='A sweep with one run has nothing to compare'" : "") +
+        (finishedN > COMPARE_MAX ? " title='Compare takes up to " + COMPARE_MAX + " runs: the best by this sweep&#39;s goal, the best first'" : "") + ">" + icon("diff", { size: 13 }) + " " +
+        (finishedN > COMPARE_MAX ? "Compare the " + COMPARE_MAX + " best of " + finishedN : finishedN > 2 ? "Compare all " + finishedN : "Compare these runs") + "</button>" +
       (selectRuns ? "<button class='btn btn-ghost btn-sm' data-sel-sweep>" + icon("check", { size: 13 }) + " Select its runs</button>" : "") +
       (left.length ? "<button class='btn btn-ghost btn-sm' data-redo='left'" + busyT + ">" + icon("play", { size: 13 }) + " Run the " + left.length + " left</button>" : "") +
       (redo.length ? "<button class='btn btn-ghost btn-sm' data-redo='failed'" + busyT + ">" + icon("play", { size: 13 }) + " " +
@@ -651,6 +683,123 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
     _chartPick.set(sw.id, b.dataset.chart);
     paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, selectRuns });
   }));
+  el.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    _viewPick.set(sw.id, b.dataset.view);
+    paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, selectRuns });
+  }));
+  el.querySelectorAll("[data-qstop]").forEach((b) => b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const now = b.dataset.qstop === "now";
+    if (now && !(await confirmDialog({ title: "Stop the sweep now?", danger: true, confirmText: "Stop now",
+      body: "The points running now stop where they are, and the waiting ones are skipped. Finished points are kept. Resume runs the skipped ones later." }))) return;
+    try {
+      if (now) await SQ.stopNow(sw.id); else await SQ.stopAfterRunning(sw.id);
+      toast.show(now ? "Stopped. Finished points are kept." : "The waiting points are skipped; the running ones finish.", "success", 4000);
+    } catch (ex) { toast.show("Couldn't stop the sweep: " + (ex.message || ex), "error"); }
+  }));
+  drawCharts(el, sw, pts, scale);
+}
+
+// Which runs "Compare" sends: all of them up to twelve; past that the best by
+// the sweep's goal (the fastest clock that met timing first for a clock
+// sweep, the smallest area for a sizing one, else the most slack).
+function compareSet(live, one, areaId) {
+  const runs = live.filter((p) => p.r);
+  if (runs.length <= COMPARE_MAX) return runs.map((p) => p.r);
+  const ws = (p) => num(p.r, "timing__setup__ws");
+  const score = one === "CLOCK_PERIOD"
+    ? (p) => (SM.metTiming(p.key, p.r) ? 1e6 - Number(p.v && p.v.CLOCK_PERIOD) : p.finished ? (ws(p) ?? -1e9) : -1e12)
+    : DIE_SIZERS.includes(one)
+      ? (p) => (p.finished ? -(metricOf(p, areaId) ?? 1e12) : -1e15)
+      : (p) => (p.finished ? (ws(p) ?? -1e9) : -1e12);
+  return runs.slice().sort((a, b) => score(b) - score(a)).slice(0, COMPARE_MAX).map((p) => p.r);
+}
+
+// ------------------------------------------------------------------ charts (ECharts, studycharts.js)
+const _viewPick = new Map();      // sweep id -> "value" | "trade" | "heat"
+const _sumCharts = new WeakMap(); // summary element -> its chart instances
+function chartViews(sw) {
+  const axes = sw.axes || [];
+  const nums = axes.filter((a) => (a.values || []).length > 1 && (a.values || []).every((v) => Number.isFinite(Number(v))));
+  const out = [];
+  if (axes.length === 1 && nums.length === 1) out.push(["value", "By value"]);
+  if (axes.length === 2) out.push(["heat", "Heatmap"]);
+  out.push(["trade", "Trade-off"]);
+  return out;
+}
+function chartsHtml(sw, pts) {
+  if (pts.filter((p) => p.r).length < 2 && !pts.some((p) => p.key === "queued")) return "";
+  const views = chartViews(sw);
+  const view = views.some(([v]) => v === _viewPick.get(sw.id)) ? _viewPick.get(sw.id) : views[0][0];
+  const one = (sw.axes || []).length === 1 ? sw.axes[0].var : "";
+  const pick = _chartPick.get(sw.id) || (view === "value" ? "wns" : view === "heat" ? "wns" : "die");
+  const metricSeg = "<div class='rn-seg sw-mseg' role='group' aria-label='The chart shows'>" +
+    ["wns", "tns", "hold", "die", "cells", "util", "power", "runtime"].map((id) =>
+      "<button class='rn-segb" + (id === pick ? " is-on" : "") + "' data-chart='" + id + "' aria-pressed='" + (id === pick) + "' title='" + esc(M_BY[id].label + (view === "trade" ? " against setup slack" : one ? " against " + one : "")) + "'>" + esc(M_BY[id].short) + "</button>").join("") + "</div>";
+  const viewSeg = views.length > 1 ? "<div class='rn-seg sw-mseg' role='group' aria-label='Chart'>" + views.map(([v, l]) =>
+    "<button class='rn-segb" + (v === view ? " is-on" : "") + "' data-view='" + v + "' aria-pressed='" + (v === view) + "'>" + esc(l) + "</button>").join("") + "</div>" : "";
+  return "<div class='sw-plots-wrap'><div class='sw-chart-bar'>" + viewSeg + metricSeg + "</div>" +
+    "<figure class='sw-plot sw-echart'><figcaption></figcaption><div class='sw-chart' role='img'></div><p class='sw-chart-note muted'></p></figure></div>";
+}
+async function drawCharts(el, sw, pts, scale) {
+  for (const c of _sumCharts.get(el) || []) { try { c.dispose(); } catch (_e) { /* gone */ } }
+  _sumCharts.set(el, []);
+  const host = el.querySelector(".sw-chart");
+  if (!host) return;
+  if (typeof window.echarts === "undefined") await import("./loading.js").then((m) => m.loadECharts()).catch(() => null);
+  if (!host.isConnected || typeof window.echarts === "undefined") return;
+  const SC = await import("./studycharts.js");
+  const views = chartViews(sw);
+  const view = views.some(([v]) => v === _viewPick.get(sw.id)) ? _viewPick.get(sw.id) : views[0][0];
+  const axes = sw.axes || [];
+  const pick = _chartPick.get(sw.id) || (view === "trade" ? "die" : "wns");
+  const m = M_BY[pick];
+  const k = pick === "power" && scale ? 1 / scale.div : pick === "util" ? 100 : 1;
+  const unit = pick === "runtime" ? "s" : pick === "power" ? (scale ? scale.unit : "W") : pick === "util" ? "%" : F.show(m.key, 1).unit;
+  const yOf = (p) => { const v = p.r ? metricOf(p, pick) : null; return v == null ? null : v * k; };
+  const live = pts.filter((p) => !p.superseded);
+  const cap = el.querySelector(".sw-echart figcaption"), note = el.querySelector(".sw-chart-note");
+  let opt = null;
+  if (view === "value") {
+    const xv = axes[0].var;
+    opt = SC.byValueOption({ xvar: xv, xunit: xv === "CLOCK_PERIOD" ? "ns" : "", clock: xv === "CLOCK_PERIOD",
+      metric: { key: m.key, label: m.label, unit, dir: m.dir },
+      points: live.map((p) => ({ x: p.v ? Number(p.v[xv]) : NaN, y: yOf(p), key: p.key, tag: p.tag, word: p.word, detail: p.detail })) });
+    cap.innerHTML = "<b>" + esc(m.label) + "</b>" + (unit ? " (" + esc(unit) + ")" : "") + " by " + esc(xv);
+  } else if (view === "heat") {
+    const [ax, ay] = axes;
+    const sortV = (vs) => vs.slice().sort((a, b) => (Number.isFinite(+a) && Number.isFinite(+b) ? +a - +b : String(a).localeCompare(String(b))));
+    opt = SC.heatmapOption({ xvar: ax.var, yvar: ay.var, xs: sortV(ax.values || []), ys: sortV(ay.values || []),
+      metric: { key: m.key, label: m.label, unit, dir: m.dir },
+      points: live.map((p) => ({ xv: p.v ? p.v[ax.var] : null, yv: p.v ? p.v[ay.var] : null, y: yOf(p), key: p.key, tag: p.tag, word: p.word, detail: p.detail })) });
+    cap.innerHTML = "<b>" + esc(m.label) + "</b>" + (unit ? " (" + esc(unit) + ")" : "") + " for each " + esc(ax.var) + " × " + esc(ay.var);
+  } else {
+    const xm = M_BY[pick === "wns" ? "die" : pick];
+    const xk = xm.id === "power" && scale ? 1 / scale.div : xm.id === "util" ? 100 : 1;
+    const xu = xm.id === "runtime" ? "s" : xm.id === "power" ? (scale ? scale.unit : "W") : xm.id === "util" ? "%" : F.show(xm.key, 1).unit;
+    const wsU = F.show("timing__setup__ws", 1).unit;
+    opt = SC.paretoOption({ x: { label: xm.label, unit: xu, dir: xm.dir || -1 }, y: { label: "Setup WNS", unit: wsU, dir: 1 },
+      points: live.map((p) => ({ x: p.r ? (metricOf(p, xm.id) == null ? null : metricOf(p, xm.id) * xk) : null, y: p.r ? metricOf(p, "wns") : null,
+        key: p.key, tag: p.tag, label: p.v ? Object.values(p.v).join("/") : p.tag })) });
+    cap.innerHTML = "<b>Trade-off</b>: setup WNS against " + esc(xm.label.toLowerCase()) + ". The line joins the points nothing beats on both.";
+  }
+  const fails = live.filter((p) => p.key === "failed" || p.key === "stopped" || p.key === "interrupted");
+  note.textContent = view === "trade" && fails.length ? fails.length + " point" + (fails.length === 1 ? "" : "s") + " failed and have no numbers, so they aren't on this chart: " + fails.map((p) => p.label).join(", ") + "."
+    : view === "value" && fails.length ? "A cross on the axis is a point that failed (no numbers)." : "";
+  if (!opt) { host.closest("figure").hidden = true; return; }
+  host.style.height = (view === "heat" ? Math.max(220, 46 * ((axes[1] || {}).values || []).length + 70) : 250) + "px";
+  host.setAttribute("aria-label", cap.textContent);
+  const chart = window.echarts.init(host, null, { renderer: "canvas" });
+  chart.setOption(opt);
+  // A point on the chart opens its run (the same as its row in the table).
+  chart.on("click", (e) => { const p = e.data && e.data.p; const row = p && el.querySelector("tr[data-open='" + CSS.escape(p.tag) + "']"); if (row) row.click(); });
+  _sumCharts.get(el).push(chart);
+  if (typeof ResizeObserver !== "undefined") {
+    let t = 0;
+    const ro = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { if (!chart.isDisposed()) chart.resize(); else ro.disconnect(); }, 80); });
+    ro.observe(host);
+  }
 }
 
 const valsText = (v) => (v ? " · " + esc(Object.entries(v).map(([k, x]) => k + " " + x).join(", ")) : "");
@@ -694,13 +843,14 @@ function resultsHtml(pts, sw, { scale, areaId, failCode }) {
   if (!pts.length || !axes.length) return "";
   const cols = ["wns", "hold", areaId === "die" ? "die" : "cells", areaId === "die" ? "cells" : "die", "util", "power", "runtime"];
   const rows = byValue(pts, axes).map((p) => {
-    const reason = p.missing ? "" : p.failed ? (failCode && failCode(p.r)) || "" : "";
-    const word = STATE_WORD[p.state] || p.state;
+    const P = SM.POINT[p.key] || {};
+    const word = p.word || P.word || STATE_WORD[p.state] || p.state;
+    const tone = P.tone === "muted" ? "none" : P.tone || STATE_TONE[p.state] || "warn";
     const sup = p.superseded ? "<span class='muted'> · rerun as " + esc(p.superseded) + "</span>" : "";
     return "<tr" + (p.r ? " data-open='" + esc(p.tag) + "' class='sw-res-row" + (p.superseded ? " is-old" : "") + "' title='" + esc("Open " + p.tag) + "'" : " class='is-missing'") + ">" +
       axes.map((a) => "<td class='sw-res-v'>" + esc(p.v ? p.v[a.var] : "") + (a.var === "CLOCK_PERIOD" && p.v && Number(p.v[a.var]) > 0 ? " <small>" + esc(mhz(Number(p.v[a.var]))) + "</small>" : "") + "</td>").join("") +
-      "<td><span class='rn-v is-" + (STATE_TONE[p.state] || "warn") + "'><i aria-hidden='true'></i>" + esc(word) + "</span>" +
-        (reason ? " <span class='muted'>" + esc(reason) + "</span>" : "") + sup + "</td>" +
+      "<td><span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(word) + "</span>" +
+        (p.detail ? " <span class='muted'>" + esc(p.detail) + "</span>" : "") + sup + "</td>" +
       cols.map((id) => {
         const v = p.r ? metricOf(p, id) : null;
         const neg = (id === "wns" || id === "hold") && v != null && v < 0 ? " is-neg" : "";
@@ -721,11 +871,11 @@ function exportSweepCsv(sw, pts, failCode) {
   const axes = sw.axes || [];
   const head = [...axes.map((a) => a.var), "run", "result", "reason", ...METRICS.map((m) => m.key ? m.key + " (" + (F.unitOf(m.key) === "ratio" ? "fraction" : F.unitOf(m.key)) + ")" : "runtime (s)")];
   const rows = [head, ...byValue(pts, axes).map((p) => [
-    ...axes.map((a) => (p.v ? p.v[a.var] : "")), p.tag, STATE_WORD[p.state] || p.state,
-    p.r && p.failed ? (failCode && failCode(p.r)) || "" : p.superseded ? "rerun as " + p.superseded : "",
+    ...axes.map((a) => (p.v ? p.v[a.var] : "")), p.tag, p.word || STATE_WORD[p.state] || p.state,
+    p.superseded ? "rerun as " + p.superseded : p.detail || (p.r && p.failed ? (failCode && failCode(p.r)) || "" : ""),
     ...METRICS.map((m) => (p.r ? metricOf(p, m.id) ?? "" : "")),
   ])];
-  downloadCsv("sweep-" + (sw.id || "results") + ".csv", toCsv(rows));
+  downloadCsv("sweep-" + (sw.id || "results") + ".csv", toCsv(rows, { excel: true }));
 }
 
 function valuesOf(r, sw) {
@@ -735,97 +885,6 @@ function valuesOf(r, sw) {
   if (sw.points && sw.points[i]) return sw.points[i];
   if (i >= 0 && (sw.axes || []).length === 1) return { [sw.axes[0].var]: sw.axes[0].values[i] };
   return null;
-}
-
-const tick = (v) => (Math.abs(v) >= 100 ? localeNum(Math.round(v)) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
-const pad = (lo, hi) => { const d = (hi - lo) || Math.abs(hi) * 0.1 || 1; return [lo - d * 0.14, hi + d * 0.14]; };
-
-// The pictures of a sweep. One number swept: setup slack, and a metric you
-// pick, against it (a failed point is a cross on the axis). Otherwise the
-// trade-off: area against slack for every point.
-function plotsHtml(pts, sw, scale) {
-  const axes = sw.axes || [];
-  const one = axes.length === 1 ? axes[0].var : "";
-  const xs = one ? pts.map((p) => (p.v ? Number(p.v[one]) : NaN)) : [];
-  if (one && xs.every(Number.isFinite) && new Set(xs).size > 1) {
-    const P = pts.map((p, i) => ({ ...p, x: xs[i] })).sort((a, b) => a.x - b.x);
-    const pick = _chartPick.get(sw.id) || (one === "CLOCK_PERIOD" ? "power" : DIE_SIZERS.includes(one) ? "die" : "cells");
-    const a = trendSvg(P, one, "wns", scale);
-    const b = trendSvg(P, one, pick, scale);
-    const seg = "<div class='rn-seg sw-mseg' role='group' aria-label='The second chart shows'>" +
-      ["tns", "hold", "die", "cells", "util", "power", "runtime"].map((id) =>
-        "<button class='rn-segb" + (id === pick ? " is-on" : "") + "' data-chart='" + id + "' aria-pressed='" + (id === pick) + "' title='" + esc(M_BY[id].label + " against " + one) + "'>" + esc(M_BY[id].short) + "</button>").join("") + "</div>";
-    return a || b ? "<div class='sw-plots-wrap'><div class='sw-plots'>" + a + b + "</div>" + seg + "</div>" : "";
-  }
-  const t = tradeSvg(pts);
-  return t ? "<div class='sw-plots-wrap'><div class='sw-plots'>" + t + "</div></div>" : "";
-}
-
-// One metric against the swept value: a line through the finished points, the
-// best one green, failed ones a red cross on the x axis.
-function trendSvg(P, xvar, id, scale) {
-  const m = M_BY[id];
-  const val = (p) => metricOf(p, id);
-  const D = P.filter((p) => val(p) != null);
-  if (D.length < 2) return "";
-  // The y values in the unit the label states (power at its scale, utilisation in %).
-  const k = id === "power" && scale ? 1 / scale.div : id === "util" ? 100 : 1;
-  const unit = id === "runtime" ? "s" : id === "power" ? (scale ? scale.unit : "W") : id === "util" ? "%" : F.show(m.key, 1).unit;
-  const W = 320, H = 180, L = 52, R = 14, T = 12, B = 34;
-  const ys = D.map((p) => val(p) * k);
-  const [x0, x1] = pad(Math.min(...P.map((p) => p.x)), Math.max(...P.map((p) => p.x)));
-  const [y0, y1] = pad(Math.min(...ys), Math.max(...ys));
-  const X = (v) => L + (v - x0) / (x1 - x0) * (W - L - R), Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  const best = m.dir ? D.filter((p) => p.ok).sort((a, b) => (m.dir > 0 ? val(b) - val(a) : val(a) - val(b)))[0] : null;
-  const line = "<polyline class='sw-line' points='" + D.map((p) => X(p.x).toFixed(1) + "," + Y(val(p) * k).toFixed(1)).join(" ") + "'/>";
-  const dots = P.map((p) => {
-    const cx = X(p.x).toFixed(1);
-    if (val(p) == null) {
-      const cy = H - B;
-      return "<g class='sw-pt is-fail'><title>" + esc(p.tag + ": " + xvar + " " + p.x + (p.failed ? ", failed" : ", no result")) + "</title>" +
-        "<path d='M" + (cx - 4) + " " + (cy - 4) + "l8 8M" + (+cx + 4) + " " + (cy - 4) + "l-8 8'/></g>";
-    }
-    const cy = Y(val(p) * k).toFixed(1);
-    return "<g class='sw-pt" + (p === best ? " is-best" : "") + (p.ok ? "" : " is-fail") + "'><title>" + esc(p.tag + ": " + xvar + " " + p.x + ", " + m.label.toLowerCase() + " " + cellText(id, val(p), scale)) + "</title>" +
-      "<circle cx='" + cx + "' cy='" + cy + "' r='4.5'/></g>";
-  }).join("");
-  const xt = P.map((p) => "<text class='sw-tk' x='" + X(p.x).toFixed(1) + "' y='" + (H - B + 14) + "' text-anchor='middle'>" + esc(String(p.x)) + "</text>").join("");
-  const zero = (id === "wns" || id === "tns" || id === "hold") && y0 < 0 && y1 > 0 ? "<line class='sw-zero' x1='" + L + "' x2='" + (W - R) + "' y1='" + Y(0).toFixed(1) + "' y2='" + Y(0).toFixed(1) + "'/>" : "";
-  return "<figure class='sw-plot'><figcaption><b>" + esc(m.label) + "</b>" + (unit ? " (" + esc(unit) + ")" : "") + " by " + esc(xvar) + "</figcaption>" +
-    "<svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='" + esc(m.label + " for each value of " + xvar) + "'>" +
-    "<line class='sw-gridl' x1='" + L + "' x2='" + (W - R) + "' y1='" + T + "' y2='" + T + "'/>" +
-    "<line class='sw-ax' x1='" + L + "' x2='" + L + "' y1='" + T + "' y2='" + (H - B) + "'/><line class='sw-ax' x1='" + L + "' x2='" + (W - R) + "' y1='" + (H - B) + "' y2='" + (H - B) + "'/>" + zero +
-    "<text class='sw-tk' x='" + (L - 6) + "' y='" + (T + 4) + "' text-anchor='end'>" + tick(y1) + "</text><text class='sw-tk' x='" + (L - 6) + "' y='" + (H - B) + "' text-anchor='end'>" + tick(y0) + "</text>" +
-    xt + "<text class='sw-axl' x='" + ((L + W - R) / 2) + "' y='" + (H - 4) + "' text-anchor='middle'>" + esc(xvar) + "</text>" + line + dots + "</svg></figure>";
-}
-
-// Std-cell area (x) against setup WNS (y). Axes span the data (not from 0),
-// points labelled by their value, a label dropped when it would overlap.
-function tradeSvg(pts) {
-  const P = pts.map((p) => ({ ...p, wns: num(p.r, "timing__setup__ws"), area: num(p.r, "design__instance__area__stdcell") })).filter((p) => p.wns != null && p.area != null);
-  if (P.length < 2) return "";
-  const W = 460, H = 200, L = 64, R = 16, T = 14, B = 38;
-  const xs = P.map((p) => p.area), ys = P.map((p) => p.wns);
-  const [x0, x1] = pad(Math.min(...xs), Math.max(...xs)), [y0, y1] = pad(Math.min(...ys), Math.max(...ys));
-  const X = (v) => L + (v - x0) / (x1 - x0) * (W - L - R), Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  const placed = [];
-  const dots = P.map((p) => {
-    const cx = X(p.area), cy = Y(p.wns);
-    const lab = p.v ? Object.values(p.v).join("/") : p.tag;
-    const box = [cx - lab.length * 3.4, cy - 20, cx + lab.length * 3.4, cy - 8];
-    const hit = placed.some((b) => !(box[2] < b[0] || box[0] > b[2] || box[3] < b[1] || box[1] > b[3]));
-    if (!hit) placed.push(box);
-    return "<g class='sw-pt" + (p.ok ? "" : " is-fail") + "'><title>" + esc(p.tag + ": std-cell area " + F.showText("design__instance__area__stdcell", p.area) + ", setup WNS " + F.showText("timing__setup__ws", p.wns)) + "</title>" +
-      "<circle cx='" + cx.toFixed(1) + "' cy='" + cy.toFixed(1) + "' r='5'/>" +
-      (hit ? "" : "<text x='" + cx.toFixed(1) + "' y='" + (cy - 10).toFixed(1) + "' text-anchor='middle'>" + esc(lab) + "</text>") + "</g>";
-  }).join("");
-  const zero = y0 < 0 && y1 > 0 ? "<line class='sw-zero' x1='" + L + "' x2='" + (W - R) + "' y1='" + Y(0).toFixed(1) + "' y2='" + Y(0).toFixed(1) + "'/>" : "";
-  return "<figure class='sw-plot'><figcaption><b>Area against slack</b>, one dot per run</figcaption><svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='Std-cell area against setup slack for each point'>" +
-    "<line class='sw-ax' x1='" + L + "' x2='" + L + "' y1='" + T + "' y2='" + (H - B) + "'/><line class='sw-ax' x1='" + L + "' x2='" + (W - R) + "' y1='" + (H - B) + "' y2='" + (H - B) + "'/>" + zero +
-    "<text class='sw-tk' x='" + (L - 6) + "' y='" + (T + 4) + "' text-anchor='end'>" + tick(y1) + "</text><text class='sw-tk' x='" + (L - 6) + "' y='" + (H - B) + "' text-anchor='end'>" + tick(y0) + "</text>" +
-    "<text class='sw-tk' x='" + L + "' y='" + (H - B + 14) + "'>" + tick(x0) + "</text><text class='sw-tk' x='" + (W - R) + "' y='" + (H - B + 14) + "' text-anchor='end'>" + tick(x1) + "</text>" +
-    "<text class='sw-axl' x='" + ((L + W - R) / 2) + "' y='" + (H - 6) + "' text-anchor='middle'>std-cell area (µm²), smaller is better</text>" +
-    "<text class='sw-axl' transform='translate(14 " + ((T + H - B) / 2) + ") rotate(-90)' text-anchor='middle'>setup WNS (ns)</text>" + dots + "</svg></figure>";
 }
 
 // ------------------------------------------------------------------ continue a sweep

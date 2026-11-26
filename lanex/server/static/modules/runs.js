@@ -36,6 +36,7 @@ import { loadingStart, pageSkeleton } from "./loading.js";
 import * as MF from "./metricfmt.js";
 import { toCsv, downloadCsv, downloadText } from "./csvutil.js";
 import { singleKeysOn } from "./prefs.js";
+import * as SM from "./studymodel.js";
 
 // The last step of a stage in the Classic flow (matches setup.js's --to).
 function lastStepOfStage(stageId) {
@@ -1333,7 +1334,16 @@ function sweepRowHtml(g, cols, gk, open) {
     : ["LanEx was closed or restarted while it ran", "interrupted"];
   const tone = running ? "live" : failed.length && !passed.length ? "fail" : failed.length || isShort ? "warn" : passed.length ? "pass" : "warn";
   const count = ran + (isShort ? " of " + planned : "") + " run" + ((isShort ? planned : ran) === 1 ? "" : "s");
-  const verdictCell = "<span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(count) +
+  // One mark per point, in value order, planned points included: the study's
+  // strip (studymodel.js), the same marks as its summary.
+  const marks = rs.map((r) => ({ tag: r.tag, v: pointValues(r, sw), key: SM.pointKey({ run: { ...r, verdict: verdictOf(r) }, active: !!sw.active }) }));
+  (sw.tags || []).forEach((t, i) => { if (!have.has(t) && !(reruns[t] && have.has(reruns[t]))) marks.push({ tag: t, v: (sw.points || [])[i] || null, key: sw.active ? "queued" : "skipped" }); });
+  const ax = (sw.axes || []).map((a) => a.var);
+  const nv = (p) => ax.map((k) => (p.v ? Number(p.v[k]) : NaN));
+  marks.sort((a, b) => { const x = nv(a), y = nv(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i] && Number.isFinite(x[i]) && Number.isFinite(y[i])) return x[i] - y[i]; return 0; });
+  for (const p of marks) p.label = p.v ? Object.values(p.v).join(" × ") : p.tag;
+  const strip = marks.length > 1 ? SM.stripHtml(marks, esc) : "";
+  const verdictCell = strip + "<span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(count) +
     (failed.length ? "<span class='rn-sw-n'>· <span class='rn-bad'>" + failed.length + " failed</span></span>" : word ? "<span class='rn-sw-n'>· " + esc(word) + "</span>" : "") + "</span>";
   return groupRowHtml(g, cols, gk, open, {
     tag: "Sweep", title: sweepAxesText(sw), why, verdictCell,

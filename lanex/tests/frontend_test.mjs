@@ -841,6 +841,53 @@ check("compare: a delta says how far a number moved, and whether that is better"
   assert.match(cell, /class='cmp-d is-worse' title='[^']*worse than the reference \(lower is better\)'>\+235 \+23%</);
 });
 
+// ------------------------------------------------ studies: point states and charts (lane 2)
+const SMod = await import(toUrl(resolve(MOD, "studymodel.js")));
+check("study: a point's state in plain words, from its job or its run", () => {
+  const done = { step_count: 78, steps_done: 78, steps_failed: 0 };
+  assert.equal(SMod.pointKey({ job: { state: "queued" } }), "queued");
+  assert.equal(SMod.pointKey({ job: { state: "running" } }), "running");
+  assert.equal(SMod.pointKey({ run: null, active: true }), "queued", "a planned point is a row before it runs");
+  assert.equal(SMod.pointKey({ run: null, active: false }), "skipped");
+  assert.equal(SMod.pointKey({ run: { ...done, verdict: { state: "passed" }, key_metrics: { timing__setup__ws: 0.4 } } }), "clean");
+  // LibreLane raises timing violations after the flow ends: a result, not a failure.
+  assert.equal(SMod.pointKey({ run: { ...done, verdict: { state: "failed" }, key_metrics: { timing__setup__ws: -0.42 } } }), "missed");
+  assert.equal(SMod.pointKey({ run: { step_count: 40, steps_done: 35, steps_failed: 1, verdict: { state: "failed", stage: "placement" }, key_metrics: { timing__setup__ws: -2 } } }), "failed",
+    "a run that died mid-flow is a failure, whatever its early slack");
+  assert.equal(SMod.pointKey({ run: { ...done, verdict: { state: "warning", timing_miss: { ws: -0.1 } }, key_metrics: {} } }), "missed");
+  const w = SMod.pointWords("failed", { run: { verdict: { state: "failed", stage: "placement" } }, stageLabel: () => "Placement", code: "DPL-0036" });
+  assert.equal(w.word, "Failed at Placement"); assert.equal(w.detail, "DPL-0036");
+  assert.equal(SMod.pointWords("missed", { run: { key_metrics: { timing__setup__ws: -0.42 } } }).detail, "setup -0.42 ns");
+  assert.equal(SMod.clockText(8), "8 ns (125 MHz)");
+});
+check("study: fail fast fires on two of the first three failing the same way, never on timing missed", () => {
+  const fp = SMod.fingerprint("[ERROR GRT-0116] Global routing finished with congestion", "routing");
+  assert.equal(fp, "routing|GRT-0116");
+  assert.equal(SMod.fingerprint("ERROR: Module `no_such_top' not found!", "synthesis"), "synthesis|error: module <name> not found!");
+  assert.deepEqual(SMod.sameFailure([{ tag: "a", key: "failed", fp }, { tag: "b", key: "clean" }, { tag: "c", key: "failed", fp }]), { fingerprint: fp, points: ["a", "c"] });
+  assert.equal(SMod.sameFailure([{ tag: "a", key: "missed", fp }, { tag: "b", key: "missed", fp }]), null, "a clock too fast is a result");
+  assert.equal(SMod.sameFailure([{ tag: "a", key: "clean" }, { tag: "b", key: "clean" }, { tag: "c", key: "clean" }, { tag: "d", key: "failed", fp }, { tag: "e", key: "failed", fp }]), null, "only the first three count");
+  assert.match(SMod.stripHtml([{ tag: "a", key: "clean" }, { tag: "b", key: "failed" }]), /m-fill[\s\S]*m-cross/);
+});
+const SCh = await import(toUrl(resolve(MOD, "studycharts.js")));
+check("study charts: failed points stay on the chart, the front is the points nothing beats", () => {
+  const pts = [{ x: 10, y: 2.3, key: "clean", tag: "a" }, { x: 9, y: 0.8, key: "clean", tag: "b" }, { x: 8, y: -0.4, key: "missed", tag: "c" }, { x: 7, key: "failed", tag: "d" }, { x: 6, key: "queued", tag: "e" }];
+  const o = SCh.byValueOption({ xvar: "CLOCK_PERIOD", xunit: "ns", clock: true, metric: { key: "timing__setup__ws", label: "Setup WNS", unit: "ns", dir: 1 }, points: pts });
+  assert.equal(o.xAxis.length, 2, "a clock sweep reads in ns and MHz");
+  const failed = o.series.find((s) => s.name === "failed");
+  assert.equal(failed.data.length, 1, "the failed point is drawn (a cross on the rail), not dropped");
+  assert.equal(o.series[0].markLine.data[0].yAxis, 0, "slack has its 0 line");
+  assert.ok(o.series[0].markArea, "negative slack shades 'fails timing'");
+  assert.equal(o.series.find((s) => s.name === "best").data[0].p.tag, "a", "best ignores a point that missed timing");
+  const front = SCh.paretoFront([{ x: 100, y: 1 }, { x: 90, y: 0.5 }, { x: 110, y: 0.9 }, { x: 80, y: 0.2 }], -1, 1);
+  assert.deepEqual(front.map((p) => p.x), [80, 90, 100], "smaller area and larger slack; 110 is beaten by 100");
+  const h = SCh.heatmapOption({ xvar: "A", yvar: "B", xs: [1, 2], ys: [3, 4], metric: { label: "WNS", unit: "ns", dir: 1 },
+    points: [{ xv: 1, yv: 3, y: 0.5, key: "clean" }, { xv: 2, yv: 3, y: -0.5, key: "missed" }, { xv: 1, yv: 4, key: "failed" }] });
+  assert.equal(h.visualMap.min, -0.5); assert.equal(h.visualMap.max, 0.5, "slack diverges around 0");
+  assert.equal(h.visualMap.dimension, 2, "coloured by the metric, never by an id");
+  assert.equal(h.series[1].data.length, 1, "a failed cell is crossed");
+});
+
 // ------------------------------------------------ sweeps (audit G11, 4.7)
 const SW = (await import(toUrl(resolve(MOD, "sweeps.js"))))._test;
 check("sweeps: a range typo is an error, never one text value; values are type-checked", () => {
