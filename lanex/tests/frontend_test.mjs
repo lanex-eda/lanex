@@ -955,6 +955,27 @@ check("sweeps: points in planned order, a missing point and why the sweep ended 
   assert.equal(re.find((p) => p.tag === "c8").superseded, "c8-2");
 });
 
+check("sweeps: the clock study's SDC guard sees any period the SDC sets itself", () => {
+  const S = SW.sdcClockSource;
+  // LibreLane's own base.sdc, and the same through a variable or an expr: the sweep works.
+  assert.equal(S("create_clock {*}$port_args -name $clock_port -period $::env(CLOCK_PERIOD)\n").sets, false);
+  assert.equal(S("set p $::env(CLOCK_PERIOD)\ncreate_clock [get_ports clk] -period $p\n").sets, false);
+  assert.equal(S("create_clock -name clk -period [expr $::env(CLOCK_PERIOD) * 1.0] [get_ports clk]").sets, false);
+  assert.equal(S("set a $::env(CLOCK_PERIOD)\nset b $a\ncreate_clock -period ${b} clk").sets, false);
+  // A number, a variable the SDC sets, a variable from somewhere else: the SDC's own clock.
+  assert.deepEqual([S("create_clock -period 10 [get_ports clk]").sets, S("create_clock -period 10 [get_ports clk]").value], [true, "10"]);
+  const v = S("# CLOCK_PERIOD is not used here\nset clk_period 12.5\ncreate_clock [get_ports clk] -period $clk_period");
+  assert.equal(v.sets, true);
+  assert.equal(v.value, "$clk_period");
+  assert.equal(S("create_clock -period $period [get_ports clk]").sets, true);
+  assert.equal(S("create_clock -period [expr 2 * 5] clk").sets, true);
+  // A mention of CLOCK_PERIOD in a comment no longer hides a literal period.
+  assert.equal(S("# uses $::env(CLOCK_PERIOD) elsewhere\ncreate_clock -period 8 clk").sets, true);
+  // A continued line.
+  assert.equal(S("create_clock [get_ports clk] \\\n  -period 7").sets, true);
+  assert.equal(S("").sets, false);
+});
+
 check("sweeps: a restarted study's queued points are planned, not left (no Run the N left for them)", () => {
   const vOf = (r) => ({ state: r.st });
   const sw = { id: "s", active: false, axes: [{ var: "CLOCK_PERIOD", values: ["10", "9", "8"] }], tags: ["c10", "c9", "c8"],
@@ -3754,6 +3775,55 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.match(readFileSync(resolve(MOD, "cells-macros.js"), "utf8"), /createFloorplanCanvas\(/);
   });
 }
+
+await checkAsync("toasts: the Undo toast stays outside the cap and clear(); the trash is purged only on timeout or close", async () => {
+  class El {
+    constructor() { this.children = []; this.parent = null; this.cls = new Set(); this.on = {}; this.attrs = {}; }
+    set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+    get className() { return [...this.cls].join(" "); }
+    get classList() { const c = this.cls; return { add: (x) => c.add(x), remove: (x) => c.delete(x), contains: (x) => c.has(x) }; }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    append(...xs) { for (const x of xs) this.appendChild(x); }
+    appendChild(x) { x.parent = this; this.children.push(x); return x; }
+    remove() { if (this.parent) { this.parent.children = this.parent.children.filter((c) => c !== this); this.parent = null; } }
+    replaceChildren() { this.children = []; }
+    addEventListener(k, fn) { (this.on[k] = this.on[k] || []).push(fn); }
+    click() { for (const fn of this.on.click || []) fn(); }
+    get firstElementChild() { return this.children[0] || null; }
+    get lastElementChild() { return this.children[this.children.length - 1] || null; }
+    set textContent(v) { this._t = v; }
+    set innerHTML(v) { this._h = v; }
+  }
+  const oldDoc = globalThis.document, oldRaf = globalThis.requestAnimationFrame;
+  globalThis.document = { createElement: () => new El(), body: new El() };
+  globalThis.requestAnimationFrame = (fn) => fn();
+  try {
+    const { toast } = await import(toUrl(resolve(MOD, "toast.js")));
+    toast.container = null;
+    const closed = [];
+    toast.show("Deleted 3 runs.", "success", 60000, [{ label: "Undo", run: () => {} }], { keep: true, onClose: (why) => closed.push(why) });
+    const undoEl = toast.container.children[0];
+    for (let i = 0; i < 6; i++) toast.show("note " + i, "info", 60000);
+    assert.ok(toast.container.children.includes(undoEl), "four newer toasts don't push the Undo out");
+    assert.equal(toast.container.children.filter((c) => !c.classList.contains("toast-keep")).length, 4);
+    toast.clear();
+    assert.deepEqual(toast.container.children, [undoEl], "clear() keeps the Undo");
+    assert.deepEqual(closed, []);
+    // Undo pressed: closed as "action" (runs.js then never purges).
+    undoEl.children.find((c) => c.cls.has("toast-act")).click();
+    assert.deepEqual(closed, ["action"]);
+    const RUNSm = await import(toUrl(resolve(MOD, "runs.js")));
+    let purged = 0;
+    const act = { run: () => {} };
+    assert.equal(RUNSm.undoClosed("action", { done: () => false, act, onGone: () => purged++ }), false);
+    assert.equal(RUNSm.undoClosed("close", { done: () => true, act, onGone: () => purged++ }), false);
+    assert.equal(RUNSm.undoClosed("timeout", { done: () => false, act, onGone: () => purged++ }), true);
+    assert.equal(purged, 1);
+  } finally {
+    globalThis.document = oldDoc;
+    globalThis.requestAnimationFrame = oldRaf;
+  }
+});
 
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));

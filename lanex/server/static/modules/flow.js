@@ -968,7 +968,7 @@ async function setLogSource(src, { live = false, step = null } = {}) {
   if (runTag && state.designDir && !src.startsWith("step:") && (src === "live" || src.startsWith("stream:") || src.startsWith("run:") || src.startsWith("live:"))) {
     L.setSource({
       download: api.runLogUrl(state.designDir, runTag),
-      loadFull: () => api.runLog(state.designDir, runTag).then((r) => (r && r.text) || ""),
+      loadFull: () => api.runLogText(state.designDir, runTag),
     });
   } else L.setSource({});
   if (src === "live" || src.startsWith("stream:")) {

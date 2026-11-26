@@ -1928,7 +1928,7 @@ class Scheduler:
         self._dirty = True
         try:
             from .events import bus
-            bus.emit("queue:job", {"job": self.public(j)})
+            bus.emit("queue:job", {"job": slim_job(self.public(j))})
         except Exception:
             pass
 
@@ -1937,10 +1937,15 @@ class Scheduler:
         out["project"] = Path(j.get("design_dir") or "").name
         return out
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self, *, slim: bool = False) -> Dict[str, Any]:
+        """The whole queue (``GET /api/queue``). With *slim*, each job as the
+        page draws it (:func:`slim_job`): the form ``queue:changed`` carries,
+        up to twice a second, into the event ring every page reads."""
         facts = self.facts()
         with self._lock:
             jobs = [self.public(j) for j in self._all_jobs()]
+            if slim:
+                jobs = [slim_job(j) for j in jobs]
             for f in list(self._followers.values()):
                 if f.origin == "terminal" and f.alive:
                     jobs.append(f.public())
@@ -1992,7 +1997,7 @@ class Scheduler:
         self._last_emit = now
         try:
             from .events import bus
-            bus.emit("queue:changed", self.snapshot())
+            bus.emit("queue:changed", self.snapshot(slim=True))
         except Exception:
             _log.debug("queue publish failed", exc_info=True)
 
@@ -2087,6 +2092,29 @@ class Scheduler:
                     return True
         f = [x for x in self._followers.values() if design_key(x.run_dir) == k]
         return bool(f)
+
+
+_SPEC_SHOWN = ("tag", "flow", "mode", "frm", "to", "only", "run_mode", "sweep", "point_values", "priority")
+
+
+def slim_job(j: Dict[str, Any]) -> Dict[str, Any]:
+    """A job as the queue popover, the run bar and a study draw it: the
+    command, the attempts and the start request of a job that already
+    started stay in ``GET /api/queue``. A waiting job keeps its whole spec
+    (Undo of Remove queues it again). Pure."""
+    out = {k: v for k, v in j.items() if k not in ("command", "attempts", "spec", "resume", "outcome", "resources")}
+    spec = j.get("spec") or {}
+    out["spec"] = dict(spec) if j.get("state") == "queued" else {k: spec[k] for k in _SPEC_SHOWN if k in spec}
+    r = j.get("resume")
+    if isinstance(r, dict):
+        out["resume"] = {k: r.get(k) for k in ("from_step", "can_continue", "reason", "complete") if k in r}
+    o = j.get("outcome")
+    if isinstance(o, dict):
+        out["outcome"] = {k: o.get(k) for k in ("result", "ok", "good", "kind", "stage", "step", "verdict") if k in o}
+    res = j.get("resources")
+    if isinstance(res, dict):
+        out["resources"] = {k: res.get(k) for k in ("rss_gb", "peak_gb", "need_gb") if k in res}
+    return out
 
 
 def done_words(spec: Dict[str, Any], o: Dict[str, Any]) -> str:

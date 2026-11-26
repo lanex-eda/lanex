@@ -1758,21 +1758,20 @@ export async function compareRuns(runs) {
 
 // ------------------------------------------------------------------ bulk actions
 let _undo = null;              // the Undo of the toast showing now (Ctrl+Z)
+// The Undo toast is kept outside the toast cap and clear(): four newer toasts
+// or a sheet opening used to push it out and purge the deleted runs at once.
+// onGone runs only when it timed out or was closed, never when Undo was used.
 function undoToast(message, run, { ttl = 10000, onGone = null } = {}) {
   let done = false;
   const act = { label: "Undo", run: () => { done = true; _undo = null; run(); } };
-  toast.show(message, "success", ttl, [act]);
-  const el = toast.container && toast.container.lastElementChild;
   _undo = act.run;
-  if (!el) return;
-  // When the toast goes (timed out, closed, pushed out), Undo goes with it.
-  const mo = new MutationObserver(() => {
-    if (el.isConnected) return;
-    mo.disconnect();
-    if (_undo === act.run) _undo = null;
-    if (!done && onGone) onGone();
-  });
-  mo.observe(toast.container, { childList: true });
+  toast.show(message, "success", ttl, [act], { keep: true, onClose: (why) => undoClosed(why, { done: () => done, act, onGone }) });
+}
+export function undoClosed(why, { done, act, onGone }) {
+  if (_undo === act.run) _undo = null;
+  if (why === "action" || done()) return false;
+  if (onGone) onGone();
+  return true;
 }
 function bulkFailures(res) {
   const f = (res && res.failed) || [];
