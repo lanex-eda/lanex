@@ -1899,7 +1899,6 @@ begin
   if ProfileRadioRecommended.Checked then
   begin
     ProfileDescLabel.Caption :=
-      'Recommended Profile Overview:'#13#10 +
       '• Container engine: Docker'#13#10 +
       '• Flow && Visualization: Matched LibreLane container image, GDS3D'#13#10 +
       '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
@@ -1912,7 +1911,6 @@ begin
   else if ProfileRadioComplete.Checked then
   begin
     ProfileDescLabel.Caption :=
-      'Complete Profile Overview:'#13#10 +
       '• Container engine: Docker'#13#10 +
       '• Flow && Visualization: Matched LibreLane container image, GDS3D'#13#10 +
       '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
@@ -1925,7 +1923,6 @@ begin
   else if ProfileRadioMinimal.Checked then
   begin
     ProfileDescLabel.Caption :=
-      'Minimal Profile Overview:'#13#10 +
       '• Installs the isolated LanEx application core and Python cockpit only.'#13#10 +
       '• Fastest installation with the smallest download and disk footprint.'#13#10 +
       '• LanEx application only; tools and PDKs can be installed later on demand.';
@@ -2198,7 +2195,7 @@ begin
   WslMemoryLabel := TLabel.Create(WizardForm);
   WslMemoryLabel.Parent := ConfigurePage.Surface;
   WslMemoryLabel.Left := ScaleX(4);
-  WslMemoryLabel.Top := SummaryPanel.Top - ScaleY(46);
+  WslMemoryLabel.Top := SummaryPanel.Top - ScaleY(62);
   WslMemoryLabel.Caption := 'Memory for &Linux (WSL):';
   WslMemoryLabel.Anchors := [akLeft, akBottom];
 
@@ -2206,9 +2203,9 @@ begin
   WslMemoryCombo.Parent := ConfigurePage.Surface;
   WslMemoryCombo.Left := WslMemoryLabel.Left + WslMemoryLabel.Width + ScaleX(8);
   WslMemoryCombo.Top := WslMemoryLabel.Top - ScaleY(3);
-  WslMemoryCombo.Width := ScaleX(250);
+  WslMemoryCombo.Width := ConfigurePage.Surface.ClientWidth - WslMemoryCombo.Left - ScaleX(8);
+  WslMemoryCombo.Anchors := [akLeft, akRight, akBottom];
   WslMemoryCombo.Style := csDropDownList;
-  WslMemoryCombo.Anchors := [akLeft, akBottom];
   WslMemoryCombo.OnChange := @OnWslMemoryChange;
   WslMemoryLabel.FocusControl := WslMemoryCombo;
   FillWslMemoryChoices;
