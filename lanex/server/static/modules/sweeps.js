@@ -32,20 +32,23 @@ export const COMPARE_MAX = 12;     // compare.js MAX
 
 // Goals in plain words -> the settings that move them. Their values are
 // filled from this design's own settings when the sheet opens (fillGoal).
+// Three goals that work, and your own (studies, audit 6.2). "Placement
+// density" is not a goal: it sizes nothing, and LibreLane derives it from the
+// utilisation when the config leaves it unset.
 const GOALS = [
-  { id: "clock", title: "Fastest clock that meets timing", sub: "Shorter clock periods from the one you use now. Every one runs.",
+  { id: "clock", title: "Fastest clock", sub: "How fast can it run? Shorter clock periods from the one you use now; every one runs.",
     axes: [{ var: "CLOCK_PERIOD", values: "" }] },
-  { id: "area", title: "Smallest die that routes", sub: "Pack the core fuller until routing or placement fails.",
+  { id: "area", title: "Smallest chip", sub: "How small can the die get? Packs the core fuller until placement or routing fails.",
     axes: [{ var: "FP_CORE_UTIL", values: "40:60:10" }] },
-  { id: "density", title: "Placement density", sub: "How tightly the placer packs cells (%).",
-    axes: [{ var: "PL_TARGET_DENSITY_PCT", values: "50, 60, 70" }] },
-  { id: "synth", title: "Synthesis strategies", sub: "Yosys/ABC recipes, area- or delay-first.",
-    axes: [{ var: "SYNTH_STRATEGY", values: "AREA 0, DELAY 0, DELAY 2" }] },
-  { id: "own", title: "Your own", sub: "Any setting LibreLane has.", axes: [{ var: "", values: "" }] },
+  { id: "synth", title: "Best synthesis recipe", sub: "Which of LibreLane's recipes (SYNTH_STRATEGY) gives the smallest or fastest chip, each run in full.",
+    axes: [{ var: "SYNTH_STRATEGY", values: "AREA 0, DELAY 0, DELAY 4" }] },
+  { id: "own", title: "Your own settings", sub: "Any setting LibreLane has, up to three, every combination or paired.", axes: [{ var: "", values: "" }] },
 ];
 // What the sheet asks the server for when it opens, so the goals can start
-// from this design's values.
-const CONTEXT_KEYS = ["CLOCK_PERIOD", "FP_CORE_UTIL", "FP_SIZING", "DIE_AREA", "CORE_AREA", "PL_TARGET_DENSITY_PCT", "SYNTH_STRATEGY"];
+// from this design's values (and the guards can see a fixed die, a fixed
+// density, an SDC file that sets its own clock).
+const CONTEXT_KEYS = ["CLOCK_PERIOD", "FP_CORE_UTIL", "FP_SIZING", "DIE_AREA", "CORE_AREA", "PL_TARGET_DENSITY_PCT", "SYNTH_STRATEGY",
+  "PNR_SDC_FILE", "SIGNOFF_SDC_FILE"];
 
 const S = { el: null, goal: "area", axes: [], mode: "grid", stop: false, vars: null, busy: false,
   plan: null, planSeq: 0, planTimer: 0, ctx: {}, touched: false, note: "" };
@@ -169,7 +172,12 @@ export async function openSweepSheet(goal, { values } = {}) {
   // This design's own values, so the goals start from them.
   const ctxP = api.dsePlan({ axes: [], keys: CONTEXT_KEYS, base_overrides: baseOverrides() })
     .then((p) => { S.ctx = (p && p.context) || {}; }).catch(() => { S.ctx = {}; });
-  await Promise.all([varsP, ctxP]);
+  // How many points the queue runs at once (lane 1: memory and cores).
+  S.sdcBlock = "";
+  S.par = null;
+  const parP = api.queue().then((q) => { const mp = (q && q.max_parallel) || {}; S.par = { n: Number(mp.now) || 1, why: mp.why || "" }; }).catch(() => { S.par = null; });
+  await Promise.all([varsP, ctxP, parP]);
+  sdcGuard(S.ctx.PNR_SDC_FILE, S.ctx.SIGNOFF_SDC_FILE);
   if (S.el.hidden) return;
   if (!S.touched) pickGoal(S.goal);
   else requestPlan();
@@ -204,7 +212,7 @@ function build() {
   el.innerHTML =
     "<aside class='sw-sheet' role='dialog' aria-modal='true' aria-labelledby='sw-title'>" +
     "<header class='sw-head'><div><div class='an-eyebrow'>New sweep</div><h2 class='an-title' id='sw-title'>Run this design at several settings</h2>" +
-    "<p class='an-lede'>One full run per point, one after another. Fix the RTL and the constraints first: a sweep finds a better setting, it doesn't fix a design. Keep it small.</p></div>" +
+    "<p class='an-lede'>One full run per point; the queue runs as many at once as memory and cores allow. Fix the RTL and the constraints first: a sweep finds a better setting, it doesn't fix a design.</p></div>" +
     "<button class='iconbtn sw-x' data-sw='close' aria-label='Close'>" + icon("x", { size: 16 }) + "</button></header>" +
     "<div class='sw-body'>" +
     "<div class='sw-lbl'>What are you after?</div><div class='sw-goals' role='radiogroup'>" +
@@ -267,6 +275,7 @@ function fillGoal(id) {
     S.axes[0].values = clockValues(cur, hint).join(", ");
     S.note = "The clock now: " + cur + " ns (" + mhz(cur) + "), from " + src(e) + "." +
       (hint ? " " + hint.text : "") + " Every period runs; the summary names the fastest that met timing.";
+    sdcGuard(c("PNR_SDC_FILE"), c("SIGNOFF_SDC_FILE"));
     return;
   }
   if (id === "area") {
@@ -286,8 +295,37 @@ function fillGoal(id) {
       const vals = [cur, cur + 10, cur + 20].filter((x) => x <= 95).map((x) => +x.toFixed(1));
       S.axes[0].values = vals.join(", ");
       S.note = "The core is " + cur + " % full now (" + src(u) + "). Each point packs it fuller; the die shrinks with it.";
+      // A density fixed in the config: the utilisation can pass it, and the
+      // placer then can't fit the cells (LibreLane derives it when unset).
+      const d = c("PL_TARGET_DENSITY_PCT");
+      const dv = d && d.source === "config" ? Number(asText(d.value)) : NaN;
+      if (dv > 0 && vals.some((x) => x + 5 > dv)) {
+        S.note += " PL_TARGET_DENSITY_PCT is fixed at " + dv + " % in " + src(d) + ": past about " + Math.max(1, dv - 5) +
+          " % utilisation the placer can't fit the cells into that density. Take it out of the config so LibreLane works it out from the utilisation, or sweep both under Your own settings.";
+      }
     }
   }
+}
+
+// An SDC file that sets the clock period itself (a number, not
+// $::env(CLOCK_PERIOD)) makes a clock sweep change synthesis only, never the
+// timing it is judged by: say so, and hold Start.
+async function sdcGuard(...entries) {
+  S.sdcBlock = "";
+  for (const e of entries) {
+    const v = e && asText(e.value);
+    if (!v || !/\.sdc$/i.test(v)) continue;
+    const path = v.replace(/^dir::/, (state.designDir || "").replace(/[\\/]+$/, "") + "/");
+    let text = "";
+    try { const r = await api.readText(path); text = (r && (r.text ?? (r.data || {}).text)) || ""; } catch (_e) { continue; }
+    const m = /create_clock[^\n]*-period\s+([0-9.]+)/.exec(text);
+    if (m && !/CLOCK_PERIOD/.test(text)) {
+      S.sdcBlock = "Your SDC file (" + v.replace(/^dir::/, "") + ") sets the clock period itself (" + m[1] + " ns), so changing CLOCK_PERIOD would only change synthesis, not timing. " +
+        "Make the SDC use $::env(CLOCK_PERIOD) as LibreLane's own base.sdc does, or change the period in the SDC.";
+      break;
+    }
+  }
+  if (S.el && !S.el.hidden) paintEst();
 }
 
 // What a past run says about the clock: its slack at a period LanEx knows
@@ -380,7 +418,10 @@ function serverProblem() {
   return (p.problems || [])[0] || "";
 }
 
-function problems() { return clientProblem() || serverProblem(); }
+function problems() {
+  const clockSwept = S.axes.some((a) => a.var === "CLOCK_PERIOD");
+  return clientProblem() || serverProblem() || (clockSwept && S.sdcBlock) || "";
+}
 
 function planKey() { return JSON.stringify([S.axes, S.mode]); }
 
@@ -417,9 +458,16 @@ function paintEst() {
   const secs = typicalRunSecs();
   const est = S.el.querySelector("#sw-est");
   const warns = (S.plan && S.plan._for === planKey() && S.plan.warnings) || [];
+  // "6 runs, about 5 min, 2 at a time": the time from this design's past runs
+  // and the queue's runs-at-once (never a made-up number with no history).
+  const par = S.par && S.par.n > 0 ? Math.min(S.par.n, Math.max(1, n)) : 1;
+  const total = secs ? Math.ceil(n / par) * secs * (par > 1 ? 1.15 : 1) : null;
+  const clockDown = S.axes.some((a) => a.var === "CLOCK_PERIOD");
   if (err) est.innerHTML = "<span class='sw-err'>" + esc(err) + "</span>";
-  else est.innerHTML = "<b>" + n + " run" + (n === 1 ? "" : "s") + (secs ? ", about " + esc(fmtDur(n * secs)) : "") + "</b>" +
-    (secs ? " <span class='muted'>from this design's past runs</span>" : "") +
+  else est.innerHTML = "<b>" + n + " run" + (n === 1 ? "" : "s") + (total ? ", about " + esc(fmtDur(total)) : "") + (S.par ? ", " + par + " at a time" : "") + "</b>" +
+    (total ? " <span class='muted'>from this design's past runs" + (clockDown ? " (faster clocks can take longer)" : "") + "</span>"
+      : " <span class='muted'>The time is known after the first point: this design has no finished run yet.</span>") +
+    (S.par && S.par.why ? "<div class='muted'>" + esc(S.par.why) + "</div>" : "") +
     (n > 8 ? "<div class='sw-warn'>That's a lot of runs. Two or three values usually show the trend.</div>" : "") +
     warns.map((w) => "<div class='sw-warn'>" + esc(w) + "</div>").join("");
   paintRiders();

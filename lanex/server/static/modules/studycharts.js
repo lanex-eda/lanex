@@ -78,7 +78,7 @@ export function byValueOption({ xvar, xunit = "", metric, points, clock = false 
   return {
     ...th, animationDuration: 250,
     aria: { enabled: true, label: { description: metric.label + " for " + points.length + " values of " + xvar + ": " + ok.length + " finished, " + failed.length + " failed." } },
-    grid: { left: 58, right: 24, top: clock ? 46 : 30, bottom: 46 },
+    grid: { left: 58, right: clock ? 46 : 24, top: clock ? 46 : 30, bottom: 46 },
     tooltip: { ...th.tooltip, trigger: "item", formatter: (it) => {
       const p = it.data && it.data.p;
       if (!p) return "";
