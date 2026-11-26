@@ -204,14 +204,14 @@ def _signoff_sdc(run_dir: Path, cfg: Dict[str, Any]) -> Optional[Path]:
     p = cfg.get("SIGNOFF_SDC_FILE")
     if not isinstance(p, str) or not p:
         return None
-    if Path(p).is_file():
-        return Path(p)
+    # This project's own copy first (a run copied in from another folder),
+    # then the path as the run recorded it.
     dd = str(cfg.get("DESIGN_DIR") or "").rstrip("/")
     if dd and p.startswith(dd + "/"):
         cand = Path(run_dir).parent.parent / p[len(dd) + 1:]
         if cand.is_file():
             return cand
-    return None
+    return Path(p) if Path(p).is_file() else None
 
 
 def _config_env(cfg: Dict[str, Any]) -> Dict[str, str]:
