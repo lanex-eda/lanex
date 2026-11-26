@@ -2143,6 +2143,16 @@ def _install_gds3d() -> Dict[str, Any]:
     q = shlex.quote
     dest = bindir / "gds3d"
     pinned_commit = os.environ.get("LANEX_GDS3D_COMMIT", "")
+    if not pinned_commit:
+        # The commit this release was tested with (lanex/data/downloads.json),
+        # so a Tools install builds the same GDS3D as Windows Setup, never
+        # whatever the repository's HEAD is today.
+        try:
+            from .pdkfeed import downloads_manifest
+
+            pinned_commit = str((downloads_manifest().get("gds3d") or {}).get("commit") or "")
+        except Exception:
+            pinned_commit = ""
     if pinned_commit and not re.fullmatch(r"[0-9a-fA-F]{40}", pinned_commit):
         return {"ok": False, "reason": "LANEX_GDS3D_COMMIT is not a full commit SHA"}
     if pinned_commit:
