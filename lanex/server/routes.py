@@ -5272,7 +5272,8 @@ _GET_ROUTES = {
 # PDK removal, WSL memory, network, skip this version): server/routes_system.py.
 from . import routes_system as _routes_system  # noqa: E402
 
-ROUTES.extend(_routes_system.ROUTES)
+# A path another handler already serves (lane 1's /api/power/hold) keeps it.
+ROUTES.extend(r for r in _routes_system.ROUTES if r[0] not in {p for p, _ in ROUTES})
 _GET_ROUTES |= _routes_system.GET_ROUTES
 _POST_ROUTES |= _routes_system.POST_ROUTES
 _BOTH_ROUTES |= _routes_system.BOTH_ROUTES

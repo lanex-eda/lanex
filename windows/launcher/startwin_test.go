@@ -98,6 +98,22 @@ func TestMarkerWriterMovesTheStartWindowAndKeepsTheLog(t *testing.T) {
 	}
 }
 
+func TestServerEnvPassesTheProfileAsLinuxPaths(t *testing.T) {
+	got := serverEnv([]string{"PATH=x", "WSLENV=HTTP_PROXY:usERPROFILE/p"})
+	var wslenv string
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "WSLENV=") {
+			wslenv = kv
+		}
+	}
+	if wslenv != "WSLENV=HTTP_PROXY:usERPROFILE/p:LOCALAPPDATA/p" {
+		t.Fatalf("WSLENV: %q", wslenv)
+	}
+	if got := serverEnv([]string{"PATH=x"}); got[len(got)-1] != "WSLENV=USERPROFILE/p:LOCALAPPDATA/p" {
+		t.Fatalf("fresh WSLENV: %q", got)
+	}
+}
+
 func TestShareTextHidesUserAndProxy(t *testing.T) {
 	s := shareText(`C:\Users\José Test\AppData x /mnt/c/Users/jose/y http://proxy.corp:8080/ https://ghcr.io/v2/`)
 	if strings.Contains(s, "José") || strings.Contains(s, "jose") || strings.Contains(s, "proxy.corp") {

@@ -227,6 +227,9 @@ def status(*, total_gb: Optional[float] = None) -> Dict[str, Any]:
                 avail = round(int(line.split()[1]) * 1024 / (1 << 30), 1)
     except Exception:
         pass
+    if total is None and not cur.get("value") and linux:
+        # Without interop to ask Windows: WSL's default is half the PC.
+        total = round(linux * 2)
     default_gb = round(total / 2, 1) if total else None
     hi = max(MIN_GB, int(total) - 4) if total else None
     lanex = {}

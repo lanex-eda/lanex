@@ -26,7 +26,7 @@ of them when Windows uses no proxy and no company certificate:
 Never: a password (a proxy URL with user:pass@ is refused), TLS verification
 turned off, /etc/docker/daemon.json, .wslconfig, or Windows' own settings. Docker
 is restarted only when no container is running (a restart would kill a run);
-otherwise /var/lib/lanex/network.pending records it and ``--restart-if-idle``
+otherwise /etc/lanex/network.pending records it and ``--restart-if-idle``
 finishes it later. The last line of output is a JSON result.
 
 stdlib only: it runs before LanEx's own Python environment exists.
@@ -309,7 +309,8 @@ def apply(snap: Dict[str, Any], cert_text: str, *, root: str = "/", restart: boo
     pending = False
     if (docker_changed or certs_changed) and root == "/":
         pending = not restart_docker_if_idle(reload=True, allowed=restart)
-    state_dir = _p(root, "/var/lib/lanex")
+    # /etc/lanex, not /var/lib/lanex (0700): the app reads these as the appliance user.
+    state_dir = _p(root, "/etc/lanex")
     os.makedirs(state_dir, exist_ok=True)
     pend = os.path.join(state_dir, "network.pending")
     if pending:
@@ -378,7 +379,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps({"ok": True, "installed": dest}))
                 return 0
         if args.restart_if_idle:
-            pend = _p(args.root, "/var/lib/lanex/network.pending")
+            pend = _p(args.root, "/etc/lanex/network.pending")
             if not os.path.exists(pend):
                 print(json.dumps({"ok": True, "pending": False}))
                 return 0

@@ -191,8 +191,25 @@ def h_update_skip(handler: Any) -> None:
     r._respond(handler, updatecheck.skip_version(str(_body(handler).get("version") or "")))
 
 
+def h_power_hold(handler: Any) -> None:
+    """Keep the PC awake? (The Windows launcher asks every 5 s, power.go.)
+
+    A fallback for builds without the run engine's own endpoint (lane 1):
+    hold while a flow run is going. routes.py adds it only when no other
+    handler serves /api/power/hold."""
+    r = _r()
+    try:
+        from .app import get_runner
+
+        running = bool(getattr(get_runner(), "running", False))
+    except Exception:
+        running = False
+    r._respond(handler, {"hold": running, "reason": "a chip design run is in progress" if running else ""})
+
+
 ROUTES = [
     ("/api/doctor", h_doctor),
+    ("/api/power/hold", h_power_hold),
     ("/api/system/storage", h_storage),
     ("/api/system/cleanup/image", h_cleanup_image),
     ("/api/system/cleanup", h_cleanup),
@@ -203,7 +220,8 @@ ROUTES = [
     ("/api/pdk/remove-version", h_pdk_remove_version),
     ("/api/update-check/skip", h_update_skip),
 ]
-GET_ROUTES = {"/api/doctor", "/api/system/storage", "/api/system/cleanup", "/api/pdk/inventory"}
+GET_ROUTES = {"/api/doctor", "/api/system/storage", "/api/system/cleanup", "/api/pdk/inventory",
+              "/api/power/hold"}
 POST_ROUTES = {"/api/system/cleanup/image", "/api/pdk/remove-variant", "/api/pdk/remove-version",
                "/api/update-check/skip"}
 BOTH_ROUTES = {"/api/system/wsl-memory", "/api/system/network"}

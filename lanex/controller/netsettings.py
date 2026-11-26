@@ -43,8 +43,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 PROXY_ENV = Path("/etc/lanex/proxy.env")
-APPLIED = Path("/var/lib/lanex/network.applied.json")
-PENDING = Path("/var/lib/lanex/network.pending")
+APPLIED = Path("/etc/lanex/network.applied.json")
+PENDING = Path("/etc/lanex/network.pending")
 APPLIER = Path("/usr/local/lib/lanex/network-apply")
 CA_DIR = Path("/usr/local/share/ca-certificates/lanex")
 _ENV_KEYS = ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy",
@@ -105,6 +105,10 @@ def _host(url: str) -> str:
 # ---------------------------------------------------------------- Windows snapshot
 
 def windows_state_dir() -> Optional[Path]:
+    # LOCALAPPDATA as a Linux path when the launcher passed it (WSLENV /p).
+    lad = os.environ.get("LOCALAPPDATA", "")
+    if lad.startswith("/mnt/") and Path(lad).is_dir():
+        return Path(lad) / "LanEx" / "state"
     try:
         from . import platform_env
 
@@ -282,12 +286,26 @@ def docker_proxy() -> Dict[str, Any]:
         return {}
 
 
+def _exists(p: Path) -> bool:
+    """A file check that a folder this user cannot read never turns into an error."""
+    try:
+        return p.exists()
+    except OSError:
+        return False
+
+
 def status() -> Dict[str, Any]:
     """What the Tools Network tile shows. No credentials, ever."""
-    env = parse_env_file(PROXY_ENV.read_text(encoding="utf-8")) if PROXY_ENV.is_file() else {}
+    try:
+        env = parse_env_file(PROXY_ENV.read_text(encoding="utf-8")) if PROXY_ENV.is_file() else {}
+    except OSError:
+        env = {}
     snap = read_snapshot() or {}
     applied = applied_summary()
-    certs = sorted(p.name for p in CA_DIR.glob("*.crt")) if CA_DIR.is_dir() else []
+    try:
+        certs = sorted(p.name for p in CA_DIR.glob("*.crt")) if CA_DIR.is_dir() else []
+    except OSError:
+        certs = []
     proxy = env.get("HTTPS_PROXY") or env.get("HTTP_PROXY") or ""
     try:
         from . import platform_env
@@ -313,7 +331,7 @@ def status() -> Dict[str, Any]:
         "docker_uses_proxy": bool(dp.get("https") or dp.get("http")) if proxy else None,
         "applied_at": applied.get("applied_at") or 0,
         "snapshot_at": snap.get("generated") or "",
-        "pending": PENDING.exists(),
+        "pending": _exists(PENDING),
         "current": bool(snap_hash) and snap_hash == applied.get("input_hash"),
         "auth": snap.get("auth") or "",
         "problems": [p for p in (snap.get("problems") or []) if isinstance(p, str)][:5],

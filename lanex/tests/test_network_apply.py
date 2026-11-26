@@ -64,7 +64,7 @@ def test_proxy_reaches_apt_docker_and_the_environment(na, tmp_path):
     dock = (root / "etc/systemd/system/docker.service.d/90-lanex-proxy.conf").read_text()
     assert dock.startswith("# Managed by LanEx") and '"HTTPS_PROXY=http://proxy.corp.example:8080/"' in dock
     assert (root / "etc/systemd/system/containerd.service.d/90-lanex-proxy.conf").is_file()
-    applied = json.loads((root / "var/lib/lanex/network.applied.json").read_text())
+    applied = json.loads((root / "etc/lanex/network.applied.json").read_text())
     assert applied["mode"] == "pac" and "docker" in applied["changed"]
     # Same input again: nothing changes.
     assert na.apply(_snap(), "", root=str(root), restart=False, gateway="")["changed"] == []

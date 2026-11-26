@@ -931,6 +931,11 @@ def wsl_windows_home() -> Optional[str]:
     """
     if not is_wsl():
         return None
+    # The Windows launcher hands it over through WSLENV (USERPROFILE/p), which
+    # works even where WSL's interop is off (systemd can unregister it).
+    env_home = os.environ.get("USERPROFILE", "")
+    if env_home.startswith("/mnt/") and Path(env_home).is_dir():
+        return env_home
     try:
         import subprocess
         out = subprocess.run(

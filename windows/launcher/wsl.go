@@ -166,6 +166,7 @@ func decodeUTF16LE(b []byte) string {
 // tray.waitReady opens exactly one app window only after that Windows-side probe.
 func startServer(sw *startWin) (*exec.Cmd, error) {
 	cmd := hiddenCmd(wslExe, startServerArgs()...)
+	cmd.Env = serverEnv(os.Environ())
 	// The appliance's stdout/stderr is the only diagnostic that exists when a
 	// launch fails, and the failure dialogs point the user at this file. The
 	// writer also watches for the two lines that move the start window on.
@@ -212,6 +213,37 @@ func startServerArgs() []string {
 		"LANEX_MANIFEST_HASH=" + activeConfig.Manifest,
 		"bash", "-ic",
 		"printf '" + markerLinux + "\\n'; cd ~ 2>/dev/null; exec lanex --no-browser"}
+}
+
+// serverEnv hands the server the Windows profile and app-data folders as
+// Linux paths (WSLENV's /p), so LanEx finds .wslconfig and its network
+// snapshot even where WSL's interop is switched off.
+func serverEnv(env []string) []string {
+	out := make([]string, 0, len(env)+1)
+	wslenv := ""
+	for _, kv := range env {
+		if strings.HasPrefix(strings.ToUpper(kv), "WSLENV=") {
+			wslenv = kv[len("WSLENV="):]
+			continue
+		}
+		out = append(out, kv)
+	}
+	for _, add := range []string{"USERPROFILE/p", "LOCALAPPDATA/p"} {
+		name := strings.SplitN(add, "/", 2)[0]
+		has := false
+		for _, part := range strings.Split(wslenv, ":") {
+			if strings.EqualFold(strings.SplitN(part, "/", 2)[0], name) {
+				has = true
+			}
+		}
+		if !has {
+			if wslenv != "" {
+				wslenv += ":"
+			}
+			wslenv += add
+		}
+	}
+	return append(out, "WSLENV="+wslenv)
 }
 
 // markerWriter passes the server's output to launcher.log and moves the start
