@@ -30,7 +30,7 @@ import * as FS from "./flowstages.js";
 import * as AM from "./analytics-model.js";
 import { LogView } from "./logview.js";
 import { fileActionsHtml, wireFileActions } from "./fileview.js";
-import { liveLines, liveRows, onLiveLog } from "./logs.js";
+import { liveLines, liveRows, onLiveLog, droppedLines } from "./logs.js";
 import { reportCardHtml, verdictOf, fmtDur } from "./reportcard.js";
 import { fixListHtml, problemsOf } from "./problems.js";
 import { loadingStart, pageSkeleton } from "./loading.js";
@@ -955,11 +955,20 @@ async function setLogSource(src, { live = false, step = null } = {}) {
   F.logSrc = src;
   const L = F.log;
   L.setFollowable(live);
+  // The whole run's output on disk (the console LanEx keeps, else flow.log):
+  // Download, and "Load the full log" when the page kept only the newest lines.
+  const runTag = src.startsWith("run:") ? F.tag : (state.liveTag || F.tag);
+  if (runTag && state.designDir && !src.startsWith("step:") && (src === "live" || src.startsWith("stream:") || src.startsWith("run:") || src.startsWith("live:"))) {
+    L.setSource({
+      download: api.runLogUrl(state.designDir, runTag),
+      loadFull: () => api.runLog(state.designDir, runTag).then((r) => (r && r.text) || ""),
+    });
+  } else L.setSource({});
   if (src === "live" || src.startsWith("stream:")) {
     // The whole run as it printed; after it ends the same lines stay (the
     // run you just watched), ending at how it went.
     L.setRaw("");
-    L.setText(liveLines().join("\n"), { empty: "The run's output appears here as it goes." });
+    L.setText(liveLines().join("\n"), { empty: "The run's output appears here as it goes.", dropped: droppedLines() });
     if (live) L.setFollow(true); else L.end();
     return;
   }
@@ -1105,7 +1114,7 @@ function wireOnce() {
     // been going a while (audit G6).
     else if (act === "stop") import("./setup.js").then((m) => m.requestStop());
     else if (act === "stop-start") import("./setup.js").then(async (m) => { await m.requestStop(); paint(); });
-    else if (act === "resume") api.resumeRun().catch(() => {});
+    else if (act === "resume") api.resumeRun(state.followJob).catch(() => {});
     else if (act === "resume-from") {
       import("./setup.js").then((m) => m.resumeFrom(a.dataset.stage))
         .then((why) => { if (why) toast.show(why, "warn", 9000); })

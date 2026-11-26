@@ -23,6 +23,7 @@ import { setupWizard } from "./modules/wizard.js";
 import { icon } from "./modules/icons.js";
 import { setupFullscreen } from "./modules/fullscreen.js";
 import { setupTooltips } from "./modules/tooltip.js";
+import { followsRun, sameDesign, followJob } from "./modules/runfollow.js";
 
 // ---------------------------------------------------------------- pages on demand
 // Each page's code loads the first time it is needed (its tab opens, or an
@@ -125,6 +126,8 @@ async function boot() {
     import("./modules/logdrawer.js").then((d) => d.setupLogDrawer()).catch(() => {});
     // The Console drawer (Ctrl+` and the status-line Console button).
     import("./modules/console.js").then((m) => m.setupConsole()).catch((e) => console.error("console", e));
+    // The run queue chip left of Run (every page).
+    import("./modules/queue.js").then((m) => m.setupQueue()).catch((e) => console.error("queue", e));
     setupPalette();
     setupRunMode();
     setupSetup();
@@ -262,9 +265,49 @@ function R(label, fn) {
   try { fn(); } catch (e) { console.error("render:" + label, e); }
 }
 
+// ---------------------------------------------------------------- which run a window follows
+// Several runs can go at once (the job queue: two projects, a sweep's points).
+// Every run event carries job_id and design_dir; a window follows one run of
+// its open project (runfollow.js decides which) and lets the others through
+// only to the queue chip and the Runs list.
+const RUN_EVENTS = new Set(["info", "phase", "log", "progress", "step_started", "step_done", "step_skipped",
+  "step_failed", "flow_done"]);
+
 function handle(ev) {
   if (!ev || !ev.type) return;
+  if (ev.type === "queue:changed" || ev.type === "queue:job") {
+    document.dispatchEvent(new CustomEvent("g:queue", { detail: ev }));
+    return;
+  }
+  if (RUN_EVENTS.has(ev.type) && ev.job_id && !followsRun(ev, state)) {
+    otherRunEvent(ev);
+    return;
+  }
+  handleFollowed(ev);
+}
 
+// The queue's Show picked a run going now: Flow follows it from here (its
+// steps so far from the server; its output from this moment on, the rest is
+// in its log file).
+document.addEventListener("g:follow", (e) => {
+  const s = (e.detail || {}).status || {};
+  renderLogs.clear();
+  state.stepStatuses = {};
+  state.status.running = !!s.running;
+  if (s.run_dir) state.liveTag = String(s.run_dir).split(/[\\/]/).pop();
+  handleFollowed(Object.assign({ type: "run_status_resync", reason: "follow" }, s));
+  paintRunning(!!s.running);
+});
+
+// A run this window doesn't show: the Runs list still hears it start and end.
+function otherRunEvent(ev) {
+  if (ev.type === "flow_done" || (ev.type === "info" && Array.isArray(ev.step_graph))) {
+    if (sameDesign(ev.design_dir, state.designDir)) ifLoaded("runs", (m) => m.renderRuns());
+    document.dispatchEvent(new CustomEvent("g:other_run", { detail: ev }));
+  }
+}
+
+function handleFollowed(ev) {
   if (ev.type === "info") {
     if (Array.isArray(ev.step_graph)) {
       state.pipeline = ev.step_graph;
@@ -311,17 +354,9 @@ function handle(ev) {
   } else if (ev.type === "log") {
     renderLogs.append(ev);
   } else if (ev.type === "dse_config_started") {
-    // A new DSE config is starting: clear the previous config's step statuses
-    // immediately so the pipeline/timeline don't keep showing it as "done" while
-    // the next container spins up (its step_graph arrives a few seconds later).
-    for (const p of (state.pipeline || [])) state.stepStatuses[p.id] = "pending";
-    state.status.running = true;
-    resetTimings();
-    state.prepStart = Date.now();
-    state.prepPhase = "Sweep run " + (((ev.index || 0) + 1)) + " of " + (ev.total || "?") + (ev.tag ? " (" + ev.tag + ")" : "") + ": preparing…";
-    ifLoaded("flow", (m) => m.flowEvent(ev));
-    // A sweep point is a run: the top bar shows Stop and the status bar "running".
-    import("./modules/setup.js").then((m) => m.paintRunning(true)).catch(() => {});
+    // A sweep point was handed to the job queue (every point at once: the
+    // queue runs as many as fit). It shows on Flow when it really starts (its
+    // own step_graph, with its job_id), not now.
     document.dispatchEvent(new CustomEvent("g:sweep", { detail: ev }));
   } else if (ev.type === "dse_config_done" || ev.type === "dse_done") {
     // Runs shows each point's real outcome as it lands.
@@ -403,6 +438,7 @@ function handle(ev) {
     // states behind a green "connected" chip (N3, Fear F). Disk-derived tabs
     // already re-read truth; this fixes the live view.
     state.stepStatuses = state.stepStatuses || {};
+    if (ev.job_id) followJob(state, ev.job_id, !!ev.running);
     if (ev.step_statuses && typeof ev.step_statuses === "object") {
       for (const [id, st] of Object.entries(ev.step_statuses)) {
         if (st) state.stepStatuses[id] = st;
@@ -623,6 +659,8 @@ window.addEventListener("DOMContentLoaded", () => {
   // A page opened while a run (or a sweep point) is going shows Stop and
   // "running", not Run and "idle": the run's start event came before the page.
   Promise.resolve(boot()).then(() => api.runStatus()).then((s) => {
+    // The run this window follows: the open project's newest live job.
+    if (s && s.job_id) followJob(state, s.job_id, !!s.running);
     if (!s || !s.running) return;
     state.status.running = true;
     if (s.run_dir) state.liveTag = String(s.run_dir).split(/[\\/]/).pop();

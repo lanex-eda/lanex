@@ -148,7 +148,7 @@ export const api = {
   enableDockerGroup: () => _fetch("/api/container/enable-docker-group", { method: "POST", body: "{}" }),
   startEngine: (engine) =>
     _fetch("/api/container/start-engine", { method: "POST", body: JSON.stringify({ engine }) }),
-  runStatus: () => _fetch("/api/run/status"),
+  runStatus: (jobId) => _fetch("/api/run/status" + (jobId ? "?job_id=" + encodeURIComponent(jobId) : "")),
   // The first listing of a big project on /mnt/c summarises every run once
   // (later ones come from the server's cache): give it time.
   // (Opening a project and the shared run list ask at the same moment: one request.)
@@ -224,6 +224,7 @@ export const api = {
   resumeRun: (jobId) => _fetch("/api/run/resume", { method: "POST", body: JSON.stringify(jobId ? { job_id: jobId } : {}) }),
   // ---------- the job queue (controller/jobs.py documents every field)
   queue: () => _fetch("/api/queue"),
+  queueAdd: (body) => _fetch("/api/queue/add", { method: "POST", body: JSON.stringify(body), timeout: 120000 }),
   queueMove: (id, to) => _fetch("/api/queue/move", { method: "POST", body: JSON.stringify({ id, to }) }),
   queueRemove: (sel) => _fetch("/api/queue/remove", { method: "POST", body: JSON.stringify(sel) }),
   queuePause: (paused) => _fetch("/api/queue/pause", { method: "POST", body: JSON.stringify({ paused: !!paused }) }),

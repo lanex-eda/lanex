@@ -1309,6 +1309,10 @@ class FlowRunner:
                 initial_state=initial_state,
                 entry_module="lanex.controller.librelane_entry",
             )
+            # What really runs, kept in gui-run.json: the run menu's command and
+            # the recorded cli_command must equal it (tests check the builders).
+            if self._gui_meta is not None:
+                self._gui_meta["launched_argv"] = list(argv)
             argv, run_env = self._container_launch(argv)
 
             self._emit(

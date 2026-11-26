@@ -33,6 +33,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_console_reproduce": "The Console's Reproduce block gives the exact command, config and image a run used, so it reruns headless without LanEx.",
     "test_harden": "A web page can't drive LanEx through a rebound domain; Console commands, reproduce scripts and sweep values can't smuggle in shell commands; nothing runs into a missing project folder; 300 runs list fast.",
     "test_sweeps":"A sweep point that failed is shown as failed with its reason, points are named by their value, and stop-early halts the queue.",
+    "test_run_command_parity": "The command the Run menu shows, and the one a run records for Reproduce, is exactly the command LanEx launches.",
     "test_jobs": "Runs wait in a per-project queue that survives a restart, two projects run at once, a sweep runs N points at a time within memory, an interrupted run continues in its own folder, the PC is held awake while runs go, and a run started in a terminal is followed live.",
     "test_sweep_audit": "A sweep value LibreLane would refuse is caught before any run, the clock comes from the config section that applies, a fixed die blocks a utilisation sweep, a sweep says why it ended short, it can be continued, and Compare never calls a failed run the best.",
     "test_tools_tab_facts": "The Tools page reports installed versus LanEx-tested versions honestly and labels anything else Custom.",

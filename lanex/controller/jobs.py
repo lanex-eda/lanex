@@ -864,7 +864,7 @@ class Scheduler:
         else:
             bits.append(f"LanEx doesn't know yet how much memory {name} needs, so it counts 2 GB a run")
         if free is not None:
-            bits.append(f"{float(free):.1f} GB is free, and {auto['reserve_gb']:.0f} GB is kept for the system")
+            bits.append(f"{float(free):.1f} GB is free, and {auto['reserve_gb']:.1f} GB is kept for the system")
         why = ". ".join(bits) + ". More at once won't make any single run faster."
         if setting != "auto":
             why = f"At most {n} at once (your setting). LanEx still waits when memory is short. " + why

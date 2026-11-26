@@ -169,10 +169,32 @@ def update(want: bool, reason: str = "", jobs: int = 0) -> Dict[str, Any]:
         return dict(_state)
 
 
+_last_poll = [0.0]
+POLL_FRESH_S = 30.0
+
+
+def note_poll() -> None:
+    """The Windows launcher asked ``/api/power/hold`` (it holds Windows awake)."""
+    _last_poll[0] = time.monotonic()
+
+
+def launcher_polling() -> bool:
+    return _last_poll[0] > 0 and time.monotonic() - _last_poll[0] < POLL_FRESH_S
+
+
 def state() -> Dict[str, Any]:
+    """The hold as the page shows it. ``held`` says whether something really
+    holds the PC: a process here, or the Windows launcher polling."""
     with _lock:
         out = dict(_state)
     out["enabled"] = enabled()
+    if out.get("how") == "windows-launcher" or (not out.get("how") and is_wsl()):
+        out["how"] = "windows-launcher"
+        out["held"] = bool(out.get("hold")) and launcher_polling()
+        if out.get("hold") and not out["held"]:
+            out["note"] = "Windows isn't being held awake: LanEx's own window (the launcher) holds it while it is open."
+    else:
+        out["held"] = bool(out.get("hold")) and bool(out.get("held_here"))
     return out
 
 

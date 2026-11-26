@@ -524,7 +524,11 @@ def h_tools(handler: Any) -> None:
 
 def h_run_status(handler: Any) -> None:
     from ..server.app import get_runner
-    r = get_runner()
+    from ..controller import jobs
+    # ?job_id= : one queue job's run (the queue popover's Show); else the run
+    # the open project follows.
+    want = _query_param(handler.path, "job_id")
+    r = (jobs.scheduler.runner(want) if want else None) or get_runner()
     # A run cancelled before LibreLane created its run dir leaves status
     # pointing at a path that never came to exist, while /api/runs (rightly)
     # doesn't list it. Report None instead of a phantom path so the two
@@ -2023,8 +2027,19 @@ def h_cli_command(handler: Any) -> None:
         return
     run_mode = "container" if body.get("run_mode") == "container" else "local"
     # Assemble EXACTLY like a real run so the revealed command is faithful:
-    # cleaned overrides + custom cells + macro overlay + picker sources (A3).
-    asm = _assemble_overrides(design_dir, body)
+    # cleaned overrides + custom cells + macro overlay + picker sources (A3),
+    # and threads sized to the share of the PC this run would get if it
+    # started now beside the runs going (the run menu's live command).
+    share = None
+    try:
+        from ..controller import jobs as _jobs
+        k = _jobs.scheduler.running_count() + 1
+        if k > 1:
+            f = _jobs.scheduler.facts()
+            share = _jobs.share_of(f.get("cores"), f.get("free_gb"), k)
+    except Exception:
+        share = None
+    asm = _assemble_overrides(design_dir, body, share=_thread_share(body, share))
     pdk, scl = asm["pdk"], asm["scl"]
     pdk_root = os.environ.get("PDK_ROOT") or None
     try:
@@ -2040,11 +2055,12 @@ def h_cli_command(handler: Any) -> None:
         cli_flow = None if _fl["error"] else _fl["cli"]
     except Exception:
         cli_flow = None
+    only = body.get("only") or None
     cmd = manualcmd.cli_command_for(
         design_dir=design_dir, config_file=str(config_file),
         flow=cli_flow, pdk=pdk, scl=scl, pdk_root=pdk_root,
         run_mode=run_mode, tag=body.get("tag") or None,
-        frm=body.get("frm") or None, to=body.get("to") or None,
+        frm=only or body.get("frm") or None, to=only or body.get("to") or None,
         skip=body.get("skip") or [], overrides={**asm["overrides"], **asm["threads"]},
         extra_sources=asm["extra_sources"], extra_extras=asm["extra_extras"],
         extra_config_files=asm["extra_config_files"],
@@ -2316,6 +2332,7 @@ def h_power_hold(handler: Any) -> None:
     and holds Windows awake (``SetThreadExecutionState``/``PowerSetRequest``)
     while ``hold`` is true; macOS and Linux are held by the server itself."""
     from ..controller import jobs, power
+    power.note_poll()
     want, why, n = jobs.scheduler.hold_wanted()
     st = power.state()
     hold = bool(want) and st.get("enabled", True)
@@ -5632,13 +5649,22 @@ def _apply_fix(handler: Any, body: Dict[str, Any]) -> None:
         # the top-module/clock reading doesn't hold it up (a config LibreLane
         # refuses still does; see _start_run).
         "checks_ack": bool(r) or bool(body.get("checks_ack")),
+        # "Add to queue" from the Run menu: the resumed run waits its turn.
+        "when": body.get("when") or "now",
     }
     state = str(Path(design_dir) / r["state"]) if r and r.get("state") else None
     data, st = _start_run(run_body, initial_state=state, branched_from=branch.branch_meta(p) if r else None)
+    if st == 200 and isinstance(data, dict) and data.get("busy"):
+        _respond(handler, {**data, "ok": False, "started": False, "tag": p["tag"], "undo": undo, "plan": p})
+        return
     if st != 200 or not (isinstance(data, dict) and data.get("ok")):
         # The config change stays (with its Undo): say so rather than hide it.
         msg = data if st != 200 else (data or {}).get("reason") or "the run didn't start"
         _respond(handler, {"ok": True, "started": False, "error": str(msg), "undo": undo, "plan": p})
+        return
+    if data.get("queued") or data.get("busy"):
+        _respond(handler, {**data, "ok": not data.get("busy"), "started": False, "tag": p["tag"], "resume": r,
+                           "undo": undo, "plan": p})
         return
     _respond(handler, {"ok": True, "started": True, "tag": p["tag"], "resume": r, "undo": undo,
                        "changes": p["changes"], "command": data.get("command")})
