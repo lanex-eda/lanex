@@ -103,6 +103,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_file_rename": "Renaming a file in the RTL IDE never overwrites or escapes the project, and the config keeps building it.",
     "test_ide_file_safety": "An IDE save never overwrites a newer file on disk (409, the person chooses), Add files never replaces silently, saves keep CRLF and the file mode, and lint/simulation read the config's files, defines and include dirs.",
     "test_template_benches": "Every template's testbench passes under Icarus and Verilator with LanEx's own commands, and fails when its design is broken.",
+    "test_ide_navigation": "Go to definition and references find the right declaration across files (ports, instances, macros, VHDL), project search and replace never touch a newer file, a simulation's PASS/FAIL comes from the simulator's own words, and the schematic reads the design as synthesis does.",
     "test_fixloop": "A fix names the first step that reads its setting and resumes the run there; config edits land in the right section and Undo restores the file byte for byte; timing and DRC diagnoses say only what LibreLane's reports support.",
     "test_watch_pin": "Run watch/pin/notes persist and read back correctly.",
     "test_dse_reverify": "DSE sweeps + targeted re-verify launch through the SAME assembly path as a normal run (Fear B).",

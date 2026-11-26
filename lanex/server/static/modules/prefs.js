@@ -41,8 +41,8 @@ export const PREFS = [
   { id: "lintOnSave", key: "ll.lintOnSave", group: "Editor", label: "Check syntax on save", type: "bool", def: "1", on: "1", off: "0",
     hint: "Runs Verilator each time you save a Verilog file." },
   { id: "simTimeLimit", key: "ll.simTimeLimit", group: "Editor", label: "Simulation time limit", type: "choice", def: "120",
-    options: [["30", "30 s"], ["120", "2 min"], ["600", "10 min"], ["1800", "30 min"]],
-    hint: "A testbench that never reaches $finish is stopped after this long. Its waveform so far still shows." },
+    options: [["30", "30 s"], ["120", "2 min"], ["600", "10 min"], ["1800", "30 min"], ["3600", "1 h"]],
+    hint: "A testbench that never reaches $finish is stopped after this long. Its waveform so far still shows. A testbench's own Run settings can set another." },
 
   // ---- Layout (modules/layout.js)
   { id: "layoutKey", key: "ll.lx.key", group: "Layout", label: "Show the key on the layout", type: "bool", def: "1", on: "1", off: "0",
@@ -64,7 +64,7 @@ export const PREFS = [
 // heights, recent lists, drafts). "Reset every preference" leaves these.
 export const STATE_PREFIXES = ["ll.recentDesigns", "ll.tab", "ll.context", "ll.draft:", "ll.rtl:", "ll.wave:", "ll.simok.",
   "ll.guide.", "ll.paletteRecent", "ll.consoleHistory", "ll.runsBaseline", "ll.userPresets", "ll.ranOnce",
-  "ll.updateDismissed", "ll.notifyAsked"];
+  "ll.updateDismissed", "ll.notifyAsked", "ll.bench:", "ll.ideRecent:", "ll.ideSearch", "ll.ideRunSet"];
 
 const BY_ID = Object.fromEntries(PREFS.map((p) => [p.id, p]));
 

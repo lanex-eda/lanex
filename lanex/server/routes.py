@@ -4220,6 +4220,11 @@ def h_file_write(handler: Any) -> None:
             return
         _respond(handler, result.get("error"), 400)
         return
+    try:
+        from ..controller import hdlindex
+        hdlindex.note_saved(design_dir, result.get("path") or rel)
+    except Exception:
+        pass
     _respond(handler, result)
 
 
@@ -4239,6 +4244,11 @@ def h_file_delete(handler: Any) -> None:
     if not result.get("ok"):
         _respond(handler, result.get("error"), 400)
         return
+    try:
+        from ..controller import hdlindex
+        hdlindex.note_saved(design_dir, rel)
+    except Exception:
+        pass
     # The config follows: a deleted design file leaves an explicit
     # VERILOG_FILES list (a glob stops matching it by itself).
     from ..controller import configedit
@@ -4279,6 +4289,12 @@ def h_file_rename(handler: Any) -> None:
         _respond(handler, result.get("error"), 400)
         return
     try:
+        from ..controller import hdlindex
+        hdlindex.note_saved(d, rel)
+        hdlindex.note_saved(d, result.get("rel") or new_rel)
+    except Exception:
+        pass
+    try:
         cfg = configedit.follow_rename(d, str(Path(d) / rel), result["abs"], before)
         result["config"] = {"name": cfg.get("name"), "changed": cfg.get("changed") or []}
     except configedit.ConfigEditError as ex:
@@ -4314,22 +4330,29 @@ def h_lint(handler: Any) -> None:
     include_dirs = [s for s in (body.get("include_dirs") or []) if s]
     defines = body.get("defines") if isinstance(body.get("defines"), dict) else {}
     cfg_used: Optional[Dict[str, Any]] = None
+    disable_warnings: List[str] = []
     if body.get("from_config"):
         ci = lint.config_inputs(design_dir, for_lint=True)
         cfg_used = {"mode": ci["mode"], "name": ci["name"], "reason": ci["reason"],
                     "missing": ci["missing"], "files": ci["files"]}
+        disable_warnings = list(ci.get("disable_warnings") or [])
         if ci["mode"] == "list" and ci["files"]:
             m = lint.merge_inputs(ci, extra_sources=body.get("extra_sources") or [],
                                   include_dirs=include_dirs, defines=defines)
             sources, include_dirs, defines = m["sources"], m["include_dirs"], m["defines"]
-    if not sources:
+        else:
+            # The flow's own defines still apply (`ifdef __librelane__ ...).
+            defines = {**(ci.get("defines") or {}), **defines}
+    vhdl_files = [str(v) for v in (body.get("vhdl_sources") or []) if str(v).lower().endswith((".vhd", ".vhdl"))]
+    sources = [x for x in sources if not str(x).lower().endswith((".vhd", ".vhdl"))]
+    if not sources and not vhdl_files:
         try:
             walked = fsbrowser.walk_sources(design_dir)
             sources = [s["relpath"] for s in (walked.get("sources") or [])
                        if str(s.get("relpath", "")).lower().endswith((".v", ".sv"))]
         except Exception:
             sources = []
-    if not sources:
+    if not sources and not vhdl_files:
         _respond(handler, "no Verilog sources found to lint", 400)
         return
 
@@ -4361,7 +4384,16 @@ def h_lint(handler: Any) -> None:
         # delays and event controls only with --timing; 4.x doesn't know it.
         timing=(run_mode == "container"
                 or (lint.verilator_major(platform_env.usable_which("verilator") or "verilator") or 0) >= 5),
-    )
+        disable_warnings=disable_warnings,
+    ) if sources else []
+    # VHDL files: GHDL's analysis in the image (experimental, see vhdltools),
+    # in the same job so Problems shows both.
+    vhdl_note = None
+    if vhdl_files:
+        argv, vhdl_note = _lint_with_vhdl(design_dir, argv, vhdl_files)
+        if not argv:
+            _respond(handler, vhdl_note or "VHDL files can't be checked here.", 400)
+            return
     if run_mode == "container" and engine_name and tools_mod.resolve_engine().get("sg_wrap"):
         argv = tools_mod.sg_wrap_argv(argv)
     try:
@@ -4370,13 +4402,40 @@ def h_lint(handler: Any) -> None:
             _respond(handler, result.get("error"), 400)
             return
         result["engine"] = "container" if run_mode == "container" else "verilator"
-        result["sources"] = list(sources)
+        result["sources"] = list(sources) + list(vhdl_files)
+        if vhdl_note:
+            result["vhdl_note"] = vhdl_note
         if cfg_used is not None:
             result["config"] = cfg_used
         _respond(handler, result)
     except Exception as ex:
         _log.exception("lint start failed")
         _respond(handler, str(ex), 500)
+
+
+def _lint_with_vhdl(design_dir: str, argv: List[str], vhdl_files: List[str]) -> Tuple[List[str], Optional[str]]:
+    """The lint argv with GHDL's analysis of *vhdl_files* added (in the image),
+    or the argv unchanged and a note saying why VHDL isn't checked."""
+    import shlex
+    from ..controller import container_run, vhdltools
+    from ..controller.configcheck import _permission_args
+    eng = tools_mod.resolve_engine()
+    if not eng.get("ready"):
+        return argv, "VHDL files weren't checked: that needs Docker or Podman for GHDL in the LibreLane image."
+    image = container_run.image_ref()
+    caps = vhdltools.caps(eng["engine"], image, wait=20.0)
+    if caps.get("state") != "ready":
+        return argv, caps.get("note") or "VHDL files weren't checked."
+    ghdl = vhdltools.lint_shell(vhdl_files)
+    if argv and argv[-3:-1] == ["bash", "-lc"] and argv[0] in ("docker", "podman"):
+        # the Verilog check runs in the image already: one container for both
+        out = list(argv)
+        out[-1] = out[-1] + "; rc=$?; " + ghdl + "; rc2=$?; exit $(( rc > rc2 ? rc : rc2 ))"
+        return out, None
+    gh = vhdltools.container_argv(eng["engine"], image, design_dir, ghdl, _permission_args(eng["engine"]))
+    if not argv:
+        return gh, None
+    return ["bash", "-lc", shlex.join(argv) + "; rc=$?; " + shlex.join(gh) + "; rc2=$?; exit $(( rc > rc2 ? rc : rc2 ))"], None
 
 
 def h_lint_result(handler: Any) -> None:
@@ -4395,138 +4454,119 @@ def h_sim_testbenches(handler: Any) -> None:
 
 
 def h_sim_start(handler: Any) -> None:
-    """Build + launch a Verilator simulation of a testbench (Phase 3.5)."""
+    """Build + launch a simulation of one testbench: Icarus or Verilator for
+    Verilog, GHDL (in the image) for VHDL, with the run settings' parameters,
+    plusargs, defines and time limit (simulate.plan_sim)."""
     from ..controller import simulate
     body = getattr(handler, "_body", {})
     design_dir = _get_active_design_dir()
     if not design_dir:
         _respond(handler, "no active design dir", 400)
         return
-    if simulate.job.running:
+    if simulate.job.running or simulate.batch.running:
         _respond(handler, "a simulation is already running", 400)
         return
-    top = (body.get("top") or "").strip()
-    testbench = (body.get("testbench") or "").strip()
-    sources = body.get("sources") or []
-    if not testbench:
-        _respond(handler, "missing testbench", 400)
+    plan = simulate.plan_sim(design_dir, body)
+    if not plan.get("ok"):
+        _respond(handler, plan.get("error"), 400)
         return
-    # Auto-derive the elaboration top from the testbench when the user didn't
-    # give one — typing the DUT name instead of the bench module is the usual
-    # cause of "ran but no VCD" (the bench's $dumpvars never executes).
-    if not top:
-        top = simulate.top_module_of(design_dir, testbench) or ""
-    if not top:
-        _respond(handler, "could not determine the testbench top module — open the "
-                          "testbench and ensure it declares `module <name>;`", 400)
-        return
-    trace = "fst" if body.get("trace") == "fst" else "vcd"
-    # The RTL-IDE simulator is an INDEPENDENT tool — it is NOT the hardening flow,
-    # so it does not follow the flow's container/local engine toggle. We pick the
-    # best place to run each engine on its own:
-    #   • iverilog : event-driven, 4-state, great for classic testbenches. The
-    #                host's when installed, else the LibreLane image's (3.0.4
-    #                ships Icarus on its PATH).
-    #   • verilator: the host's only. The image has Verilator but no make or
-    #                C++ compiler on its PATH, so `--binary` can't build there
-    #                (checked: "make ... exited with 127"); say so instead.
-    #   • auto     : host iverilog → host verilator → container iverilog.
-    req_engine = (body.get("sim_engine") or "auto").lower()
-    # usable_which skips Windows binaries on the WSL /mnt/c PATH so we never pick
-    # a Windows iverilog/verilator the Linux flow can't run.
-    has_iverilog = bool(platform_env.usable_which("iverilog") and platform_env.usable_which("vvp"))
-    has_verilator = bool(platform_env.usable_which("verilator"))
-    eng_info = tools_mod.resolve_engine()
-    has_container = bool(eng_info.get("ready"))
-
-    if req_engine == "iverilog":
-        if has_iverilog:
-            sim_engine, run_mode = "iverilog", "local"
-        elif has_container:
-            sim_engine, run_mode = "iverilog", "container"
-        else:
-            _respond(handler, "Icarus Verilog (iverilog/vvp) isn't installed on this machine and no "
-                              "container engine is available. Install Icarus from the Tools tab, then retry.", 400)
-            return
-    elif req_engine == "verilator":
-        if has_verilator:
-            sim_engine, run_mode = "verilator", "local"
-        else:
-            _respond(handler, "A Verilator simulation needs Verilator on this machine: the LibreLane "
-                              "image has no C++ build tools to compile one. Install Verilator from the "
-                              "Tools tab, or pick Icarus (Auto uses the image's Icarus).", 400)
-            return
-    else:  # auto
-        if has_iverilog:
-            sim_engine, run_mode = "iverilog", "local"
-        elif has_verilator:
-            sim_engine, run_mode = "verilator", "local"
-        elif has_container:
-            sim_engine, run_mode = "iverilog", "container"
-        else:
-            _respond(handler, "No simulator found. Install Icarus Verilog or Verilator from the "
-                              "Tools tab, or Docker/Podman for the LibreLane image's Icarus.", 400)
-            return
-
-    # Local sim builds + runs via `bash -lc` — fine on Linux/macOS/WSL2, but not
-    # native Windows. Fail with guidance instead of a cryptic FileNotFoundError.
-    if run_mode == "local" and not platform_env.usable_which("bash"):
-        _respond(handler, "Local simulation needs a POSIX shell (bash), which isn't available here. "
-                          "Use WSL2, or switch the engine to Container mode.", 400)
-        return
-
-    engine = None
-    env: Dict[str, str] = {}
-    container_name = None
-    if run_mode == "container":
-        engine = eng_info["engine"]
-        env = eng_info.get("env") or {}
-        import uuid as _uuid
-        container_name = "ll-sim-" + _uuid.uuid4().hex[:12]
-    # With from_config (the IDE): the design is the config's VERILOG_FILES with
-    # its VERILOG_DEFINES and VERILOG_INCLUDE_DIRS, as a run builds it, plus the
-    # simulation-only helpers the IDE adds; never another testbench.
-    defines = body.get("defines") if isinstance(body.get("defines"), dict) else {}
-    include_dirs = [s for s in (body.get("include_dirs") or []) if s]
-    cfg_used: Optional[Dict[str, Any]] = None
-    if body.get("from_config"):
-        from ..controller import lint as lint_mod
-        ci = lint_mod.config_inputs(design_dir)
-        cfg_used = {"mode": ci["mode"], "name": ci["name"], "reason": ci["reason"],
-                    "missing": ci["missing"], "files": ci["files"]}
-        if ci["mode"] == "list" and ci["files"]:
-            m = lint_mod.merge_inputs(
-                ci, extra_sources=body.get("extra_sources") or [],
-                exclude=[testbench] + [t for t in (body.get("testbenches") or []) if isinstance(t, str)],
-                include_dirs=include_dirs, defines=defines)
-            sources, include_dirs, defines = m["sources"], m["include_dirs"], m["defines"]
-    timeout = simulate.sim_timeout(body.get("timeout"))
-    argv = simulate.build_sim_command(
-        design_dir, top=top, sources=sources, testbench=testbench,
-        defines=defines, include_dirs=include_dirs,
-        trace=trace, run_mode=run_mode, engine=engine or "docker", container_name=container_name,
-        sim_engine=sim_engine,
-    )
-    # iverilog always emits VCD; Verilator honours the requested trace format.
-    vcd_name = "dump.fst" if (trace == "fst" and sim_engine == "verilator") else "dump.vcd"
-    result = simulate.job.start(argv, design_dir=design_dir, run_mode=run_mode, env=env,
-                                vcd_name=vcd_name, container_name=container_name, engine=engine,
-                                timeout=timeout)
+    result = simulate.job.start(plan["argv"], design_dir=design_dir, run_mode=plan["run_mode"], env=plan["env"],
+                                vcd_name=plan["vcd_name"], container_name=plan["container_name"],
+                                engine=plan["engine"], timeout=plan["timeout"], sim_engine=plan["sim_engine"])
     if not result.get("ok"):
         _respond(handler, result.get("error"), 400)
         return
-    result["sim_engine"] = sim_engine
-    result["top"] = top
-    result["timeout"] = timeout
-    result["sources"] = list(sources)
-    if cfg_used is not None:
-        result["config"] = cfg_used
+    for k in ("sim_engine", "top", "timeout", "sources", "command", "params", "plusargs", "run_defines"):
+        result[k] = plan[k]
+    if plan.get("config") is not None:
+        result["config"] = plan["config"]
     _respond(handler, result)
+
+
+def h_sim_run_all(handler: Any) -> None:
+    """Run every testbench in turn (POST {benches: [{testbench, params,
+    plusargs, run_defines, timeout}], sim_engine, from_config, extra_sources,
+    include_dirs, testbenches}). The table comes as ``sim_batch`` events and
+    from GET /api/sim/batch."""
+    from ..controller import simulate
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no active design dir", 400)
+        return
+    if simulate.job.running or simulate.batch.running:
+        _respond(handler, "a simulation is already running", 400)
+        return
+    benches = [b for b in (body.get("benches") or []) if isinstance(b, dict) and b.get("testbench")]
+    if not benches:
+        _respond(handler, "There's no testbench to run yet.", 400)
+        return
+    plans = []
+    shared = {k: body.get(k) for k in ("sim_engine", "from_config", "extra_sources", "include_dirs",
+                                       "testbenches", "sources", "trace")}
+    for b in benches[:200]:
+        spec = dict(shared)
+        spec.update({k: b.get(k) for k in ("testbench", "params", "plusargs", "run_defines", "timeout", "top")})
+        spec["build_dir"] = simulate.SIM_BUILD + "/" + simulate.bench_stem(b["testbench"])
+        # A helper (bus model) is never one of the other benches.
+        spec["extra_sources"] = [x for x in (body.get("extra_sources") or []) if x != b["testbench"]]
+        pl = simulate.plan_sim(design_dir, spec)
+        pl.setdefault("testbench", b["testbench"])
+        plans.append(pl)
+    res = simulate.batch.start(design_dir, plans)
+    if not res.get("ok"):
+        _respond(handler, res.get("error"), 400)
+        return
+    res["benches"] = [{"testbench": pl.get("testbench"), "ok": bool(pl.get("ok")), "error": pl.get("error"),
+                       "command": pl.get("command"), "sim_engine": pl.get("sim_engine")} for pl in plans]
+    _respond(handler, res)
+
+
+def h_sim_batch(handler: Any) -> None:
+    """The Run all table (GET), or one bench's output (``?log=<index>``)."""
+    from ..controller import simulate
+    log = _query_param(handler.path, "log")
+    if log != "":
+        try:
+            i = int(log)
+        except ValueError:
+            _respond(handler, "log must be a bench index", 400)
+            return
+        _respond(handler, {"index": i, "lines": simulate.batch.log(i)})
+        return
+    _respond(handler, simulate.batch.snapshot())
+
+
+def h_sim_preview(handler: Any) -> None:
+    """What Simulate would run for a bench with these run settings (POST,
+    nothing runs): the command, the bench's own parameters and defaults, and
+    any problem with the settings."""
+    from ..controller import hdlindex, simulate
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no active design dir", 400)
+        return
+    tb = str(body.get("testbench") or "")
+    top = simulate.top_module_of(design_dir, tb) if tb else None
+    info = None
+    if top:
+        try:
+            info = hdlindex.unit_info(hdlindex.get(design_dir, wait=1.5), top)
+        except Exception:
+            info = None
+    plan = simulate.plan_sim(design_dir, body) if tb else {"ok": False, "error": "no testbench"}
+    _respond(handler, {"top": top, "params": (info or {}).get("params") or [], "vhdl": simulate.is_vhdl(tb),
+                       "ok": bool(plan.get("ok")), "error": plan.get("error"), "bad": plan.get("bad") or [],
+                       "command": plan.get("command"), "sim_engine": plan.get("sim_engine"),
+                       "run_mode": plan.get("run_mode"), "timeout": plan.get("timeout")})
 
 
 def h_sim_cancel(handler: Any) -> None:
     from ..controller import simulate
     simulate.job.cancel()
+    if simulate.batch.running:
+        simulate.batch.cancel()
     _respond(handler, {"ok": True})
 
 
@@ -4611,6 +4651,182 @@ def h_ide_open_wave(handler: Any) -> None:
 # ---------------------------------------------------------------------------
 # Phase 4 — 2D/3D viewers + cells
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# RTL IDE: project index (definition, references, symbols, hierarchy),
+# project search and replace, the schematic, what the image can do
+# ---------------------------------------------------------------------------
+
+def _ide_dirty(body: Dict[str, Any]) -> Dict[str, str]:
+    """Unsaved editor tabs the IDE sends with a query ({rel: text}), capped."""
+    d = body.get("dirty")
+    if not isinstance(d, dict):
+        return {}
+    out: Dict[str, str] = {}
+    total = 0
+    for rel, text in list(d.items())[:50]:
+        if isinstance(rel, str) and isinstance(text, str):
+            total += len(text)
+            if total > 16 * 1024 * 1024:
+                break
+            out[rel] = text
+    return out
+
+
+def _ide_index(handler: Any, wait: float = 1.5):
+    from ..controller import hdlindex
+    design_dir = _get_active_design_dir()
+    if not design_dir or not Path(design_dir).is_dir():
+        _respond(handler, "no project is open", 400)
+        return None
+    return hdlindex.get(design_dir, wait=wait)
+
+
+def h_ide_index(handler: Any) -> None:
+    """The index's state (POST {refresh}: re-check the disk now)."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler, wait=0.2)
+    if idx is None:
+        return
+    if body.get("refresh") and not idx.building:
+        hdlindex._spawn(idx)
+    _respond(handler, idx.status())
+
+
+def h_ide_definition(handler: Any) -> None:
+    """Go to definition: POST {rel, line, col, dirty}."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler)
+    if idx is None:
+        return
+    r = hdlindex.definition(idx, str(body.get("rel") or ""), int(body.get("line") or 1), int(body.get("col") or 1),
+                            _ide_dirty(body))
+    r["index"] = {"ready": idx.ready.is_set(), "building": idx.building, "progress": idx.progress}
+    _respond(handler, r)
+
+
+def h_ide_references(handler: Any) -> None:
+    """Find references: POST {rel, line, col, dirty}."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler)
+    if idx is None:
+        return
+    r = hdlindex.references(idx, str(body.get("rel") or ""), int(body.get("line") or 1), int(body.get("col") or 1),
+                            _ide_dirty(body))
+    r["index"] = {"ready": idx.ready.is_set(), "building": idx.building, "progress": idx.progress}
+    _respond(handler, r)
+
+
+def h_ide_symbols(handler: Any) -> None:
+    """Symbols of one file (POST {rel}) or of the project (POST {})."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler)
+    if idx is None:
+        return
+    rel = body.get("rel")
+    if rel:
+        _respond(handler, hdlindex.file_symbols(idx, str(rel), _ide_dirty(body)))
+    else:
+        _respond(handler, hdlindex.project_symbols(idx, _ide_dirty(body)))
+
+
+def h_ide_hierarchy(handler: Any) -> None:
+    """Modules and their instances, from the index (POST {dirty})."""
+    from ..controller import hdlindex
+    body = getattr(handler, "_body", {}) or {}
+    idx = _ide_index(handler)
+    if idx is None:
+        return
+    _respond(handler, hdlindex.hierarchy(idx, None, _ide_dirty(body)))
+
+
+def h_ide_search(handler: Any) -> None:
+    """Project search: POST {query, regex, case, word, include, exclude, replace, dirty}."""
+    from ..controller import hdlsearch
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no project is open", 400)
+        return
+    try:
+        r = hdlsearch.search(design_dir, str(body.get("query") or ""), regex=bool(body.get("regex")),
+                             case=bool(body.get("case")), word=bool(body.get("word")),
+                             include=body.get("include"), exclude=body.get("exclude"),
+                             replace=body.get("replace") if isinstance(body.get("replace"), str) else None,
+                             dirty=_ide_dirty(body))
+    except hdlsearch.SearchError as ex:
+        _respond(handler, {"ok": False, "error": str(ex), "groups": [], "total": 0})
+        return
+    _respond(handler, r)
+
+
+def h_ide_replace(handler: Any) -> None:
+    """Replace the ticked matches: POST {query, regex, case, word, replace,
+    edits: [{rel, hash, offs}]}. Never while a run reads the files."""
+    from ..controller import hdlsearch
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no project is open", 400)
+        return
+    edits = [e for e in (body.get("edits") or []) if isinstance(e, dict)]
+    if not edits:
+        _respond(handler, "Tick at least one match to replace.", 400)
+        return
+    try:
+        r = hdlsearch.replace(design_dir, str(body.get("query") or ""), str(body.get("replace") or ""), edits,
+                              regex=bool(body.get("regex")), case=bool(body.get("case")), word=bool(body.get("word")))
+    except hdlsearch.SearchError as ex:
+        _respond(handler, str(ex), 400)
+        return
+    _respond(handler, r)
+
+
+def h_ide_caps(handler: Any) -> None:
+    """What the IDE can run here: VHDL through the image's GHDL, Yosys for
+    the schematic (GET; ?wait=1 waits for the first probe)."""
+    from ..controller import container_run, vhdltools
+    eng = tools_mod.resolve_engine()
+    engine = eng.get("engine") if eng.get("ready") else None
+    wait = 20.0 if _query_param(handler.path, "wait") else 0.0
+    try:
+        image = container_run.image_ref() if engine else None
+    except Exception:
+        image = None
+    vh = vhdltools.caps(engine, image, wait=wait)
+    _respond(handler, {"vhdl": vh, "container": bool(engine),
+                       "yosys": bool(engine) or bool(platform_env.usable_which("yosys"))})
+
+
+def h_ide_schematic(handler: Any) -> None:
+    """Start reading the design with Yosys for the schematic: POST {top, level}."""
+    from ..controller import schematic
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no project is open", 400)
+        return
+    level = body.get("level") if body.get("level") in schematic.LEVELS else "rtl"
+    r = schematic.job.start(design_dir, top=(body.get("top") or None), level=level)
+    if not r.get("ok"):
+        _respond(handler, r.get("error"), 400)
+        return
+    _respond(handler, r)
+
+
+def h_ide_schematic_result(handler: Any) -> None:
+    """The schematic job's state, and the netlist once it is done (GET ?id=)."""
+    from ..controller import schematic
+    jid = _query_param(handler.path, "id")
+    if _query_param(handler.path, "cancel"):
+        schematic.job.cancel()
+    _respond(handler, schematic.job.result(jid))
+
 
 def _final_gds(run_dir: Path) -> Optional[Path]:
     final = run_dir / "final"
@@ -5424,6 +5640,19 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/sim/cancel", h_sim_cancel),
     ("/api/waveform", h_waveform),
     ("/api/ide/open-wave", h_ide_open_wave),
+    ("/api/sim/run-all", h_sim_run_all),
+    ("/api/sim/batch", h_sim_batch),
+    ("/api/sim/preview", h_sim_preview),
+    ("/api/ide/index", h_ide_index),
+    ("/api/ide/definition", h_ide_definition),
+    ("/api/ide/references", h_ide_references),
+    ("/api/ide/symbols", h_ide_symbols),
+    ("/api/ide/hierarchy", h_ide_hierarchy),
+    ("/api/ide/search", h_ide_search),
+    ("/api/ide/replace", h_ide_replace),
+    ("/api/ide/caps", h_ide_caps),
+    ("/api/ide/schematic", h_ide_schematic),
+    ("/api/ide/schematic-result", h_ide_schematic_result),
     ("/api/celllib/cell", h_celllib_cell),
     ("/api/celllib/layout", h_celllib_layout),
     ("/api/celllib/view", h_celllib_view),
@@ -5557,7 +5786,9 @@ _POST_ROUTES = {
     "/api/fs/native-pick", "/api/verify/rerun", "/api/compare", "/api/fix/plan",
     "/api/fix/apply", "/api/config/undo", "/api/dse/start", "/api/dse/cancel", "/api/dse/plan",
     "/api/file/write", "/api/file/delete", "/api/file/rename", "/api/lint",
-    "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave", "/api/celllib/view",
+    "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave",
+    "/api/sim/run-all", "/api/sim/preview", "/api/ide/index", "/api/ide/definition", "/api/ide/references",
+    "/api/ide/symbols", "/api/ide/hierarchy", "/api/ide/search", "/api/ide/replace", "/api/ide/schematic", "/api/celllib/view",
     "/api/celllib/view/close", "/api/macros/add", "/api/macros/settings",
     "/api/custom-cells/save", "/api/custom-cells/remove", "/api/custom-cells/enable",
     "/api/custom-macros/save", "/api/custom-macros/remove", "/api/custom-macros/enable",
@@ -5583,7 +5814,8 @@ _GET_ROUTES = {
     "/api/templates", "/api/project/defaults", "/api/project/files", "/api/run-export",
     "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems", "/api/kb/errors", "/api/floorplan/estimate",
     "/api/timing-paths", "/api/dse/sweeps", "/api/dse/status", "/api/system-resources",
-    "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/celllib/cell",
+    "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/sim/batch", "/api/ide/caps",
+    "/api/ide/schematic-result", "/api/celllib/cell",
     "/api/celllib/layout", "/api/celllib", "/api/macros/catalog", "/api/macros/projects",
     "/api/macros/inspect", "/api/cells", "/api/custom-cells", "/api/custom-macros",
     "/api/health", "/api/presence", "/api/hello", "/api/about", "/api/steps", "/api/variables",

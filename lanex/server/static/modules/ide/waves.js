@@ -128,6 +128,7 @@ export class WaveView {
   // last time this testbench was open, so a re-run after an edit shows the
   // same picture with new data.
   load(vcd) {
+    this.failAt = null;
     const key = this._layoutKey();
     const same = this.vcd && key === this._loadedKey;
     const keepZoom = same && this.vcd.end === vcd.end && this.rows.length && !this._fitted;
@@ -183,6 +184,7 @@ export class WaveView {
     this.anchor = null;
     this.cursor = null;
     this.marker = null;
+    this.failAt = null;
     this.hover = null;
     this.drag = null;
     this._loadedKey = null;
@@ -926,7 +928,7 @@ export class WaveView {
       x: g("--wave-x", "#e5484d"), z: g("--wave-z", "#f2c14e"), cursor: g("--wave-cursor", "#4da3ff"),
       marker: g("--wave-marker", "#e879c9"), hover: g("--wave-hover", "rgba(194,206,224,0.35)"),
       onCursor: g("--wave-on-cursor", "#06121f"), mono: g("--mono", "monospace"),
-      border: g("--border", "rgba(194,206,224,0.14)"),
+      border: g("--border", "rgba(194,206,224,0.14)"), fail: g("--fail", "#ff5a5f"),
     };
     this.palette = {};
     for (const c of COLORS) this.palette[c] = g(c, "#36d399");
@@ -955,6 +957,22 @@ export class WaveView {
     this.t0 = ta - x / this.ppt;
     this._clampT0();
     this.redraw();
+  }
+
+  // Put the cursor at time t (ticks) and show the time just before it, as a
+  // failure is read: what led up to it. {fail: true} draws a red FAIL line
+  // there that stays until another dump loads.
+  showTime(t, { fail = false } = {}) {
+    if (!this.vcd) return;
+    const end = Math.max(1, this.vcd.end);
+    t = Math.max(0, Math.min(end, t));
+    this.cursor = t;
+    this.failAt = fail ? t : null;
+    const span = Math.max(end * 0.05, Math.min(end, Math.max(1, t) * 0.3));
+    this._zoomTo(Math.max(0, t - span * 0.85), Math.min(end, t + span * 0.15) + (t + span * 0.15 > end ? span * 0.02 : 0));
+    this._overlay();
+    this._values();
+    this._times();
   }
 
   _zoomTo(ta, tb) {
@@ -1382,8 +1400,9 @@ export class WaveView {
       return;
     }
     if (this.hover && !this.drag) this._flag(ctx, this.hover.t, this.colors.hover, H, w, true);
+    if (this.failAt !== null && this.failAt !== undefined && this.failAt !== this.cursor) this._flag(ctx, this.failAt, this.colors.fail, H, w);
     if (this.marker !== null) this._flag(ctx, this.marker, this.colors.marker, H, w);
-    if (this.cursor !== null) this._flag(ctx, this.cursor, this.colors.cursor, H, w);
+    if (this.cursor !== null) this._flag(ctx, this.cursor, this.failAt === this.cursor ? this.colors.fail : this.colors.cursor, H, w);
   }
 
   // A time label on the ruler, sitting on its line.
@@ -1412,6 +1431,7 @@ export class WaveView {
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
       ctx.setLineDash([]);
     };
+    if (this.failAt !== null && this.failAt !== undefined) line(this.failAt, this.colors.fail, [6, 3], 2);
     if (this.marker !== null) line(this.marker, this.colors.marker, [4, 3], 1.25);
     if (this.cursor !== null) line(this.cursor, this.colors.cursor, [], 1.5);
   }

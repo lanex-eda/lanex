@@ -29,6 +29,13 @@ export const SHORTCUTS = [
 // editor and the waveform viewer handle them, so they never reach the app.
 export const IDE_SHORTCUTS = [
   { keys: "Ctrl S", desc: "Save (and check the syntax, with Check on save)" },
+  { keys: "F12 / Ctrl click", desc: "Go to where the name is declared" },
+  { keys: "Shift F12", desc: "List every place the name is used (References)" },
+  { keys: "Alt ← / Alt →", desc: "In the editor: back and forward through those jumps" },
+  { keys: "Ctrl P", desc: "Open any file; @ a symbol in this file, # in the project, : a line" },
+  { keys: "Ctrl Shift O", desc: "Go to a symbol in this file" },
+  { keys: "Ctrl Shift F / Ctrl Shift H", desc: "Search every file, replace in every file" },
+  { keys: "Alt click", desc: "Add a cursor" },
   { keys: "Ctrl F / Ctrl H", desc: "Find, find and replace" },
   { keys: "Ctrl /", desc: "Comment or uncomment the line" },
   { keys: "Alt ↑ / Alt ↓", desc: "Move the line up or down" },

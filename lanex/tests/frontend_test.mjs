@@ -3248,6 +3248,129 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   });
 }
 
+// ---------------------------------------------------------------- RTL IDE (lane 8)
+{
+  const FZ = await import(toUrl(resolve(MOD, "ide", "fuzzy.js")));
+  check("ide fuzzy: letters in order match, a word start and a file name beat a scatter", () => {
+    assert.equal(FZ.score("xyz", "counter.v"), null);
+    assert.deepEqual(FZ.score("cnt", "counter_tb.v").hits, [0, 3, 4]);
+    assert.ok(FZ.score("tb cnt", "verify/counter_tb.v"), "space-separated pieces must all match");
+    const files = ["docs/contents.md", "src/counter.v", "verify/counter_tb.v", "src/cnt_defs.vh", "src/acc_top.v"];
+    const r = FZ.rank("count", files);
+    assert.equal(r[0].item, "src/counter.v", "a name that starts with the query comes first, the shorter one first");
+    assert.equal(FZ.rank("top", files)[0].item, "src/acc_top.v");
+    assert.equal(FZ.rank("", files).length, files.length);
+    assert.equal(FZ.markHits("abc", [0, 2], (s) => s), "<b>a</b>b<b>c</b>");
+    const big = Array.from({ length: 5000 }, (_, i) => "src/module_" + i + "/file_" + ((i * 7) % 1000) + ".sv");
+    const t0 = performance.now();
+    FZ.rank("mod12f3", big);
+    assert.ok(performance.now() - t0 < 200, "5,000 paths rank in well under 200 ms");
+  });
+
+  const SCH = await import(toUrl(resolve(MOD, "ide", "schematic.js")));
+  const LAY = await import(toUrl(resolve(MOD, "ide", "schlayout.js")));
+  // A tiny Yosys netlist: acc_top with an adder instance, a mux and a register.
+  const NET = { modules: {
+    "$paramod\\adder\\W=s32'00000000000000000000000000001000": { attributes: { hdlname: "adder" },
+      ports: { a: { direction: "input", bits: [2, 3] }, b: { direction: "input", bits: [4, 5] }, s: { direction: "output", bits: [6, 7, 8] } },
+      cells: { "$add$x": { type: "$add", attributes: { src: "src/adder.v:10.16-10.21" }, port_directions: { A: "input", B: "input", Y: "output" },
+        connections: { A: [2, 3], B: [4, 5], Y: [6, 7, 8] } } }, netnames: {} },
+    acc_top: { attributes: { top: "00000000000000000000000000000001" },
+      ports: { clk: { direction: "input", bits: [2] }, x: { direction: "input", bits: [3, 4] }, sum: { direction: "output", bits: [5, 6] } },
+      cells: {
+        u_add: { type: "$paramod\\adder\\W=s32'00000000000000000000000000001000", attributes: { src: "src/acc_top.v:17.5-21.7" },
+          port_directions: { a: "input", b: "input", s: "output" }, connections: { a: [5, 6], b: [3, 4], s: [7, 8, 9] } },
+        "$procdff$1": { type: "$dff", attributes: { src: "src/acc_top.v:30.5-33.8" }, port_directions: { CLK: "input", D: "input", Q: "output" },
+          connections: { CLK: [2], D: [10, 11], Q: [5, 6] } },
+        "$procmux$2": { type: "$mux", attributes: { src: "src/acc_top.v:31.13-31.16|src/acc_top.v:31.9-32.29" }, port_directions: { A: "input", B: "input", S: "input", Y: "output" },
+          connections: { A: [7, 8], B: ["0", "0"], S: [9], Y: [10, 11] } },
+      },
+      netnames: { held: { hide_name: 0, bits: [5, 6] }, next: { hide_name: 0, bits: [7, 8, 9] }, x: { hide_name: 0, bits: [3, 4] } } },
+  } };
+  check("ide schematic: module names, source ranges and the netlist as a graph", () => {
+    assert.equal(SCH.moduleLabel("$paramod\\adder\\W=s32'00000000000000000000000000001000", null), "adder W=8");
+    assert.deepEqual(SCH.srcOf("src/top.v:21.13-21.16|src/top.v:21.9-22.29"), { rel: "src/top.v", line: 21, col: 13, len: 3 });
+    assert.deepEqual(SCH.srcOf("/work/src/a.v:7"), { rel: "src/a.v", line: 7, col: 1, len: 0 });
+    const g = SCH.netlistToGraph(NET, "acc_top");
+    assert.equal(g.stats.cells, 3);
+    const inst = g.meta.get("c:u_add");
+    assert.equal(inst.shape, "inst", "a $paramod submodule is an instance you can open, not a box");
+    assert.equal(inst.sub, "adder W=8");
+    assert.equal(g.meta.get("c:$procmux$2").shape, "mux");
+    // the feedback: the register's Q (held) drives the adder and the output
+    const held = g.graph.edges.filter((e) => e.from[0] === "c:$procdff$1");
+    assert.deepEqual(held.map((e) => e.to[0]).sort(), ["c:u_add", "p:sum"]);
+    assert.equal(held[0].width, 2);
+    assert.equal(g.consts.get("c:$procmux$2\u0001B"), "2'b00", "a constant input is a label, not a node");
+  });
+  check("ide schematic: the layout puts inputs left, outputs right and routes every wire", () => {
+    const g = SCH.netlistToGraph(NET, "acc_top");
+    const lay = LAY.layoutGraph(g.graph);
+    assert.equal(Object.keys(lay.edges).length, g.graph.edges.length);
+    const x = (id) => lay.nodes[id].x;
+    assert.ok(x("p:clk") < x("c:$procdff$1") && x("p:x") < x("c:u_add"));
+    assert.ok(x("p:sum") > Math.max(x("c:u_add"), x("c:$procmux$2"), x("c:$procdff$1")));
+    // no two cells overlap
+    const boxes = Object.entries(lay.nodes);
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const [, a] = boxes[i], [, b] = boxes[j];
+      const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+      assert.ok(apart, boxes[i][0] + " overlaps " + boxes[j][0]);
+    }
+    // every wire is orthogonal
+    for (const pts of Object.values(lay.edges)) for (let i = 1; i < pts.length; i++) {
+      assert.ok(Math.abs(pts[i][0] - pts[i - 1][0]) < 0.01 || Math.abs(pts[i][1] - pts[i - 1][1]) < 0.01);
+    }
+    // a big chain lays out quickly
+    const nodes = [{ id: "i", kind: "in", w: 40, h: 22, ins: [], outs: ["o"] }];
+    const edges = [];
+    for (let k = 0; k < 600; k++) {
+      nodes.push({ id: "c" + k, kind: "cell", w: 50, h: 40, ins: ["A", "B"], outs: ["Y"] });
+      edges.push({ id: "e" + k, from: [k ? "c" + (k - 1) : "i", k ? "Y" : "o"], to: ["c" + k, "A"], net: "n" + k });
+      if (k > 3) edges.push({ id: "f" + k, from: ["c" + (k - 3), "Y"], to: ["c" + k, "B"], net: "n" + (k - 3) });
+    }
+    const t0 = performance.now();
+    const big = LAY.layoutGraph({ nodes, edges });
+    assert.equal(Object.keys(big.edges).length, edges.length);
+    assert.ok(performance.now() - t0 < 5000, "600 cells lay out in seconds, not minutes");
+  });
+
+  const SR = await import(toUrl(resolve(MOD, "ide", "simrun.js")));
+  check("ide run all: the summary line and times in plain units", () => {
+    assert.equal(SR.summary([{ state: "pass" }, { state: "pass" }, { state: "fail" }, { state: "build" }]),
+      "4 benches · 2 passed · 1 failed · 1 didn't build");
+    assert.equal(SR.timeWords({ ticks: 46000, unit: "1ps" }), "46 ns");
+    assert.equal(SR.timeWords({ value: 26, unit: "ns" }), "26 ns");
+    assert.equal(SR.timeWords({ ticks: 12 }), "12 ticks");
+    assert.equal(SR.stateWord("stop"), "ENDED AT $STOP");
+    assert.equal(SR.limitWords(3600), "1 h");
+    assert.equal(SR.limitWords(600), "10 min");
+  });
+
+  const NAV = await import(toUrl(resolve(MOD, "ide", "nav.js")));
+  check("ide navigation: kinds read as words; F12, Ctrl+P and search are wired", () => {
+    assert.equal(NAV.kindWord("param"), "parameter");
+    assert.equal(NAV.kindWord("net"), "wire");
+    const ed = readFileSync(resolve(MOD, "ide", "editor.js"), "utf8");
+    assert.match(ed, /key: "F12"/);
+    assert.match(ed, /key: "Shift-F12"/);
+    assert.match(ed, /clickAddsSelectionRange\.of\(\(e\) => e\.altKey\)/, "Ctrl+click is go to definition, Alt+click adds a cursor");
+    const ide = readFileSync(resolve(MOD, "ide", "main.js"), "utf8");
+    assert.match(ide, /k === "p" && !e\.shiftKey/);
+    assert.match(ide, /focusSearch\(\{ replace: true \}\)/);
+    assert.doesNotMatch(ide, /projectTexts\(/, "the hierarchy and the waveform links read the index, not every file");
+    const sx = readFileSync(resolve(MOD, "ide", "search.js"), "utf8");
+    assert.match(sx, /api\.fileWrite\(x\.rel, x\.before, \{ base_hash: x\.hash \}\)/, "Undo never overwrites a newer file");
+    assert.match(sx, /danger: true/, "Replace asks with Cancel focused");
+  });
+  check("ide lint: an implicit wire in a built file is an error (Yosys stops synthesis on it)", () => {
+    const ide = readFileSync(resolve(MOD, "ide", "main.js"), "utf8");
+    assert.match(ide, /state\.diags = implicitIsError\(diags\)/);
+    assert.match(ide, /d\.code === "IMPLICIT" && d\.severity === "warning" && inRun\(d\)/);
+    assert.match(readFileSync(resolve(MOD, "ide", "lintinfo.js"), "utf8"), /IMPLICIT: "[^"]*Yosys stops synthesis/);
+  });
+}
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

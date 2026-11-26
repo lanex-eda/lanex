@@ -21,16 +21,19 @@ import {
   setDiagnostics, lintGutter, lintKeymap,
   verilog, tcl, yaml, json,
 } from "../../vendor/codemirror.js";
+import { vhdl } from "./vhdlmode.js";
 
 // ------------------------------------------------------------------ languages
 
 const VERILOG = StreamLanguage.define(verilog);
 const TCL = StreamLanguage.define(tcl);
 const YAML = StreamLanguage.define(yaml);
+const VHDL = StreamLanguage.define(vhdl);
 
 export function languageOf(relPath) {
   const ext = (String(relPath || "").match(/\.[^./\\]+$/) || [""])[0].toLowerCase();
   if ([".v", ".sv", ".vh", ".svh", ".verilog", ".vlt"].includes(ext)) return "verilog";
+  if ([".vhd", ".vhdl"].includes(ext)) return "vhdl";
   if ([".sdc", ".tcl", ".xdc"].includes(ext)) return "tcl";
   if ([".yaml", ".yml"].includes(ext)) return "yaml";
   if (ext === ".json") return "json";
@@ -47,6 +50,7 @@ const HIGHLIGHT = HighlightStyle.define([
   { tag: tags.meta, color: "var(--syntax-sys)" },                               // $display …
   { tag: [tags.propertyName, tags.attributeName], color: "var(--syntax-num)" }, // JSON / YAML keys
   { tag: tags.bracket, color: "var(--text-muted)" },
+  { tag: tags.typeName, color: "var(--syntax-num)" },
   { tag: tags.invalid, color: "var(--fail)" },
 ]);
 
@@ -376,6 +380,7 @@ export class Editor {
   _extensions(relPath, text) {
     const kind = languageOf(relPath);
     const langExt = kind === "verilog" ? [VERILOG, VERILOG_FOLDING, this._valueHover(), autocompletion({ override: [verilogSource, fileWords], activateOnTyping: true })]
+      : kind === "vhdl" ? [VHDL, this._valueHover(), autocompletion({ override: [completeAnyWord] })]
       : kind === "tcl" ? [TCL, autocompletion({ override: [completeAnyWord] })]
       : kind === "yaml" ? [YAML, autocompletion({ override: [completeAnyWord] })]
       : kind === "json" ? [json(), autocompletion({ override: [completeAnyWord] })]
@@ -403,8 +408,25 @@ export class Editor {
       this.lang.of(langExt),
       this.tabSize.of([indentUnit.of(unit), EditorState.tabSize.of(unit === "\t" ? 4 : unit.length)]),
       this.readOnly.of([EditorState.readOnly.of(relPath === null), EditorView.editable.of(relPath !== null)]),
+      // Ctrl+click goes to the definition (as in VS Code); Alt+click adds a cursor.
+      EditorView.clickAddsSelectionRange.of((e) => e.altKey),
+      EditorView.domEventHandlers({
+        mousedown: (e, view) => {
+          if (!(e.ctrlKey || e.metaKey) || e.button !== 0 || e.altKey || e.shiftKey || !this.onDefinition) return false;
+          const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+          if (pos === null || pos === undefined) return false;
+          e.preventDefault();
+          view.dispatch({ selection: EditorSelection.cursor(pos) });
+          this.onDefinition({ mouse: true });
+          return true;
+        },
+      }),
       Prec.highest(keymap.of([
         { key: "Mod-s", preventDefault: true, run: () => { this.onSave(); return true; } },
+        { key: "F12", preventDefault: true, run: () => { if (this.onDefinition) this.onDefinition({}); return !!this.onDefinition; } },
+        { key: "Shift-F12", preventDefault: true, run: () => { if (this.onReferences) this.onReferences(); return !!this.onReferences; } },
+        { key: "Alt-ArrowLeft", run: () => !!(this.onBack && this.onBack(-1)) },
+        { key: "Alt-ArrowRight", run: () => !!(this.onBack && this.onBack(1)) },
         { key: "Mod-/", run: toggleComment },
         { key: "Mod-h", preventDefault: true, run: () => { this.openFind(true); return true; } },
       ])),
@@ -435,7 +457,8 @@ export class Editor {
       if (!w) return null;
       const word = view.state.sliceDoc(w.from, w.to);
       if (!/^[A-Za-z_][\w$]*$/.test(word)) return null;
-      const dom = await this.hoverProvider(word, this.relPath);
+      const line = view.state.doc.lineAt(w.from);
+      const dom = await this.hoverProvider(word, this.relPath, { line: line.number, col: w.from - line.from + 1 });
       if (!dom) return null;
       return { pos: w.from, end: w.to, above: true, create: () => ({ dom }) };
     }, { hoverTime: 350 });
@@ -484,6 +507,47 @@ export class Editor {
   }
 
   focus() { this.view.focus(); }
+
+  // Where the cursor is: { line, col } (1-based) and the word under it.
+  cursorPos() {
+    const st = this.view.state;
+    const head = st.selection.main.head;
+    const line = st.doc.lineAt(head);
+    const w = st.wordAt(head) || (head > line.from ? st.wordAt(head - 1) : null);
+    return { line: line.number, col: head - line.from + 1, word: w ? st.sliceDoc(w.from, w.to) : "" };
+  }
+
+  // Select `len` characters at (line, col), bring them to the middle and
+  // flash the line (a jump from F12, References or Search).
+  selectAt(line, col, len) {
+    const doc = this.view.state.doc;
+    const n = Math.max(1, Math.min(doc.lines, line || 1));
+    const l = doc.line(n);
+    const from = Math.min(l.to, l.from + Math.max(0, (col || 1) - 1));
+    const to = Math.min(l.to, from + Math.max(0, len || 0));
+    this.view.dispatch({
+      selection: EditorSelection.range(from, to),
+      effects: EditorView.scrollIntoView(from, { y: "center" }),
+    });
+    this.view.focus();
+    this.flashLine(n);
+  }
+
+  flashLine(n) {
+    requestAnimationFrame(() => {
+      const doc = this.view.state.doc;
+      if (n < 1 || n > doc.lines) return;
+      let el = null;
+      try {
+        const at = this.view.domAtPos(doc.line(n).from);
+        el = at && at.node && (at.node.nodeType === 1 ? at.node : at.node.parentElement);
+      } catch (_e) { el = null; }
+      const lineEl = el && el.closest ? el.closest(".cm-line") : null;
+      if (!lineEl) return;
+      lineEl.classList.add("cm-flash-line");
+      setTimeout(() => lineEl.classList.remove("cm-flash-line"), 1200);
+    });
+  }
 
   // Verilator diagnostics: [{ line, col, severity, msg, code }] for this file.
   setMarkers(markers) {

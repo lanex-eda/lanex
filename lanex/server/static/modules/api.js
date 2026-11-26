@@ -398,6 +398,23 @@ export const api = {
   waveformUrl: (path) => "/api/waveform?path=" + encodeURIComponent(path),
   openWave: (path, signals) =>
     _fetch("/api/ide/open-wave", { method: "POST", body: JSON.stringify({ path, signals: signals || [] }) }),
+  // RTL IDE: the project index (definition, references, symbols, hierarchy),
+  // project search and replace, run all, the schematic (controller/hdlindex.py,
+  // hdlsearch.py, simulate.py, schematic.py).
+  ideIndex: (payload) => _fetch("/api/ide/index", { method: "POST", body: JSON.stringify(payload || {}) }),
+  ideDefinition: (payload) => _fetch("/api/ide/definition", { method: "POST", body: JSON.stringify(payload) }),
+  ideReferences: (payload) => _fetch("/api/ide/references", { method: "POST", body: JSON.stringify(payload) }),
+  ideSymbols: (payload) => _fetch("/api/ide/symbols", { method: "POST", body: JSON.stringify(payload || {}) }),
+  ideHierarchy: (payload) => _fetch("/api/ide/hierarchy", { method: "POST", body: JSON.stringify(payload || {}) }),
+  ideSearch: (payload) => _fetch("/api/ide/search", { method: "POST", body: JSON.stringify(payload) }),
+  ideReplace: (payload) => _fetch("/api/ide/replace", { method: "POST", body: JSON.stringify(payload) }),
+  ideCaps: (wait) => _fetch("/api/ide/caps" + (wait ? "?wait=1" : ""), { timeout: 40000 }),
+  ideSchematic: (payload) => _fetch("/api/ide/schematic", { method: "POST", body: JSON.stringify(payload || {}) }),
+  ideSchematicResult: (id, cancel) =>
+    _fetch("/api/ide/schematic-result?id=" + encodeURIComponent(id || "") + (cancel ? "&cancel=1" : "")),
+  simRunAll: (payload) => _fetch("/api/sim/run-all", { method: "POST", body: JSON.stringify(payload) }),
+  simBatch: (log) => _fetch("/api/sim/batch" + (log === undefined || log === null ? "" : "?log=" + encodeURIComponent(log))),
+  simPreview: (payload) => _fetch("/api/sim/preview", { method: "POST", body: JSON.stringify(payload) }),
 
   // ---------- Phase 4: viewers + cells
   // (2D/3D layout = the flow's KLayout PNG + "Open in desktop tool"; the old
