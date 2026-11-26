@@ -74,12 +74,7 @@ function valueText(c) {
   if (c.status === "not_run") return "—";
   if (c.id === "setup" || c.id === "hold") {
     const parts = [];
-    if (c.value !== null && c.value !== undefined && c.metric && c.metric.endsWith("vio__count")) {
-      // The total covers every corner; say how many are in the corners that fail the run.
-      const gated = (c.corners || []).filter((r) => r.gating && V.isNum(r.value)).reduce((a, r) => a + r.value, 0);
-      const someWarnOnly = (c.corners || []).some((r) => !r.gating && V.isNum(r.value) && r.value > 0);
-      parts.push(n(c.value) + " violating" + (someWarnOnly && c.value > 0 ? " (" + n(gated) + " in checked corners)" : ""));
-    }
+    if (c.value !== null && c.value !== undefined && c.metric && c.metric.endsWith("vio__count")) parts.push(V.vioCountText(c));
     if (V.isNum(c.worst)) parts.push("worst " + ns(c.worst) + " ns");
     return parts.join(" · ") || "—";
   }
@@ -426,7 +421,9 @@ function pillar(p) {
     hero = sw ? "<span class='vf-hero-v'>" + esc(ns(s.worst)) + "</span><span class='an-u'>ns setup slack</span>" + mprov("timing__setup__ws") : "<span class='vf-hero-v'>—</span>";
     rows = [
       ["Worst hold slack", hw ? ns(h.worst) + " ns" : "—", h, hw ? mprov("timing__hold__ws") : ""],
-      ["Setup / hold violations", (s && s.value != null ? n(s.value) : "—") + " / " + (h && h.value != null ? n(h.value) : "—"), null,
+      // LibreLane's counts add every corner up: the label says so.
+      [corners.length > 1 ? "Setup / hold violations, summed over " + corners.length + " corners" : "Setup / hold violations",
+        (s && s.value != null ? n(s.value) : "—") + " / " + (h && h.value != null ? n(h.value) : "—"), null,
         (s && s.value != null ? provFor(s) : "") + (h && h.value != null ? provFor(h) : "")],
       ["Corners analysed", corners.length ? String(corners.length) : "—", null],
     ];

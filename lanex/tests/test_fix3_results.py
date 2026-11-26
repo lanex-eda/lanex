@@ -21,7 +21,7 @@ from typing import Optional
 
 import pytest
 
-from lanex.controller import history, verify
+from lanex.controller import history, lint, macrolib, simulate, verify
 
 GOLD = Path(__file__).parent / "goldens" / "sta_paths_run"
 
@@ -160,3 +160,67 @@ def test_a_real_spm_run_stays_clean(tmp_path: Path) -> None:
     by = _by(rep)
     assert not by["setup"].get("no_clock") and not by["setup"].get("unclocked")
     assert by["setup"]["status"] == "pass"
+
+
+# ------------------------------------------------------------------ finding 6
+def _sram_model():
+    # The SRAM template run (sram_demo, sky130A, 700 x 600 die): core and PDN
+    # as LibreLane resolved them (PDN_HOFFSET 16.65, PDN_VOFFSET 16.32, 1.6 wide,
+    # 1.7 apart, pitch 153.18 / 153.6).
+    return {"core": {"box": [5.52, 10.88, 694.14, 587.52]},
+            "pdn": {"vlayer": "met4", "hlayer": "met5", "v": {"w": 1.6, "s": 1.7, "pitch": 153.6, "off": 16.32},
+                    "h": {"w": 1.6, "s": 1.7, "pitch": 153.18, "off": 16.65}},
+            "macros": {"tiny": {"ok": True, "w": 20, "h": 8,
+                                "prects": [["VPWR", "power", "met4", 1, 0, 2, 8], ["VGND", "ground", "met4", 3, 0, 4, 8]]}}}
+
+
+def test_power_straps_sit_on_their_centre_line_like_the_real_def():
+    # final/def/sram_demo.def of that run: met5 VPWR centred at y 27.53 and
+    # 180.71, VGND at 30.83 and 184.01; met4 VPWR at x 21.84, VGND at 25.14.
+    h = macrolib.straps(_sram_model(), "h")
+    assert h[0][0] == "power" and h[0][1:] == pytest.approx((26.73, 28.33))
+    assert h[1][0] == "ground" and h[1][1:] == pytest.approx((30.03, 31.63))
+    assert h[2][0] == "power" and sum(h[2][1:]) / 2 == pytest.approx(180.71)
+    assert h[3][0] == "ground" and sum(h[3][1:]) / 2 == pytest.approx(184.01)
+    v = macrolib.straps(_sram_model(), "v")
+    assert sum(v[0][1:]) / 2 == pytest.approx(21.84) and sum(v[1][1:]) / 2 == pytest.approx(25.14)
+    assert v[0][2] - v[0][1] == pytest.approx(1.6)
+
+
+def test_a_pin_just_above_the_power_strap_does_not_cross_it():
+    # A block whose pins start at y 28.35 clears the real VPWR strap (top edge
+    # 28.33) but meets VGND (30.03-31.63); the old model put VPWR at 27.53-29.13.
+    c = macrolib.crossings(_sram_model(), {"macro": "tiny", "name": "u", "location": [300.0, 28.35], "orientation": "N"})
+    assert c == {"power": 0, "ground": 1}
+
+
+# ------------------------------------------------------------------ finding 10
+def test_lint_that_exits_non_zero_with_no_errors_is_not_ok():
+    no_err = lint.summarize([])
+    v = lint.lint_verdict(1, no_err, ["%Error: Internal Error: V3Ast.cpp:123: broken", "Aborting..."])
+    assert v["ok"] is False and "exit code 1" in v["message"] and "Internal Error" in v["message"]
+    v = lint.lint_verdict(127, no_err, ["bash: verilator: command not found"])
+    assert v["ok"] is False and v["message"].startswith("Verilator wasn't found")
+    assert lint.lint_verdict(0, no_err, []) == {"ok": True}
+    # Parsed errors are the lint's own failure: no raw message on top.
+    errs = lint.summarize(lint.parse_verilator("%Error: src/a.v:3:1: syntax error, unexpected endmodule"))
+    assert errs["errors"] == 1
+    assert lint.lint_verdict(1, errs, ["%Error: src/a.v:3:1: syntax error"]) == {"ok": False}
+    assert lint.lint_verdict(0, no_err, [], timed_out=True)["ok"] is False
+
+
+@pytest.mark.parametrize("line,state", [
+    ("FAIL: 0", "pass"),
+    ("0 FAIL", "pass"),
+    ("PASS: 12 FAIL: 0", "pass"),
+    ("FAILED: 0 of 10", "pass"),
+    ("FAIL: 3", "fail"),
+    ("3 FAILED", "fail"),
+    ("PASS: 9 FAIL: 1", "fail"),
+    ("FAIL: 0 != 1", "fail"),           # a mismatch report, not a count
+    ("FAIL at 35 ns: sum = 4", "fail"),
+    ("PASS: adder, 2 sums checked", "pass"),
+])
+def test_only_a_fail_marker_that_reports_a_failure_counts(line, state):
+    j = simulate.judge(["@@LANEX-RUN", line, "tb.v:9: $finish called at 10 (1ns)"], rc=0, engine="iverilog")
+    assert j["state"] == state, j

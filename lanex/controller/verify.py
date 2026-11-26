@@ -790,7 +790,7 @@ def _checks(run: _Run) -> List[Dict[str, Any]]:
                 fix = f"CLOCK_PORT is \"{port}\": check it names the clock input of {top}."
             else:
                 fix = "CLOCK_PORT is not set: set it to the clock input of the top module."
-            r["detail"] = what + ", so " + timed + fix
+            r["detail"] = what + ": " + timed + fix
         elif n_unclk:
             # Some flip-flops have no clock (a clock made inside the design, a
             # second clock the SDC doesn't name): the timed paths are real, the

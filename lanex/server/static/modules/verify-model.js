@@ -349,6 +349,21 @@ export function verdictCopy(rep) {
 
 export function isNum(v) { return typeof v === "number" && Number.isFinite(v); }
 
+// A setup or hold check's violation count in words. LibreLane adds every
+// corner's count up (102 = 36 + 31 + 35 endpoints on a 65-endpoint design),
+// so say it is a sum and how many fail in the worst corner, and how many in
+// the corners that fail the run when some corners only warn. (The same words
+// as metricfmt.cornerSumWords; this module stays import-free for first paint.)
+export function vioCountText(c) {
+  const int = (v) => (isNum(v) ? Math.round(v).toLocaleString("en-US") : String(v));
+  const per = (c.corners || []).filter((r) => isNum(r.value));
+  const gated = per.filter((r) => r.gating).reduce((a, r) => a + r.value, 0);
+  const someWarnOnly = per.some((r) => !r.gating && r.value > 0);
+  const sum = per.length > 1 && c.value > 0 ? "summed over " + per.length + " corners; " + int(Math.max(...per.map((r) => r.value))) + " in the worst corner" : "";
+  const extra = [sum, someWarnOnly && c.value > 0 ? int(gated) + " in checked corners" : ""].filter(Boolean).join(", ");
+  return int(c.value) + " violating" + (extra ? " (" + extra + ")" : "");
+}
+
 // Change of status from a baseline report to this one, per check id.
 // -> { regressed: [check], fixed: [check], changed: Map(id -> {from, to}) }
 export function statusDiff(cur, base) {
