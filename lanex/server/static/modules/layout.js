@@ -1837,7 +1837,7 @@ function ovlSectionHtml() {
       "<span class='lx-key-mark'><i class='is-ring' style='border-color:" + CLOCK_COLOR + "'></i>Clock buffer</span></div>" +
       "<div class='lx-key-scale'><span class='lx-key-k'>Flip-flops by clock arrival</span><div class='lx-ramp' style='background:" + rampGradient(rampName(), light) + "'></div>" +
       "<div class='lx-ramp-t'><span>" + fmtNum(s.arrival_min, 3) + " ns</span><span>" + fmtNum(s.arrival_max, 3) + " ns</span></div></div>" +
-      "<p class='lx-key-sum'>Skew <b>" + (s.skew != null ? fmtNum(s.skew * 1000, 1) + " ps" : "–") + "</b> · " + s.sinks + " flip-flops · " + s.buffers + " buffers</p>" +
+      "<p class='lx-key-sum'><span title='The latest clock arrival at a flip-flop minus the earliest, on this stage. Analytics shows LibreLane''s clock skew (worst pair, with uncertainty), which is a different number.'>Arrival spread</span> <b>" + (s.skew != null ? fmtNum(s.skew * 1000, 1) + " ps" : "–") + "</b> · " + s.sinks + " flip-flops · " + s.buffers + " buffers</p>" +
       note + "<button class='lx-key-coach' data-ovl='focus' data-focus='clock'>The clock tree, net by net " + icon("chevron", { size: 12 }) + "</button>" + close;
   }
   if (S.ovl === "paths") {
@@ -1907,6 +1907,21 @@ function slackWord(s) {
   return "<span class='lx-slack " + (s < 0 ? "is-neg" : "is-pos") + "'>" + (s >= 0 ? "+" : "") + s.toFixed(3) + " ns</span>";
 }
 
+// Which corner and constraints the stage's path list was timed with: one
+// corner only (sign-off times them all; Verify shows each).
+function pathsCornerNote(d) {
+  const t = (d && d.timing) || {};
+  const corner = t.corner ? "<code>" + esc(t.corner) + "</code>" : "the default corner";
+  const all = t.corners > 1 ? " Sign-off times " + t.corners + " corners; Verify's Timing shows every one and the worst." : "";
+  if (stageId() === "final") {
+    return "<p class='muted lx-focus-l'>Timed in one corner, " + corner + ", with " +
+      (t.signoff_sdc ? "the sign-off constraints (SIGNOFF_SDC_FILE)" : "the place-and-route constraints (no sign-off SDC found)") +
+      (t.spef ? " and the extracted parasitics." : ".") + all + "</p>";
+  }
+  return "<p class='muted lx-focus-l'>A one-corner estimate (" + corner + ") with this stage's place-and-route constraints. Before extraction (stage " +
+    esc(stageId() || S.source) + "), wire delay is an estimate from placement." + all + "</p>";
+}
+
 function pathFocusHtml() {
   const d = S.an && S.an.key === anKey() && S.an.data;
   const list = d ? (d.paths[S.pathList] || []) : [];
@@ -1948,7 +1963,7 @@ function pathFocusHtml() {
         "<span class='lx-res-t'>" + slackWord(q.slack) + " <span class='lx-prow-se'>" + esc(q.startpoint) + " → " + esc(q.endpoint) + "</span></span>" +
         "<span class='lx-res-s'>" + (q.points || []).length + " pins · " + esc(q.group || "") + "</span></button>").join("") + "</div>"
         : "<p class='muted lx-pad'>No " + S.pathList + " paths on this stage (no constraints or Liberty here).</p>") +
-      (stageId() !== "final" && d ? "<p class='muted lx-focus-l'>Before extraction (stage " + esc(stageId() || S.source) + "), wire delay is an estimate from placement.</p>" : "");
+      pathsCornerNote(d);
   } else if (!p) {
     html += "<p class='muted lx-pad'>Measuring with OpenROAD…</p>";
   }
@@ -1962,7 +1977,7 @@ function clockFocusHtml() {
   const drivers = c.nets.filter((n) => n.driver || n.port);
   return "<div class='lx-focus-h'><span class='lx-focus-k'>Clock tree · " + esc((s.roots || []).join(", ") || "clock") + "</span></div>" +
     "<p class='lx-focus-t'>" + s.nets + " nets · " + s.buffers + " buffers · " + s.sinks + " flip-flops</p>" +
-    "<p class='lx-focus-s'>Arrival " + fmtNum(s.arrival_min, 3) + "–" + fmtNum(s.arrival_max, 3) + " ns · skew <b>" + (s.skew != null ? fmtNum(s.skew * 1000, 1) + " ps" : "–") + "</b></p>" +
+    "<p class='lx-focus-s'>Arrival " + fmtNum(s.arrival_min, 3) + "–" + fmtNum(s.arrival_max, 3) + " ns · <span title='The latest clock arrival at a flip-flop minus the earliest, on this stage. Analytics shows LibreLane''s clock skew (worst pair, with uncertainty), which is a different number.'>arrival spread</span> <b>" + (s.skew != null ? fmtNum(s.skew * 1000, 1) + " ps" : "–") + "</b></p>" +
     "<div class='lx-clk-chart' id='lx-clk-chart' role='img' aria-label='Flip-flops by clock arrival time'></div>" +
     "<div class='lx-res-h'>Nets <span class='lx-n'>" + drivers.length + "</span></div>" +
     drivers.map((n) => {

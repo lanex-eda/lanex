@@ -44,6 +44,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_verify": "The signoff verdict stays 3-state — pass / fail / unknown never collapse to two.",
     "test_verify_lane4": "Timing paths per corner match OpenSTA's own numbers; a run with no clock never reads clean; warnings group by code, waivers stay visible and survive a reload; the sign-off report says 'not a foundry sign-off' first.",
     "test_fix3_results": "Results read like the tools' own reports: unclocked flip-flops never read Clean, power straps sit where pdngen draws them, a lint that didn't run is never ok, and 'FAIL: 0' is a pass.",
+    "test_security_r2": "A project from someone else can't run code or write outside itself: the sign-off report escapes every value and run-folder HTML opens sandboxed, Yosys and Tcl scripts take names as text, links in run folders are never written through, Replace never corrupts a non-UTF-8 file, and no GET route changes anything.",
     "test_reports": "DRC/LVS parsers are 3-state: a missing or empty report can never read as clean.",
     "test_accuracy_round47": "Timing reads the FINAL post-PnR STA; Netgen LVS verdict-anchored; probe timeouts bounded.",
     "test_accuracy_round52": "Input hygiene (whitespace, atomic sidecars, list overrides) + viewer tech-file guards + 3-state DRC.",

@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from .quoting import file_arg
 from .simulate import GHDL_PRELUDE, _shquote
 
 _CAPS: Dict[str, Dict[str, Any]] = {}
@@ -101,7 +102,7 @@ def _probe(key: str, engine: str, image: str) -> None:
 def lint_shell(files: Sequence[str]) -> str:
     """GHDL's analysis of *files* (a full semantic check), with its work
     library in the container's /tmp so nothing is written into the project."""
-    ana = " ".join(_shquote(p) for p in ["ghdl", "-a", "--std=08", "--workdir=/tmp/lanex-ghdl"] + list(files))
+    ana = " ".join(_shquote(p) for p in ["ghdl", "-a", "--std=08", "--workdir=/tmp/lanex-ghdl"] + [file_arg(f) for f in files])
     return GHDL_PRELUDE + "mkdir -p /tmp/lanex-ghdl; " + ana
 
 

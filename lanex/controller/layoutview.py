@@ -1385,19 +1385,20 @@ def thumbnail(run_dir: Path, source: str, w: int, h: int, bg: str) -> Optional[b
         return None
     _keep_thumb(key, png)
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
+        from . import safefs
+        # A real <run>/.lanex/thumbs (a link planted there would send these
+        # writes and deletes elsewhere: refused), the picture renamed in.
+        folder = safefs.confined_dir(run_dir, ".lanex", "thumbs")
         # Older pictures of the same stage at this size (the layout changed).
-        for old in f.parent.glob(f.name.split("__", 1)[0] + "__%dx%d__%s__*.png" % (int(w), int(h), bg.lstrip("#"))):
-            if old != f:
+        for old in folder.glob(f.name.split("__", 1)[0] + "__%dx%d__%s__*.png" % (int(w), int(h), bg.lstrip("#"))):
+            if old.name != f.name:
                 try:
                     old.unlink()
                 except OSError:
                     pass
-        tmp = f.with_name(f.name + ".%d.tmp" % os.getpid())
-        tmp.write_bytes(png)
-        os.replace(tmp, f)
+        safefs.write_bytes(folder, f.name, png)
     except OSError:
-        pass      # a read-only run folder: memory only
+        pass      # a read-only run folder, or a link: memory only
     return png
 
 

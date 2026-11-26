@@ -162,6 +162,17 @@ def _macro_dir(d: Path, name: str) -> Optional[Path]:
     return root / name
 
 
+def _writable_macro_dir(d: Path, name: str) -> Optional[Path]:
+    """``_macro_dir`` when LanEx may write into it: neither ``macros`` nor
+    ``macros/<name>`` is a link, and it resolves inside the project. A shared
+    project can hold such a link to send the generated header and Liberty
+    copies (made at every run start) somewhere else."""
+    macro_dir = _macro_dir(d, name)
+    if macro_dir is None or macro_dir.parent.is_symlink() or macro_dir.is_symlink() or not _confined(d, macro_dir):
+        return None
+    return macro_dir
+
+
 def list_macros(design_dir: str | Path) -> Dict[str, Any]:
     """Return the design's saved custom macros (read-only)."""
     return {"ok": True, "macros": _load(design_dir), "settings": _settings(design_dir),
@@ -768,7 +779,9 @@ _BEHAVIOURAL_RX = re.compile(r"\b(always|assign|initial|reg)\b")
 
 
 def _write_generated(macro_dir: Path, fname: str, text: str) -> str:
-    from . import platform_env
+    from . import platform_env, safefs
+    if macro_dir.parent.is_symlink() or macro_dir.is_symlink():
+        raise safefs.UnsafePath(f"{macro_dir} is a link, so LanEx won't write the macro's files there.")
     macro_dir.mkdir(parents=True, exist_ok=True)
     target = macro_dir / fname
     if target.is_symlink():
@@ -807,7 +820,7 @@ def prepare_views(design_dir: str | Path, name: str, views: Dict[str, Any], *,
     files to key per corner (absolute; a PDK block ships one per corner)."""
     from . import macrolib
     d = Path(design_dir).resolve()
-    macro_dir = _macro_dir(d, name)
+    macro_dir = _writable_macro_dir(d, name)
     if macro_dir is None:
         return views, {}
     out = dict(views)
@@ -888,6 +901,9 @@ def add_pdk_macro(design_dir: str | Path, pdk: str, scl: Optional[str], name: st
     d = Path(design_dir).resolve()
     if _macro_dir(d, name) is None:
         return {"ok": False, "error": "macro module name must be a valid Verilog identifier"}
+    if _writable_macro_dir(d, name) is None:
+        return {"ok": False, "error": f"macros/{name} is a link to somewhere else, so LanEx won't write the "
+                                      "macro's files there. Remove the link and add the macro again."}
     pd = found["pdk_dir"]
     rel = lambda p: "pdk_dir::" + str(p.relative_to(pd)).replace("\\", "/")
     views: Dict[str, Any] = {"gds": rel(f["gds"]), "lef": rel(f["lef"])}

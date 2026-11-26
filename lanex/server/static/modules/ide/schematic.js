@@ -276,7 +276,7 @@ export async function build() {
   btn.disabled = true;
   paintMsg("<div class='sch-empty'><p><span class='ss-spin' aria-hidden='true'></span> Reading the design with Yosys…</p>" +
     "<button class='btn btn-ghost btn-sm' data-sch-cancel='1'>Cancel</button></div>");
-  document.querySelector("[data-sch-cancel]")?.addEventListener("click", () => { if (S.job) api.ideSchematicResult(S.job, true).catch(() => {}); });
+  document.querySelector("[data-sch-cancel]")?.addEventListener("click", () => { if (S.job) api.ideSchematicCancel().catch(() => {}); });
   clearSvg();
   let r;
   try {

@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import container_run, events, lint
+from .quoting import file_arg
 
 # Wall-clock ceiling for a single simulation. A hand-written testbench with a
 # free-running clock (``always #5 clk = ~clk``) and no ``$finish`` never
@@ -104,8 +105,8 @@ def _verilator_shell(*, top: str, sources: Sequence[str], testbench: str,
         parts.append(f"-D{k}={v}" if v not in (None, "") else f"-D{k}")
     for inc in (include_dirs or []):
         parts.append(f"-I{inc}")
-    parts.extend(str(s) for s in sources)
-    parts.append(str(testbench))
+    parts.extend(file_arg(s) for s in sources)
+    parts.append(file_arg(testbench))
     build = " ".join(_shquote(p) for p in parts)
     run = " ".join(_shquote(p) for p in [f"./{mdir}/{out_name}"] + list(plusargs))
     # Build, then run the produced simulator (which dumps the VCD/FST).
@@ -135,8 +136,8 @@ def _iverilog_shell(*, top: str, sources: Sequence[str], testbench: str,
         parts.append(f"-D{k}={v}" if v not in (None, "") else f"-D{k}")
     for inc in (include_dirs or []):
         parts.append(f"-I{inc}")
-    parts.extend(str(s) for s in sources)
-    parts.append(str(testbench))
+    parts.extend(file_arg(s) for s in sources)
+    parts.append(file_arg(testbench))
     build = " ".join(_shquote(p) for p in parts)
     run = " ".join(_shquote(p) for p in ["vvp", "-n", out] + list(plusargs))
     return f"set -e; mkdir -p {_shquote(build_dir)}; {build}; echo {RUN_MARK}; {run}"
@@ -1110,8 +1111,11 @@ class SimBatch:
             if wave:
                 dest_rel = f"{SIM_BUILD}/waves/{bench_stem(pl['testbench'])}{Path(wave).suffix}"
                 try:
-                    (d / dest_rel).parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(d / wave, d / dest_rel)
+                    from . import safefs
+                    # sim_build/waves as real folders in the project: a link
+                    # there would move the dump somewhere else.
+                    folder = safefs.confined_dir(d, SIM_BUILD, "waves")
+                    os.replace(d / wave, folder / Path(dest_rel).name)
                     wave = dest_rel
                 except OSError:
                     pass

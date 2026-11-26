@@ -375,7 +375,14 @@ def h_runs(handler: Any) -> None:
     # active one — used by the Runs tab's "All history" scope, which fans out over
     # the user's recent design dirs. Read-only metadata under <dir>/runs/.
     explicit = _query_param(handler.path, "design_dir")
-    design_dir = explicit if (explicit and Path(explicit).expanduser().is_dir()) else _get_active_design_dir()
+    if explicit:
+        known = _known_design_dir(explicit)
+        if known is None:
+            _respond(handler, _NOT_KNOWN, 403)
+            return
+        design_dir: Optional[str] = str(known)
+    else:
+        design_dir = _get_active_design_dir()
     if not design_dir:
         _respond(handler, [])
         return
@@ -641,11 +648,16 @@ def h_walk_sources(handler: Any) -> None:
 
 
 def h_run_reports(handler: Any) -> None:
-    design_dir = _query_param(handler.path, "design_dir")
+    raw = _query_param(handler.path, "design_dir")
     run_tag = _query_param(handler.path, "run_tag")
-    if not design_dir or not run_tag:
+    if not raw or not run_tag or _bad_tag(run_tag):
         _respond(handler, "missing design_dir or run_tag", 400)
         return
+    known = _known_design_dir(raw)
+    if known is None:
+        _respond(handler, _NOT_KNOWN, 403)
+        return
+    design_dir = str(known)
     try:
         _respond(handler, history.cached_run_result(
             "reports", os.path.join(design_dir, "runs", run_tag),
@@ -2359,9 +2371,13 @@ def h_run_log(handler: Any) -> None:
     (``lanex-console.log``) when there is one, else LibreLane's ``flow.log``.
     Nothing is read whole into memory: a big run's log is tens of MB."""
     tag = _query_param(handler.path, "tag")
-    dd = _queue_design({"design_dir": _query_param(handler.path, "design_dir")})
-    if not dd or not tag or _bad_tag(tag):
+    raw = _query_param(handler.path, "design_dir") or _get_active_design_dir()
+    if not raw or not tag or _bad_tag(tag):
         _respond(handler, "missing or bad tag / design_dir", 400)
+        return
+    dd = _known_design_dir(raw)
+    if dd is None:
+        _respond(handler, _NOT_KNOWN, 403)
         return
     run = Path(dd) / "runs" / tag
     which = _query_param(handler.path, "source")
@@ -2799,7 +2815,8 @@ def h_run_diagrams(handler: Any) -> None:
 
 
 def h_render_dot(handler: Any) -> None:
-    """Render a run's .dot diagram to a cached SVG (served via /api/run-file)."""
+    """Render a run's .dot diagram to a cached SVG (served via /api/run-file).
+    POST (``?tag=&path=``): it runs Graphviz and writes the SVG into the run."""
     tag = _query_param(handler.path, "tag")
     rel = _query_param(handler.path, "path")
     force = (_query_param(handler.path, "force") or "").lower() in ("1", "true", "yes")
@@ -3646,7 +3663,11 @@ def h_run_bundle(handler: Any) -> None:
 
 def h_trends(handler: Any) -> None:
     """Per-metric trend series across the active design's runs (for line charts)."""
-    design_dir = _query_param(handler.path, "design_dir") or _get_active_design_dir()
+    explicit = _query_param(handler.path, "design_dir")
+    if explicit and _known_design_dir(explicit) is None:
+        _respond(handler, _NOT_KNOWN, 403)
+        return
+    design_dir = str(_known_design_dir(explicit)) if explicit else _get_active_design_dir()
     if not design_dir:
         _respond(handler, {"ok": True, "runs": [], "series": {}, "keys": []})
         return
@@ -3708,6 +3729,33 @@ def _runs_design_arg(raw: Any) -> Optional[Path]:
     if str(p) in _runs_known_designs():
         return p
     return None
+
+
+_NOT_KNOWN = ("LanEx only reads the runs of projects it has open. Open this project on Setup "
+              "(or pick it in the project list) first.")
+
+
+def _known_design_dir(raw: Any) -> Optional[Path]:
+    """A design folder named in a request (a Windows path is converted), when
+    LanEx knows it: opened on Setup, the active one, or one a run is writing
+    into now. The read routes that take a folder from the URL (run log, run
+    reports, runs, trends) use it, so none of them lists or streams the files
+    of an arbitrary folder (the rule F1 gave /api/runs-meta)."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        raw = platform_env.to_host_path(raw) or raw
+    except Exception:
+        pass
+    p = _runs_design_arg(raw)
+    if p is not None:
+        return p
+    try:
+        q = Path(raw).expanduser().resolve()
+        live = {str(Path(d).resolve().parent.parent) for d in _runs_live_dirs()}
+    except (OSError, RuntimeError):
+        return None
+    return q if str(q) in live and q.is_dir() else None
 
 
 def purge_old_trash(design_dirs: Optional[List[str]] = None, *, background: bool = True) -> None:
@@ -5677,11 +5725,13 @@ def h_ide_replace(handler: Any) -> None:
 
 def h_ide_caps(handler: Any) -> None:
     """What the IDE can run here: VHDL through the image's GHDL, Yosys for
-    the schematic (GET; ?wait=1 waits for the first probe)."""
+    the schematic. POST, because the first ask starts a container that probes
+    the image (G20); ``{wait: true}`` waits for that probe."""
     from ..controller import container_run, vhdltools
+    body = getattr(handler, "_body", {}) or {}
     eng = tools_mod.resolve_engine()
     engine = eng.get("engine") if eng.get("ready") else None
-    wait = 20.0 if _query_param(handler.path, "wait") else 0.0
+    wait = 20.0 if body.get("wait") else 0.0
     try:
         image = container_run.image_ref() if engine else None
     except Exception:
@@ -5708,12 +5758,18 @@ def h_ide_schematic(handler: Any) -> None:
 
 
 def h_ide_schematic_result(handler: Any) -> None:
-    """The schematic job's state, and the netlist once it is done (GET ?id=)."""
+    """The schematic job's state, and the netlist once it is done (GET ?id=).
+    A read only: stopping the job is POST /api/ide/schematic-cancel."""
     from ..controller import schematic
     jid = _query_param(handler.path, "id")
-    if _query_param(handler.path, "cancel"):
-        schematic.job.cancel()
     _respond(handler, schematic.job.result(jid))
+
+
+def h_ide_schematic_cancel(handler: Any) -> None:
+    """Stop the schematic's Yosys read (POST)."""
+    from ..controller import schematic
+    schematic.job.cancel()
+    _respond(handler, {"cancelled": True})
 
 
 def _final_gds(run_dir: Path) -> Optional[Path]:
@@ -6663,6 +6719,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/ide/caps", h_ide_caps),
     ("/api/ide/schematic", h_ide_schematic),
     ("/api/ide/schematic-result", h_ide_schematic_result),
+    ("/api/ide/schematic-cancel", h_ide_schematic_cancel),
     ("/api/celllib/cell", h_celllib_cell),
     ("/api/celllib/layout", h_celllib_layout),
     ("/api/celllib/view", h_celllib_view),
@@ -6820,7 +6877,8 @@ _POST_ROUTES = {
     "/api/file/write", "/api/file/delete", "/api/file/rename", "/api/lint",
     "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave",
     "/api/sim/run-all", "/api/sim/preview", "/api/ide/index", "/api/ide/definition", "/api/ide/references",
-    "/api/ide/symbols", "/api/ide/hierarchy", "/api/ide/search", "/api/ide/replace", "/api/ide/schematic", "/api/celllib/view",
+    "/api/ide/symbols", "/api/ide/hierarchy", "/api/ide/search", "/api/ide/replace", "/api/ide/schematic",
+    "/api/ide/schematic-cancel", "/api/ide/caps", "/api/render-dot", "/api/celllib/view",
     "/api/celllib/view/close", "/api/macros/add", "/api/macros/settings", "/api/macros/place",
     "/api/custom-cells/save", "/api/custom-cells/remove", "/api/custom-cells/enable",
     "/api/custom-macros/save", "/api/custom-macros/remove", "/api/custom-macros/enable",
@@ -6851,7 +6909,7 @@ _GET_ROUTES = {
     "/api/templates", "/api/project/defaults", "/api/project/files", "/api/run-export",
     "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems", "/api/kb/errors", "/api/floorplan/estimate",
     "/api/timing-paths", "/api/dse/sweeps", "/api/dse/status", "/api/system-resources",
-    "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/sim/batch", "/api/ide/caps",
+    "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/sim/batch",
     "/api/ide/schematic-result", "/api/celllib/cell",
     "/api/celllib/layout", "/api/celllib", "/api/macros/catalog", "/api/macros/projects",
     "/api/macros/inspect", "/api/cells", "/api/custom-cells", "/api/custom-macros",
@@ -6859,7 +6917,7 @@ _GET_ROUTES = {
     "/api/health", "/api/presence", "/api/hello", "/api/about", "/api/steps", "/api/variables",
     "/api/design-formats", "/api/flows", "/api/pdks", "/api/scls", "/api/pdk-ready", "/api/runs",
     "/api/known-designs", "/api/run-step-log", "/api/run-files", "/api/run-images",
-    "/api/run-outputs", "/api/run-diagrams", "/api/render-dot", "/api/run-gui-meta",
+    "/api/run-outputs", "/api/run-diagrams", "/api/run-gui-meta",
     "/api/run-reproduce", "/api/run-bundle", "/api/trends", "/api/desktop-tools",
     "/api/container-tools", "/api/layout/sources", "/api/layout/render", "/api/layout/thumb",
     "/api/layout/probe", "/api/layout/instances", "/api/layout/mesh", "/api/layout/markers",

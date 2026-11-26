@@ -48,6 +48,7 @@ from .container_run import (
     is_progress_bar,
     strip_ansi,
 )
+from . import safefs
 from .events import bus
 from .models import EventType, StepStatus
 
@@ -901,7 +902,7 @@ class FlowRunner:
                 del self._tee_buf[: len(self._tee_buf) - self.TEE_BUF_MAX]
             if self._current_step_id and self._run_dir and Path(self._run_dir).is_dir():
                 try:
-                    self._tee = open(Path(self._run_dir) / self.TEE_NAME, "a", encoding="utf-8", buffering=1)
+                    self._tee = safefs.open_append(Path(self._run_dir) / self.TEE_NAME, buffering=1)  # never through a link
                     self._tee.write("\n".join(self._tee_buf) + "\n")
                     self._tee_buf = []
                 except Exception:
@@ -919,7 +920,7 @@ class FlowRunner:
             # A run that ended before its first step (a config error): keep
             # what it printed, the reason is in there.
             try:
-                with open(Path(self._run_dir) / self.TEE_NAME, "a", encoding="utf-8") as f:
+                with safefs.open_append(Path(self._run_dir) / self.TEE_NAME) as f:
                     f.write("\n".join(self._tee_buf) + "\n")
             except Exception:
                 pass
@@ -1308,6 +1309,10 @@ class FlowRunner:
         (``LANEX_CONTAINER_NAME``, read by ``librelane_entry``) so Stop can
         remove this container and nothing else."""
         run_env = os.environ.copy()
+        # The host-side `python -m lanex.controller.librelane_entry` starts in
+        # the project folder: without this, a `lanex/` or `librelane/` folder
+        # (or json.py) in a shared project would be imported and run here.
+        run_env["PYTHONSAFEPATH"] = "1"
         self._container_name = new_container_name()
         run_env["LANEX_CONTAINER_NAME"] = self._container_name
         # Who started it (applied as --label by librelane_entry): another

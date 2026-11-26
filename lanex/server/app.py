@@ -140,6 +140,20 @@ _GZIP_MIN = 1024
 _GZIP_MAX_DYNAMIC = 8 * 1024 * 1024
 _COMPRESSIBLE = ("application/json", "text/", "application/javascript", "image/svg+xml")
 
+# A document an /api/ answer may carry (a run's report.html, an SVG, any HTML
+# or XML file inside a run or project folder) opens sandboxed: no script, an
+# opaque origin (so no key cookie, no API), no network; inline styles and
+# data: images and fonts still show, which is all LanEx's own reports use.
+SANDBOX_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:"
+_DOCUMENT_TYPES = ("text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml",
+                   "text/xsl", "application/xslt+xml")
+
+
+def is_document_type(content_type: str) -> bool:
+    """Whether a browser can open *content_type* as a page that runs script."""
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    return ct in _DOCUMENT_TYPES or ct.endswith("+xml")
+
 _STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
@@ -204,6 +218,8 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         self._responded = False
         self._body_read = False
         self._conn_hdr = False
+        self._sent_hdrs: set = set()
+        self._sent_ctype = ""
         super().handle_one_request()
 
     def send_response(self, code: int, message: Optional[str] = None) -> None:
@@ -215,11 +231,30 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
 
     def send_header(self, keyword: str, value: str) -> None:
-        if keyword.lower() == "connection":
+        k = keyword.lower()
+        if k == "connection":
             if getattr(self, "_conn_hdr", False):
                 return
             self._conn_hdr = True
+        if not hasattr(self, "_sent_hdrs"):
+            self._sent_hdrs = set()
+        self._sent_hdrs.add(k)
+        if k == "content-type":
+            self._sent_ctype = value
         super().send_header(keyword, value)
+
+    def end_headers(self) -> None:
+        """Every ``/api/`` answer is data, never a page of LanEx: nosniff
+        always, and a document type (HTML, SVG, XML: a run's report.html, a
+        rendered .dot, a file in a run folder) is sandboxed, so a script in it
+        neither runs nor gets LanEx's origin and key cookie."""
+        if (getattr(self, "path", "") or "").startswith("/api/"):
+            sent = getattr(self, "_sent_hdrs", set())
+            if "x-content-type-options" not in sent:
+                super().send_header("X-Content-Type-Options", "nosniff")
+            if "content-security-policy" not in sent and is_document_type(getattr(self, "_sent_ctype", "")):
+                super().send_header("Content-Security-Policy", SANDBOX_CSP)
+        super().end_headers()
 
     def _discard_body(self) -> None:
         """Read and drop a request body we answer without using (a refused

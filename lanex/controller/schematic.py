@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -51,10 +52,52 @@ _CACHE: Dict[str, str] = {}
 _CACHE_ORDER: List[str] = []
 
 
-def _q(s: str) -> str:
-    if re.fullmatch(r"[A-Za-z0-9_./=:+-]+", s or ""):
-        return s
-    return "'" + str(s).replace("'", "'\\''") + "'"
+class InputError(ValueError):
+    """A config value LanEx won't hand to Yosys (it would split or change the
+    script): the message says which and how to fix it."""
+
+
+# Yosys reads a script word by word: whitespace separates words, ";" ends a
+# command, "#" starts a comment, a command that starts with "!" runs a shell,
+# and a word that starts with a double quote runs to the next one. Shell
+# quoting means nothing to it. So no value is quoted: each one is checked to
+# be a single plain word, and refused otherwise.
+_IDENT_RX = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+_VALUE_RX = re.compile(
+    r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"           # 300, -2, 1.5, 1e3
+    r"|\d*'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_?]+"          # 8'hFF, 'd5
+    r"|[A-Za-z_][A-Za-z0-9_$]*"                         # FAST (a macro name)
+    r'|"[^"\s;#!\\]*"')                                 # "mem.hex"
+_PATH_BAD_RX = re.compile(r"[\s;#!\"'`\\\x00-\x1f\x7f]")
+
+
+def _check_ident(what: str, v: Any) -> str:
+    s = "" if v is None else str(v)
+    if not _IDENT_RX.fullmatch(s):
+        raise InputError(f"{what} {s!r} isn't a plain Verilog name (letters, digits, _ and $, starting with a "
+                         f"letter or _), so LanEx won't pass it to Yosys. Fix it in the config.")
+    return s
+
+
+def _check_value(what: str, v: Any) -> str:
+    s = str(v).strip()
+    if not _VALUE_RX.fullmatch(s):
+        raise InputError(f"{what} = {s!r}: use a number (300, 16'h1F), a name, or a string in quotes without "
+                         f"spaces (\"mem.hex\"). LanEx won't pass other values to Yosys.")
+    return s
+
+
+def _check_path(what: str, v: Any) -> str:
+    s = str(v)
+    if not s or s.startswith("-") or _PATH_BAD_RX.search(s):
+        raise InputError(f"{what} {s!r} has a space, a quote or one of ; # ! \\ in its name, or starts with -, "
+                         f"so Yosys would read it as more than a file name. Rename it to draw the schematic.")
+    return s
+
+
+def shell_command(script: str) -> str:
+    """The same read as a command to paste into a terminal."""
+    return "yosys -q -p " + shlex.quote(script)
 
 
 def yosys_script(*, files: Sequence[str], vhdl_files: Sequence[str] = (), top: str,
@@ -63,24 +106,27 @@ def yosys_script(*, files: Sequence[str], vhdl_files: Sequence[str] = (), top: s
     """The Yosys commands, mirroring LibreLane's read (scripts/pyosys/synthesize.py):
     ``read_verilog -sv`` with the defines and include dirs, VHDL through the
     GHDL plugin, ``hierarchy -top`` with the config's parameters, then the
-    level's passes, then ``write_json`` to stdout."""
+    level's passes, then ``write_json`` to stdout. Every value is checked to
+    be one plain word first; ``InputError`` names the one that isn't."""
+    top = _check_ident("The top module (DESIGN_NAME)", top)
     cmds: List[str] = []
     if files:
         parts = ["read_verilog", "-sv", "-noautowire"]
         for k, v in (defines or {}).items():
-            parts.append(f"-D{k}={v}" if v not in (None, "") else f"-D{k}")
+            k = _check_ident("The define (VERILOG_DEFINES)", k)
+            parts.append(f"-D{k}={_check_value('The define ' + k, v)}" if v not in (None, "") else f"-D{k}")
         for inc in include_dirs:
-            parts.append("-I" + str(inc))
-        parts += [str(f) for f in files]
-        cmds.append(" ".join(_q(p) for p in parts))
+            parts.append("-I" + _check_path("The include folder (VERILOG_INCLUDE_DIRS)", inc))
+        parts += [_check_path("The design file", f) for f in files]
+        cmds.append(" ".join(parts))
     if vhdl_files:
         cmds.append("plugin -i ghdl")
-        cmds.append("ghdl --std=08 " + " ".join(_q(str(f)) for f in vhdl_files) + " -e " + _q(top))
+        cmds.append("ghdl --std=08 " + " ".join(_check_path("The VHDL file", f) for f in vhdl_files) + " -e " + top)
     hier = ["hierarchy", "-check", "-top", top]
     for k, v in (params or {}).items():
-        if re.fullmatch(r"[A-Za-z_]\w*", str(k)):
-            hier += ["-chparam", str(k), str(v)]
-    cmds.append(" ".join(_q(p) for p in hier))
+        hier += ["-chparam", _check_ident("The parameter (SYNTH_PARAMETERS)", k),
+                 _check_value("The parameter " + str(k), v)]
+    cmds.append(" ".join(hier))
     cmds.append(LEVELS.get(level, LEVELS["rtl"]))
     cmds.append("write_json")
     return "; ".join(cmds)
@@ -172,12 +218,15 @@ class SchematicJob:
             return {"ok": False, "error": "The config names no top module (DESIGN_NAME), so there is nothing to draw yet."}
         if not inp["files"] and not inp["vhdl_files"]:
             return {"ok": False, "error": "No design files to read. Add a Verilog file under src/ first."}
-        script = yosys_script(files=inp["files"], vhdl_files=inp["vhdl_files"], top=inp["top"],
-                              defines=inp["defines"], include_dirs=inp["include_dirs"], level=level,
-                              params=inp["params"])
+        try:
+            script = yosys_script(files=inp["files"], vhdl_files=inp["vhdl_files"], top=inp["top"],
+                                  defines=inp["defines"], include_dirs=inp["include_dirs"], level=level,
+                                  params=inp["params"])
+        except InputError as ex:
+            return {"ok": False, "error": str(ex)}
         key = _cache_key(d, script, list(inp["files"]) + list(inp["vhdl_files"]))
         jid = uuid.uuid4().hex[:10]
-        command = "yosys -q -p " + _q(script)
+        command = shell_command(script)
         if key in _CACHE:
             self.jobs = {jid: {"state": "done", "json": _CACHE[key], "ms": 0, "cached": True, "command": command,
                                "top": inp["top"], "level": level, "inputs": inp}}
