@@ -34,6 +34,7 @@ from __future__ import annotations
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -1192,17 +1193,23 @@ def _ciel_provision_script(pdk_root: str, pdk: str, libraries: Optional[List[str
     PATH, or ``"<python> -m ciel"`` for venv/pipx installs where the module is
     importable but the console script isn't exposed.
     """
+    # Every value goes into the sh -c text as one shell word (shlex.quote): a
+    # PDK root, a family, a library or a pinned hash with a space, a quote or a
+    # `;` in it stays a value and never runs. *ciel_cmd* and *prefix* are shell
+    # text this module built itself (already quoted).
+    q = shlex.quote
     family = _pdk_family(pdk)
-    lib_args = "".join(f" -l {lib}" for lib in (libraries or []))
+    qf = q(family)
+    lib_args = "".join(f" -l {q(lib)}" for lib in (libraries or []))
     pre = (prefix + " && ") if prefix else ""
     pinned = _pinned_pdk_version(family)
     if pinned:
-        ver_assign = f'PDK_VERSION="{pinned}"; '
+        ver_assign = f"PDK_VERSION={q(pinned)}; "
     else:
         ver_assign = (
-            f'PDK_VERSION="$({ciel_cmd} ls-remote --pdk-family {family} | head -n1)"; '
-            f'if [ -z "$PDK_VERSION" ]; then echo "ERROR: could not resolve a {family} version '
-            f'(no network or ciel not reachable)"; exit 3; fi; '
+            f'PDK_VERSION="$({ciel_cmd} ls-remote --pdk-family {qf} | head -n1)"; '
+            f'if [ -z "$PDK_VERSION" ]; then printf \'ERROR: could not resolve a %s version '
+            f'(no network or ciel not reachable)\\n\' {qf}; exit 3; fi; '
         )
     # A fetch cut off mid-download (a slow/flaky link on a multi-GB PDK) leaves a
     # half-extracted version directory. ciel's own retry then fails with
@@ -1213,17 +1220,18 @@ def _ciel_provision_script(pdk_root: str, pdk: str, libraries: Optional[List[str
     # their ciel store; ``chmod -R u+w`` re-opens any directory ciel wrote without
     # a write bit, which is exactly what a bare ``rm`` would otherwise choke on).
     # This also self-heals a store already wedged by a previous interrupted run.
-    ver_dir = f'"{pdk_root}/ciel/{family}/versions/$PDK_VERSION"'
+    qr = q(pdk_root)
+    ver_dir = q(f"{pdk_root}/ciel/{family}/versions/") + '"$PDK_VERSION"'
     return (
         f"{pre}"
         f"{ver_assign}"
-        f'echo "Installing {family} version $PDK_VERSION"; '
+        f"printf 'Installing %s version %s\\n' {qf} \"$PDK_VERSION\"; "
         f"for i in 1 2 3 4 5; do "
-        f'{ciel_cmd} fetch --pdk-root "{pdk_root}" --pdk-family {family} "$PDK_VERSION"{lib_args} && break; '
+        f'{ciel_cmd} fetch --pdk-root {qr} --pdk-family {qf} "$PDK_VERSION"{lib_args} && break; '
         f"echo 'ciel fetch failed; clearing the interrupted partial download and retrying in 2s...'; "
         f"chmod -R u+w {ver_dir} 2>/dev/null || true; rm -rf {ver_dir} 2>/dev/null || true; "
         f"sleep 2; done && "
-        f'{ciel_cmd} enable --pdk-root "{pdk_root}" --pdk-family {family} "$PDK_VERSION"{lib_args}'
+        f'{ciel_cmd} enable --pdk-root {qr} --pdk-family {qf} "$PDK_VERSION"{lib_args}'
     )
 
 

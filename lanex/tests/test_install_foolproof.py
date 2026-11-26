@@ -407,7 +407,7 @@ def test_provision_script_clears_partial_before_retry() -> None:
     script = installer._ciel_provision_script(
         "/home/u/.ciel", "gf180mcuA", None, ciel_cmd="ciel"
     )
-    ver_dir = '"/home/u/.ciel/ciel/gf180mcu/versions/$PDK_VERSION"'
+    ver_dir = '/home/u/.ciel/ciel/gf180mcu/versions/"$PDK_VERSION"'
     # Self-heal is scoped to the one interrupted version dir (never all of ~/.ciel).
     assert f"chmod -R u+w {ver_dir}" in script
     assert f"rm -rf {ver_dir}" in script
@@ -424,6 +424,27 @@ def test_provision_script_clean_first_run_still_fetches_then_enables() -> None:
     )
     assert script.index("fetch") < script.index("chmod -R u+w") < script.index("enable")
     assert "-l sky130_fd_sc_hd" in script
+
+
+def test_provision_script_quotes_every_value(tmp_path, monkeypatch) -> None:
+    """Z2 leftover: a hostile PDK root, family, library or pinned hash is one
+    shell word in the sh -c text, never a command."""
+    import subprocess
+    canary = tmp_path / "pwned"
+    evil = f"x; touch {canary}; #"
+    monkeypatch.setattr(installer, "_pinned_pdk_version", lambda fam: f"v1$(touch {canary})")
+    script = installer._ciel_provision_script(
+        str(tmp_path / "root with space") + "'" + evil, "odd'pdk" + evil, ["lib\"" + evil, "$(touch " + str(canary) + ")"],
+        ciel_cmd="true")
+    # sh parses it (no syntax error) and nothing in the values ran.
+    out = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert not canary.exists(), script
+    # Unpinned: the family goes into ls-remote and the message as a value too.
+    monkeypatch.setattr(installer, "_pinned_pdk_version", lambda fam: None)
+    script = installer._ciel_provision_script("/r", "fam" + evil, None, ciel_cmd="echo")
+    subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=30)
+    assert not canary.exists(), script
 
 
 def test_repair_ciel_store_restores_write_and_removes_family(tmp_path) -> None:
