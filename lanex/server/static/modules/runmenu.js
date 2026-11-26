@@ -113,6 +113,47 @@ function fillSkip() {
   paintSkip();
 }
 
+// "Only one step": a step of the flow, run on the results of the run on the
+// results pages (LibreLane's --only with -i: a step needs the state before it).
+let _onlyTag = "";
+async function fillOnly() {
+  const sel = $("run-only");
+  if (!sel) return;
+  const keep = sel.value;
+  let tag = "";
+  try { tag = (await import("./context.js")).contextRun() || ""; } catch (_e) { tag = ""; }
+  _onlyTag = tag;
+  const ids = flowSteps();
+  const stages = FS.stagesOf(ids.map((id) => ({ id })));
+  let html = "<option value=''>Every step in the range</option>";
+  let cur = null;
+  ids.forEach((id, i) => {
+    if (stages[i] !== cur) { if (cur !== null) html += "</optgroup>"; cur = stages[i]; html += "<optgroup label='" + esc(FS.stageLabel(cur)) + "'>"; }
+    html += "<option value='" + esc(id) + "'>" + esc(id) + "</option>";
+  });
+  if (cur !== null) html += "</optgroup>";
+  sel.innerHTML = html;
+  sel.disabled = !tag;
+  sel.value = tag && [...sel.options].some((o) => o.value === keep) ? keep : "";
+  paintOnly();
+}
+
+function paintOnly() {
+  const sel = $("run-only"), note = $("run-only-note");
+  if (!sel || !note) return;
+  const on = !!sel.value;
+  note.hidden = !(on || sel.disabled);
+  note.textContent = sel.disabled ? "Run the flow once first: one step starts from a run's results."
+    : on ? "A new run of " + sel.value + " alone, on " + _onlyTag + "'s results up to it." : "";
+  for (const id of ["run-stop-after", "run-resume-from"]) { const s = $(id); if (s) s.disabled = on; }
+}
+
+// The step chosen under Only, with the run it starts from, or null.
+export function onlyChoice() {
+  const sel = $("run-only");
+  return sel && sel.value && !sel.disabled && _onlyTag ? { step: sel.value, tag: _onlyTag } : null;
+}
+
 function paintSkip() {
   const n = document.querySelectorAll("#run-skip-list input:checked").length;
   const s = $("run-skipsteps")?.querySelector("summary");
@@ -135,8 +176,10 @@ async function paintCommand(collect) {
   const tok = ++_cmdTok;
   const p = Object.assign({}, collect(), runMenuChoices());
   const rsel = $("run-resume-from");
-  const resumeTag = rsel && rsel.value ? rsel.dataset.tag : "";
-  if (resumeTag) p.frm = rsel.value;
+  const only = onlyChoice();
+  let resumeTag = rsel && rsel.value ? rsel.dataset.tag : "";
+  if (only) { p.only = only.step; resumeTag = only.tag; }
+  else if (resumeTag) p.frm = rsel.value;
   let cmd = null;
   try { cmd = await api.cliCommand(p); } catch (e) {
     if (tok === _cmdTok) el.innerHTML = "<span class='menu-note'>Couldn't build the command: " + esc(e.message) + "</span>";
@@ -234,8 +277,9 @@ export function setupRunMenu({ collect, start }) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); go(e.shiftKey ? "queue" : "now"); }
   });
   $("run-opts-btn")?.addEventListener("click", () => {
-    setTimeout(() => { fillSkip(); paintSlot(); scheduleCommand(collect); }, 0);
+    setTimeout(() => { fillSkip(); fillOnly(); paintSlot(); scheduleCommand(collect); }, 0);
   });
-  document.addEventListener("g:flow_known", fillSkip);
+  $("run-only")?.addEventListener("change", () => { paintOnly(); document.dispatchEvent(new CustomEvent("g:run_only")); });
+  document.addEventListener("g:flow_known", () => { fillSkip(); fillOnly(); });
   document.addEventListener("g:queue_state", () => { if (isLayerOpen(menu)) paintSlot(); });
 }

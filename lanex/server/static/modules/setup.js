@@ -14,7 +14,7 @@ import { wireJump } from "./jumpnav.js";
 import { pdkFacts, stackHtml } from "./pdkinfo.js";
 import * as FS from "./flowstages.js";
 import { askNotifyOnRun } from "./runend.js";
-import { runMenuChoices, setupRunMenu } from "./runmenu.js";
+import { runMenuChoices, setupRunMenu, onlyChoice } from "./runmenu.js";
 import { followJob } from "./runfollow.js";
 
 const RECENT_KEY = "ll.recentDesigns";
@@ -201,6 +201,7 @@ export function setupSetup() {
     else onRunClick({ show: false, when: slotFree() ? "now" : "queue" });
   });
   document.addEventListener("g:queue_state", () => paintRunLabel());
+  document.addEventListener("g:run_only", () => paintRunLabel());
   document.getElementById("btn-resume")?.addEventListener("click", () => api.resumeRun(state.followJob).catch(() => {}));
   document.getElementById("btn-preflight")?.addEventListener("click", () => renderPreflight());
 
@@ -1062,7 +1063,13 @@ async function onRunClick({ show = false, fixed = false, ack = false, when = "no
   const payload = collectRunPayload();
   payload.when = when === "queue" ? "queue" : "now";
   const rsel = document.getElementById("run-resume-from");
-  if (rsel && rsel.value && rsel.dataset.tag) {
+  const only = onlyChoice();
+  if (only) {
+    // Only one step (LibreLane's --only): a new run of that step on the
+    // results of the run on the results pages, which it needs (-i).
+    payload.branch_from = { tag: only.tag, step: only.step };
+    payload.to = only.step;
+  } else if (rsel && rsel.value && rsel.dataset.tag) {
     // Resume from a stage of the run on the results pages: the server plans it
     // (and starts earlier if something those stages read has changed since).
     payload.branch_from = { tag: rsel.dataset.tag, step: rsel.value };
@@ -1412,9 +1419,11 @@ function paintRunLabel() {
   const rst = ropt ? FS.stage(ropt.dataset.stage) : null;
   const span = g.querySelector("span");
   const full = !slotFree();
+  const only = onlyChoice();
   if (span) span.textContent = full ? "Add to queue"
+    : only ? "Run only " + only.step.split(".").pop()
     : rst ? "Resume from " + rst.label + (st ? " to " + st.label : "") : st ? "Run to " + st.label : "Run";
-  g.classList.toggle("is-partial", !!(st || rst));
+  g.classList.toggle("is-partial", !!(st || rst || only));
   g.classList.toggle("is-queue", full);
   const ic = g.querySelector("svg");
   if (ic) ic.outerHTML = icon(full ? "plus" : "play", { size: 15 });

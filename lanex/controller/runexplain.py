@@ -269,6 +269,19 @@ def _outcome(run_dir: Path) -> Optional[str]:
         return None
 
 
+def _console_error(run_dir: Path) -> Optional[str]:
+    """The error block a failing run printed on its console, as the run engine
+    kept it in ``gui-run.json`` ``outcome.error_text`` (runner.error_block)."""
+    try:
+        doc = json.loads((run_dir / "gui-run.json").read_text(encoding="utf-8"))
+        out = doc.get("outcome") if isinstance(doc, dict) else None
+        if isinstance(out, dict) and out.get("result") == "error":
+            return str(out.get("error_text") or out.get("error") or "") or None
+    except Exception:
+        pass
+    return None
+
+
 def explain_run(run_dir: str | Path, base_dir: Optional[str | Path] = None) -> Dict[str, Any]:
     """Outcome, reason, fixes and warnings for one run (see module doc)."""
     run_dir = Path(run_dir)
@@ -278,7 +291,14 @@ def explain_run(run_dir: str | Path, base_dir: Optional[str | Path] = None) -> D
     cfg = run.cfg or {}
     outcome = _outcome(run_dir)
     state = fs.get("state")
-    if state == "complete":
+    console_error = _console_error(run_dir) if outcome == "error" else None
+    if state == "complete" and console_error:
+        # LibreLane exited with an error that only its console showed (e.g. a
+        # SETUP_VIOLATION_CORNERS wildcard that matches no corner) although the
+        # folder looks finished: the run failed, with the console's words.
+        kind = "halted"
+        fs = {**fs, "error_log": (fs.get("error_log") or []) + console_error.splitlines()[:30]}
+    elif state == "complete":
         kind = "clean"
     elif state in ("deferred_errors", "complete_with_errors"):
         kind = "checks-failed"

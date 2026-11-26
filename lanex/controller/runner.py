@@ -83,6 +83,52 @@ def _load_state(path: str) -> Any:
         return State.load(_json.load(f), validate_path=True)
 
 
+_REC_RX = None
+
+
+def error_block(lines: Sequence[str], returncode: Optional[int] = None, max_lines: int = 60) -> Dict[str, Any]:
+    """The error a failing LibreLane run printed on its console, whole.
+
+    LibreLane exits 1 when it can't load the config (it lists every problem)
+    and 2 for a design failure (a FlowError, deferred checker errors). Some of
+    these reach only the console, never ``flow.log`` or ``error.log`` (it removes
+    its file handlers before printing the error), e.g. "One or more wildcards
+    specified in SETUP_VIOLATION_CORNERS did not match any corners". Returns
+    ``{text, first, kind, exit_code}``: the block from the first ERROR or
+    CRITICAL record (or "The following error…", a traceback) to the end, Rich's
+    80-column wrapping joined back and its source-path column dropped. Pure."""
+    import re as _re
+    # A Rich record: "[07:24:04] ERROR    text   file.py:12"; within the same
+    # second the time is left out and the level is indented instead.
+    rec = _re.compile(r"^(?:\[\d\d:\d\d:\d\d\]\s+|\s{6,14})(?P<lvl>DEBUG|VERBOSE|INFO|WARNING|ERROR|CRITICAL)\s+"
+                      r"(?P<msg>.*?)\s*(?:\S+\.py:\d+)?\s*$")
+    start = None
+    for i, ln in enumerate(lines):
+        m = rec.match(ln)
+        if (m and m.group("lvl") in ("ERROR", "CRITICAL")) or "The following error was encountered" in ln \
+                or ln.startswith("Traceback (most recent call last)") or _re.match(r"^\s*\[(ERROR|CRITICAL)\b", ln):
+            start = i
+            break
+    out: List[str] = []
+    if start is not None:
+        for ln in lines[start:]:
+            m = rec.match(ln)
+            if m:
+                out.append(m.group("msg"))
+            elif ln.startswith(" " * 20) and out:
+                # Rich wraps a record at 80 columns: a line indented 20 spaces continues it.
+                out[-1] = (out[-1] + " " + ln.strip()).strip()
+            elif ln.strip():
+                out.append(ln.rstrip())
+            if len(out) >= max_lines:
+                break
+    text = "\n".join(out)[:6000]
+    first = next((x for x in out if x.strip() and not x.startswith("Traceback")), "")
+    kind = "config" if returncode == 1 and any("config" in x.lower() for x in out[:6]) else (
+        "flow" if returncode == 2 else ("error" if returncode else None))
+    return {"text": text, "first": first[:400], "kind": kind, "exit_code": returncode}
+
+
 def latest_state_out(run_dir: Optional[str]) -> Optional[str]:
     """The ``state_out.json`` of the highest-numbered finished step folder of
     a run (the state the next step starts from), or None."""
@@ -284,6 +330,9 @@ class FlowRunner:
         # Download read the whole output; LibreLane's flow.log has no tool output.
         self._tee: Any = None
         self._tee_buf: List[str] = []
+        # The last console lines, for the error a failing run printed (error_block).
+        import collections as _collections
+        self._console_tail: Any = _collections.deque(maxlen=400)
         self.low_priority = False
         self._lowered = False
         self.step_started_at: Optional[float] = None
@@ -783,7 +832,26 @@ class FlowRunner:
     TEE_NAME = "lanex-console.log"
     TEE_BUF_MAX = 20000
 
+    def _error_from_console(self, done: Dict[str, Any], returncode: int) -> None:
+        """A run that exited non-zero: its console's error, whole, goes into
+        the flow_done event and gui-run.json's outcome (the failure card shows
+        it; some errors never reach flow.log or error.log)."""
+        try:
+            blk = error_block(list(self._console_tail), returncode)
+        except Exception:
+            return
+        if blk.get("text"):
+            done["error_text"] = blk["text"]
+            if blk.get("first"):
+                done["error"] = blk["first"]
+        done["exit_code"] = returncode
+        if blk.get("kind"):
+            done["failure_kind"] = blk["kind"]
+        if self._error is None:
+            self._error = done.get("error")
+
     def _tee_line(self, line: str) -> None:
+        self._console_tail.append(line)
         """Keep one console line: buffered until the run folder holds its
         first step (LibreLane decides new-or-existing run on an empty folder),
         then appended to ``runs/<tag>/lanex-console.log``. The name has no
@@ -874,6 +942,11 @@ class FlowRunner:
             result = "cancelled" if done.get("cancelled") else ("error" if done.get("error") else "ok")
             meta["outcome"] = {"result": result, "error": done.get("error") or None,
                                "ended_at": platform_env.local_now().isoformat(timespec="seconds")}
+            # The console's own words when it failed (a config LibreLane can't
+            # load lists every problem; some errors reach only the console).
+            for k in ("error_text", "exit_code", "failure_kind"):
+                if done.get(k) is not None:
+                    meta["outcome"][k] = done[k]
             platform_env.atomic_write_text(path, _json.dumps(_safe_jsonable(meta), indent=2) + "\n")
         except Exception:  # pragma: no cover - fs/permission dependent
             _log.debug("could not note the run outcome", exc_info=True)
@@ -1371,6 +1444,8 @@ class FlowRunner:
                 for parsed in parser.finish(proc.returncode):
                     if parsed.get("type") == "flow_done":
                         parsed.setdefault("tag", self._run_dir or "")
+                        if proc.returncode:
+                            self._error_from_console(parsed, proc.returncode)
                     self._dispatch_parsed(parsed)
         except FileNotFoundError as ex:
             self._error = f"{type(ex).__name__}: {ex}"
@@ -1611,8 +1686,9 @@ class FlowRunner:
                            "PDK download/resolve failed (offline?)") or \
                           f"step '{sid}' exited with code {proc.returncode}"
                     self._emit(EventType.STEP_FAILED, {"step_id": sid, "message": msg})
-                self._emit(EventType.FLOW_DONE,
-                           {"tag": self._run_dir or "", "error": f"step '{sid}' failed"})
+                done = {"tag": self._run_dir or "", "error": f"step '{sid}' failed"}
+                self._error_from_console(done, proc.returncode)
+                self._emit(EventType.FLOW_DONE, done)
                 self._running = False
         except Exception as ex:
             tb = traceback.format_exc()

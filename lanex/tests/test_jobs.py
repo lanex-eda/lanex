@@ -418,6 +418,53 @@ def test_a_continued_run_is_not_failed_by_its_cut_step(tmp_path):
     assert st["state"] == "complete" and st["stopped_step"] is None
 
 
+def test_the_console_error_that_ends_a_run_is_kept_whole():
+    # LibreLane prints some errors only on its console (Rich, 80 columns, a
+    # path column): the run engine keeps the whole block for the failure card.
+    from lanex.controller import runner
+    lines = [
+        "[07:23:58] VERBOSE  Running 'Checker.SetupViolations' at                       step.py:1139",
+        "                    'runs/glui-1/74-checker-setupviolations'…",
+        "[07:24:04] ERROR    The following error was encountered while running   __main__.py:187",
+        "                    the flow:",
+        "                    One or more deferred errors were encountered: One",
+        "                    or more wildcards specified in",
+        "                    SETUP_VIOLATION_CORNERS did not match any corners:",
+        "                    - nomatch_*",
+        "           ERROR    LibreLane will now quit.                            __main__.py:191",
+    ]
+    b = runner.error_block(lines, 2)
+    assert b["exit_code"] == 2 and b["kind"] == "flow"
+    assert "SETUP_VIOLATION_CORNERS did not match any corners: - nomatch_*" in b["text"]
+    assert b["text"].splitlines()[-1] == "LibreLane will now quit."
+    assert b["first"].startswith("The following error was encountered while running the flow:")
+    assert "__main__.py" not in b["text"]
+    cfg = ["[10:00:00] ERROR    There are 2 errors in the configuration file:    config.py:1",
+           "                    * CLOCK_PERIOD: 'abc' is not a number",
+           "                    * DIE_AREA: expected 4 numbers"]
+    c = runner.error_block(cfg, 1)
+    assert c["kind"] == "config" and "DIE_AREA: expected 4 numbers" in c["text"]
+    assert runner.error_block(["all good"], 0)["text"] == ""
+
+
+def test_runexplain_reads_a_console_error_on_a_finished_looking_folder(tmp_path):
+    from lanex.controller import runexplain
+    rd = tmp_path / "runs" / "r1"
+    s = rd / "1-verilator-lint"
+    s.mkdir(parents=True)
+    (s / "config.json").write_text(json.dumps({"meta": {"step": "Verilator.Lint"}}))
+    for f in ("state_in.json", "state_out.json"):
+        (s / f).write_text("{}")
+    (s / "runtime.txt").write_text("00:00:01.000")
+    (rd / "final").mkdir()
+    (rd / "flow.log").write_text("Starting...\nFlow complete.\n")
+    assert runexplain.explain_run(rd)["kind"] == "clean"
+    (rd / "gui-run.json").write_text(json.dumps({"outcome": {"result": "error", "error": "x",
+                                                             "error_text": "One or more wildcards ... did not match any corners"}}))
+    rx = runexplain.explain_run(rd)
+    assert rx["kind"] == "halted" and any("did not match" in e for e in rx["errors"])
+
+
 def test_resume_info_refuses_a_changed_config(sched, tmp_path):
     a = _proj(tmp_path, "a")
     rd = _clean_run(a, "r1", [(1, "verilator-lint", 1.0)], complete=False)
