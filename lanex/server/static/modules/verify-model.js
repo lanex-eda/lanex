@@ -304,11 +304,26 @@ export function verdictCopy(rep) {
   if (v.state === "incomplete" && (by.get("setup") || {}).no_clock) {
     // LibreLane passed a run that timed nothing: never "clean" (LibreLane #1028).
     const nc = by.get("setup").no_clock;
+    const port = Array.isArray(nc.clock_port) ? nc.clock_port.join(", ") : nc.clock_port;
     return { tone: "warn", title: "Timing was never checked", short: "timing not checked", no_clock: nc,
-      sub: "No clock reached the registers, so OpenSTA timed no path in any corner and \"0 violations\" means nothing. " +
+      sub: "No clock reached the registers" + (isNum(nc.unclocked) && nc.unclocked ? " (" + nc.unclocked + " flip-flop clock pins with no clock)" : "") +
+        (nc.io_paths ? ", so OpenSTA timed only the paths from an input straight to an output, none through a flip-flop, and \"0 violations\" says nothing about the registers. "
+          : ", so OpenSTA timed no path in any corner and \"0 violations\" means nothing. ") +
         "LibreLane passed the run because its checkers count violations and there were none to count. " +
-        (nc.clock_port ? "CLOCK_PORT is \"" + nc.clock_port + "\": set it to the clock input of the top module" : "Set CLOCK_PORT to the clock input of the top module") +
+        (port ? "CLOCK_PORT is \"" + port + "\"" + (nc.port_missing ? ", a port the top module doesn't have" : "") + ": set it to the clock input of the top module" : "Set CLOCK_PORT to the clock input of the top module") +
         " and run again." };
+  }
+  const uc = by.get("setup") || {};
+  if (v.state === "ready" && uc.unclocked_warn && isNum(uc.unclocked)) {
+    // Some flip-flops have no clock: what was timed met the clock, the rest
+    // was never checked. Never plain "clean".
+    const others = v.warning_ids.filter((id) => id !== "setup");
+    return { tone: "warn", title: (rv && rv.label) || "Some flip-flops were never timed", short: "not all timed", unclocked: uc.unclocked,
+      warned: names(v.warning_ids),
+      sub: uc.unclocked + " flip-flop clock pin" + (uc.unclocked === 1 ? " has" : "s have") + " no clock (OpenSTA's check in sta.log), so the paths through " +
+        (uc.unclocked === 1 ? "it" : "them") + " were never timed; the paths that were timed met the clock. Usually a clock made inside the design " +
+        "(a divider, a ripple counter) or a second clock the SDC doesn't name: write an SDC that defines it." +
+        (others.length ? " LibreLane also warned about " + names(others).join(", ") + "." : "") };
   }
   if (v.state === "incomplete") {
     const miss = v.missing_core.map((id) => id === "drc" ? "DRC" : ((by.get(id) || {}).name || id));

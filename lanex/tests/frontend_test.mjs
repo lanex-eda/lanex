@@ -3732,6 +3732,46 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   });
 }
 
+// ------------------------------------------------ fix lane F3: results read like the tools' reports
+{
+  const VMf = await import(toUrl(resolve(MOD, "verify-model.js")));
+  const SMf = await import(toUrl(resolve(MOD, "studymodel.js")));
+  const done = { step_count: 70, steps_done: 70, steps_failed: 0 };
+  check("F3 verdict: an input-to-output path timed with no clock on the registers is 'Timing was never checked'", () => {
+    const nc = { clock_port: "clock", registers: 24, unclocked: 24, io_paths: true, port_missing: true };
+    const rep = { verdict: { state: "incomplete", missing_core: ["setup", "hold"], skipped_core: [], blocker_ids: [], warning_ids: [], total: 20 },
+      flow_state: { state: "complete" }, run_verdict: { state: "incomplete", label: "Timing not checked: no clock", no_clock: true },
+      checks: [{ id: "setup", name: "Setup violations", status: "not_run", no_clock: nc }, { id: "hold", name: "Hold violations", status: "not_run" }] };
+    const cp = VMf.verdictCopy(rep);
+    assert.equal(cp.title, "Timing was never checked");
+    assert.match(cp.sub, /only the paths from an input straight to an output/);
+    assert.match(cp.sub, /24 flip-flop clock pins with no clock/);
+    assert.match(cp.sub, /CLOCK_PORT is "clock", a port the top module doesn't have/);
+    // Studies: never "met timing", the point reads "Not timed: no clock".
+    const run = { ...done, verdict: { state: "incomplete", no_clock: true }, key_metrics: { timing__setup__ws: 4.39, timing__hold__ws: 4.2 } };
+    const key = SMf.pointKey({ run });
+    assert.equal(key, "failed");
+    assert.equal(SMf.metTiming(key, run), false);
+    assert.equal(SMf.pointWords(key, { run }).word, "Not timed: no clock");
+  });
+  check("F3 verdict: some flip-flops with no clock is a warning with the count, never plain Clean or 'met timing'", () => {
+    const rep = { verdict: { state: "ready", missing_core: [], skipped_core: [], blocker_ids: [], warning_ids: ["setup"], total: 20 },
+      flow_state: { state: "complete" }, run_verdict: { state: "warning", label: "Finished: 8 flip-flop clock pins not timed", unclocked: 8 },
+      checks: [{ id: "setup", name: "Setup violations", status: "warn", unclocked: 8, unclocked_warn: true, gate_note: "TIMING_VIOLATION_CORNERS = *tt*" }] };
+    const cp = VMf.verdictCopy(rep);
+    assert.equal(cp.tone, "warn");
+    assert.equal(cp.title, "Finished: 8 flip-flop clock pins not timed");
+    assert.match(cp.sub, /^8 flip-flop clock pins have no clock/);
+    assert.doesNotMatch(cp.sub, /TIMING_VIOLATION_CORNERS/);
+    const run = { ...done, verdict: { state: "warning", unclocked: 8 }, key_metrics: { timing__setup__ws: 4.39, timing__hold__ws: 0.2 } };
+    const key = SMf.pointKey({ run });
+    assert.equal(key, "warnings");
+    assert.equal(SMf.metTiming(key, run), false);
+    const clean = { ...done, verdict: { state: "passed" }, key_metrics: { timing__setup__ws: 4.39, timing__hold__ws: 0.2 } };
+    assert.equal(SMf.metTiming(SMf.pointKey({ run: clean }), clean), true, "a clocked clean run still met timing");
+  });
+}
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

@@ -63,7 +63,7 @@ function statusPill(c) {
   const st = V.STATUS[c.status] || V.STATUS.not_run;
   let sub = "";
   if (c.status === "fail") sub = c.gate === "blocks" ? "blocks tape-out" : "";
-  else if (c.status === "warn") sub = c.gate === "info" ? "not checked by LibreLane" : "LibreLane only warns";
+  else if (c.status === "warn") sub = c.unclocked_warn ? "flip-flops not timed" : c.gate === "info" ? "not checked by LibreLane" : "LibreLane only warns";
   else if (c.status === "info" || (c.gate === "info" && c.status === "pass")) sub = "for information";
   return "<span class='vf-pill is-" + esc(c.status) + "'>" + esc(st.label) + "</span>" +
     (sub ? "<small class='vf-pill-sub'>" + esc(sub) + "</small>" : "");
@@ -631,7 +631,9 @@ function renderTiming() {
   const rule = (r) => r.wildcards == null ? "every corner (rule unknown)" : !r.wildcards.length ? "no corner (warnings only)" :
     r.wildcards.length === 1 && r.wildcards[0] === "*" ? "every corner" : "corners matching " + r.wildcards.join(", ");
   const clk = V.isNum(t.clock_period) ? t.clock_period : Number(t.clock_period);
-  const lede = rows.length && t.no_clock
+  const lede = rows.length && t.no_clock && t.no_clock.io_paths
+    ? "OpenSTA ran in " + rows.length + " corners but no clock reached the registers: the slack below is only for paths from an input straight to an output, no flip-flop was timed, and \"0 violations\" says nothing about the registers."
+    : rows.length && t.no_clock
     ? "OpenSTA ran in " + rows.length + " corners but timed no path: no clock reached the registers, so there is no slack to show and \"0 violations\" means nothing was checked."
     : rows.length
     ? "OpenSTA timed the routed layout in " + rows.length + " corners" + (Number.isFinite(clk) ? " against a " + clk + " ns clock (" + +(1000 / clk).toFixed(2) + " MHz)" + vprov("CLOCK_PERIOD") : "") +
