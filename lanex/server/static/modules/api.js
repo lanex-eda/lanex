@@ -310,6 +310,23 @@ export const api = {
   fixPdkPermissions: () =>
     _fetch("/api/pdk/fix-permissions", { method: "POST", body: "{}" }),
 
+  // ---------- system: doctor, storage, clean-up, WSL memory, network (Tools)
+  doctor: (query) => _fetch("/api/doctor" + (query ? "?" + query : ""), { timeout: 60000 }),
+  storage: (fresh) => _fetch("/api/system/storage" + (fresh ? "?fresh=1" : "")),
+  cleanupList: () => _fetch("/api/system/cleanup", { timeout: 90000 }),
+  removeImage: (id) =>
+    _fetch("/api/system/cleanup/image", { method: "POST", body: JSON.stringify({ id }), timeout: 300000 }),
+  pdkInventory: () => _fetch("/api/pdk/inventory"),
+  removePdkVariant: (variant) =>
+    _fetch("/api/pdk/remove-variant", { method: "POST", body: JSON.stringify({ variant }), timeout: 120000 }),
+  removePdkVersion: (family, version) =>
+    _fetch("/api/pdk/remove-version", { method: "POST", body: JSON.stringify({ family, version }), timeout: 300000 }),
+  wslMemory: () => _fetch("/api/system/wsl-memory", { timeout: 30000 }),
+  setWslMemory: (gb) => _fetch("/api/system/wsl-memory", { method: "POST", body: JSON.stringify({ gb }), timeout: 30000 }),
+  networkStatus: () => _fetch("/api/system/network"),
+  networkApply: () => _fetch("/api/system/network", { method: "POST", body: "{}", timeout: 240000 }),
+  updateSkip: (version) => _fetch("/api/update-check/skip", { method: "POST", body: JSON.stringify({ version }) }),
+
   copySpm: (designDir) =>
     _fetch("/api/copy-spm", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
 

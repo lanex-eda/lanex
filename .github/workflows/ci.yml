@@ -186,6 +186,26 @@ jobs:
           curl -fsS http://127.0.0.1:8799/api/health || { cat "$RUNNER_TEMP/lanex.log"; exit 1; }
           kill %1 || true
           sleep 2
+      - name: lanex doctor gives a full, plain report
+        # A Minimal install on a runner has no PDK (and macOS runners no
+        # container engine), so the exit code is 1 by design; the check is that
+        # every check answered in words, with a next step on every problem.
+        run: |
+          lanex doctor --offline || true
+          lanex doctor --json --offline > "$RUNNER_TEMP/doctor.json" || test $? -eq 1
+          python3 - "$RUNNER_TEMP/doctor.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          ids = [c["id"] for c in r["checks"]]
+          assert ids == ["lanex", "files", "system", "memory", "disk", "engine", "image", "pdks",
+                         "tools", "server", "network", "updates"], ids
+          for c in r["checks"]:
+              assert c["summary"], c
+              if c["status"] in ("warn", "fail"):
+                  assert (c.get("next") or {}).get("text"), c
+          assert r["summary"]["exit"] in (0, 1)
+          print("doctor ok:", r["summary"])
+          PY
       - name: Uninstall with one command; nothing of LanEx may be left
         run: |
           set -e

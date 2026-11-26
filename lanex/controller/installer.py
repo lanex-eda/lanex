@@ -43,7 +43,7 @@ import threading
 import time
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .events import bus
 
@@ -2143,6 +2143,16 @@ def _install_gds3d() -> Dict[str, Any]:
     q = shlex.quote
     dest = bindir / "gds3d"
     pinned_commit = os.environ.get("LANEX_GDS3D_COMMIT", "")
+    if not pinned_commit:
+        # The commit this release was tested with (lanex/data/downloads.json),
+        # so a Tools install builds the same GDS3D as Windows Setup, never
+        # whatever the repository's HEAD is today.
+        try:
+            from .pdkfeed import downloads_manifest
+
+            pinned_commit = str((downloads_manifest().get("gds3d") or {}).get("commit") or "")
+        except Exception:
+            pinned_commit = ""
     if pinned_commit and not re.fullmatch(r"[0-9a-fA-F]{40}", pinned_commit):
         return {"ok": False, "reason": "LANEX_GDS3D_COMMIT is not a full commit SHA"}
     if pinned_commit:
@@ -3064,7 +3074,29 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
         except Exception:
             pass
 
-        base = ["--pdk-root", root, "--pdk-family", family, version, *lib_args]
+        # A variant LanEx removed on its own (Tools > Remove <variant> only) is
+        # not something ciel can bring back in place: it checks only the
+        # family's first variant for the shared files, so it would enable a
+        # link to nothing. Fetch into a staging root on the same filesystem and
+        # move just that variant in (syscleanup.adopt_staged_variant).
+        fetch_root = root
+        staging: Optional[Path] = None
+        try:
+            from . import syscleanup as _sc
+            import ciel as _ciel_probe  # type: ignore
+
+            _vd = Path(_ciel_probe.Version(name=version, pdk=family).get_dir(_ciel_probe.get_ciel_home(root)))
+            if _vd.is_dir() and pdk in _sc.removed_variants(_vd):
+                staging = Path(root) / f".lanex-staging-{family}"
+                shutil.rmtree(staging, ignore_errors=True)
+                staging.mkdir(parents=True, exist_ok=True)
+                fetch_root = str(staging)
+                _emit("installer_info", {"key": key, "message":
+                      f"{pdk} was removed on its own earlier; fetching it beside the installed version"})
+        except Exception:
+            staging = None
+            fetch_root = root
+        base = ["--pdk-root", fetch_root, "--pdk-family", family, version, *lib_args]
         from . import pdkfeed
 
         feed = pdkfeed.load_pins(family, version, asset_pins)
@@ -3115,7 +3147,7 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
         try:
             import ciel as _ciel_mod  # type: ignore
 
-            vdir = _ciel_mod.Version(name=version, pdk=family).get_dir(_ciel_mod.get_ciel_home(root))
+            vdir = _ciel_mod.Version(name=version, pdk=family).get_dir(_ciel_mod.get_ciel_home(fetch_root))
             marker = Path(str(vdir).rstrip("/") + ".lanex-incomplete")
             if marker.exists() and os.path.isdir(vdir):
                 # The previous attempt never finished: unpack again from the
@@ -3146,6 +3178,14 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
         attempt = result.get("attempts", 1)
         if marker is not None:
             marker.unlink(missing_ok=True)
+        if staging is not None:
+            try:
+                from . import syscleanup as _sc
+                _sc.adopt_staged_variant(staging, Path(root), family, version, pdk)
+            except Exception as ex:  # noqa: BLE001
+                reason = f"{pdk} was downloaded but could not be put in place: {ex}"
+                _emit("installer_error", {"key": key, "message": reason})
+                return {"ok": False, "reason": reason}
         failed_libraries: List[str] = []
         if variant_libraries:
             for v_name, v_libs in variant_libraries.items():
@@ -4038,11 +4078,26 @@ def _read_settings() -> Dict[str, Any]:
 
 
 def _write_settings(data: Dict[str, Any]) -> None:
-    p = _settings_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(p)
+    """Write settings.json through a temp file of its own plus ``os.replace``
+    (a fixed ``.json.tmp`` name let two writers trample each other's file)."""
+    from . import platform_env
+
+    with platform_env.SETTINGS_LOCK:
+        p = _settings_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        platform_env.atomic_write_text(p, json.dumps(data, indent=2) + "\n")
+
+
+def _update_settings(change: Callable[[Dict[str, Any]], None]) -> None:
+    """Read settings.json, apply *change*, write it back, all under the one
+    settings lock, so a save elsewhere in the server (the job queue's
+    settings) between our read and our write is never lost."""
+    from . import platform_env
+
+    with platform_env.SETTINGS_LOCK:
+        data = _read_settings()
+        change(data)
+        _write_settings(data)
 
 
 def saved_pdk_root() -> str:
@@ -4083,11 +4138,9 @@ def set_pdk_root(value: Optional[str]) -> Dict[str, Any]:
     from . import platform_env
 
     raw = (value or "").strip()
-    data = _read_settings()
     if not raw:
-        data.pop("pdk_root", None)
         try:
-            _write_settings(data)
+            _update_settings(lambda d: d.pop("pdk_root", None))
         except Exception as ex:
             return {"ok": False, "reason": f"could not save the setting: {ex}"}
         os.environ.pop("PDK_ROOT", None)
@@ -4102,9 +4155,8 @@ def set_pdk_root(value: Optional[str]) -> Dict[str, Any]:
         return {"ok": False, "reason": f"LanEx could not create {path}: {ex}"}
     if not os.access(path, os.W_OK):
         return {"ok": False, "reason": f"{path} is not writable by you, so PDKs can't be installed there."}
-    data["pdk_root"] = path
     try:
-        _write_settings(data)
+        _update_settings(lambda d: d.__setitem__("pdk_root", path))
     except Exception as ex:
         return {"ok": False, "reason": f"could not save the setting: {ex}"}
     os.environ["PDK_ROOT"] = path
