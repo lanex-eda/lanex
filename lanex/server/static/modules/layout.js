@@ -1541,9 +1541,10 @@ async function copyText(text, done = "Copied") {
 function keyOpen() {
   if (S._keyUser != null) return S._keyUser === "1";
   if (getPref("layoutKey") === "0") return false;
-  // A narrow view starts folded: the card would cover the chip.
-  const w = $("lx-view") ? $("lx-view").clientWidth : 1200;
-  return w >= 760;
+  // A narrow or short view starts folded: the card would cover the chip.
+  const v = $("lx-view");
+  const w = v ? v.clientWidth : 1200, h = v ? v.clientHeight : 800;
+  return w >= 760 && h >= 520;
 }
 
 function toggleKey() {
@@ -1905,23 +1906,29 @@ function pathFocusHtml() {
   if (p) {
     const placed = p.placed || [];
     const total = placed.length ? (placed[placed.length - 1].arrival ?? 0) - (placed[0].arrival ?? 0) : 0;
+    const timed = placed.some((q) => q.arrival != null);
     const miss = (p.missing && p.missing.insts) || [];
     html += "<div class='lx-focus-h'><span class='lx-focus-k'>" + esc(p.kind === "cells" ? "Cells" : p.delay_type === "min" ? "Hold path" : "Setup path") +
       (p.corner ? " · " + esc(p.corner) : "") + "</span><button class='btn btn-ghost btn-sm' data-path-clear>Clear</button></div>" +
       "<p class='lx-focus-t'><b>" + esc(p.startpoint || "?") + "</b> → <b>" + esc(p.endpoint || "?") + "</b></p>" +
       (p.slack != null ? "<p class='lx-focus-s'>Slack " + slackWord(p.slack) + " <span class='muted'>" + (p.slack >= 0 ? "meets timing" : "fails timing") + "</span></p>" : "") +
       (p.from === "link" && p.label ? "<p class='muted lx-focus-l'>" + esc(p.label) + "</p>" : "") +
+      ((p.clockInsts || []).length || (p.clockNets || []).length
+        ? "<p class='lx-focus-l lx-focus-clk'><i style='background:" + CLOCK_COLOR + "'></i>The clock path is drawn in violet: " +
+          Object.keys(p.clockCells || {}).length + " clock cells, " + Object.keys(p.clockNetGeom || {}).length + " clock nets.</p>" : "") +
       (miss.length ? "<p class='lx-focus-miss'>" + miss.length + (miss.length === 1 ? " cell is" : " cells are") + " not on this stage" +
         (stageId() !== "final" ? " (the tools add buffers later). <button class='linklike' data-path-final>Show on Final</button>" : ": " + esc(miss.slice(0, 4).join(", ")) + (miss.length > 4 ? " …" : "")) + "</p>" : "") +
-      "<table class='lx-ptab' aria-label='Path, stage by stage'><thead><tr><th>#</th><th>Pin</th><th>Cell</th><th class='num'>Incr</th><th class='num'>Arrival</th></tr></thead><tbody>" +
+      "<table class='lx-ptab" + (timed ? "" : " is-untimed") + "' aria-label='Path, stage by stage'><thead><tr><th>#</th><th>Pin</th><th>Cell</th>" +
+      (timed ? "<th class='num'>Incr</th><th class='num'>Arrival</th>" : "") + "</tr></thead><tbody>" +
       placed.map((q, i) => {
         const share = total > 0 && q.incr != null ? Math.max(0, Math.min(1, q.incr / total)) : 0;
         return "<tr data-path-row='" + i + "'" + (i === S.pathActive ? " class='is-on'" : "") + " tabindex='-1'><td class='num'>" + (i + 1) + "</td>" +
           "<td><code>" + esc(q.pin) + "</code></td><td>" + esc(q.cell ? shortCell(q.cell) : q.inst ? "" : "port") + "</td>" +
-          "<td class='num'>" + (q.incr != null ? q.incr.toFixed(3) : "") + "<i class='lx-pbar' style='--w:" + (share * 100).toFixed(1) + "%'></i></td>" +
-          "<td class='num'>" + (q.arrival != null ? q.arrival.toFixed(3) : "") + "</td></tr>";
+          (timed ? "<td class='num'>" + (q.incr != null ? q.incr.toFixed(3) : "") + "<i class='lx-pbar' style='--w:" + (share * 100).toFixed(1) + "%'></i></td>" +
+            "<td class='num'>" + (q.arrival != null ? q.arrival.toFixed(3) : "") + "</td>" : "") + "</tr>";
       }).join("") + "</tbody></table>" +
-      "<p class='muted lx-focus-l'>Times in ns. ↑ and ↓ walk the path; a row zooms to its cell.</p>";
+      "<p class='muted lx-focus-l'>" + (timed ? "Times in ns. " : "The delays of each stage are in Verify's path report. ") +
+      "↑ and ↓ walk the path; a row zooms to its cell.</p>";
   }
   if (d) {
     html += "<div class='lx-focus-h lx-focus-h2'><span class='lx-focus-k'>Worst paths on this stage</span>" +
@@ -2053,7 +2060,11 @@ function activatePathRow(i, { zoom = false, focus = false } = {}) {
 // open the path view.
 async function showPath(hl, { from = "link" } = {}) {
   if (!S.info) return;
-  S.path = { ...hl, from, cells: {}, netGeom: {}, placed: placePoints(hl.points, {}, S.info.labels), missing: { insts: [], nets: [] } };
+  // What was clicked before belongs to another question.
+  S.sel = null; S.pin = null; S.flash = null;
+  hideInspector();
+  S.path = { ...hl, from, cells: {}, netGeom: {}, clockCells: {}, clockNetGeom: {},
+    placed: placePoints(hl.points, {}, S.info.labels), missing: { insts: [], nets: [] } };
   S.pathActive = -1;
   S.focus = "path";
   renderFocus();
@@ -2064,15 +2075,20 @@ async function relocatePath({ zoom = false } = {}) {
   const p = S.path;
   if (!p || !S.info) return;
   const sid = S.info.sid;
+  const ci = p.clockInsts || [], cn = p.clockNets || [];
   let r = { insts: {}, nets: {}, missing: { insts: p.insts, nets: p.nets }, names: false };
-  if (S.info.names && (p.insts.length || p.nets.length)) {
-    try { r = await api.layoutLocate(sid, p.insts, p.kind === "cells" ? [] : p.nets); }
+  if (S.info.names && (p.insts.length || p.nets.length || ci.length)) {
+    try { r = await api.layoutLocate(sid, p.insts.concat(ci), p.kind === "cells" ? [] : p.nets.concat(cn)); }
     catch (ex) { toast.show("Couldn't find the path on the layout: " + (ex.message || ex), "warn"); }
   }
   if (S.path !== p || !S.info || S.info.sid !== sid) return;
-  p.cells = r.insts || {};
-  p.netGeom = r.nets || {};
-  p.missing = r.missing || { insts: [], nets: [] };
+  const pick = (obj, names) => Object.fromEntries(names.filter((n) => obj && obj[n]).map((n) => [n, obj[n]]));
+  p.cells = pick(r.insts, p.insts);
+  p.netGeom = pick(r.nets, p.nets);
+  p.clockCells = pick(r.insts, ci);
+  p.clockNetGeom = pick(r.nets, cn);
+  const miss = r.missing || { insts: [], nets: [] };
+  p.missing = { insts: (miss.insts || []).filter((n) => p.insts.includes(n)), nets: (miss.nets || []).filter((n) => p.nets.includes(n)) };
   p.placed = placePoints(p.points, p.cells, S.info.labels);
   if (!S.info.names) toast.show("This layout has no instance names, so only the pin positions of the path are drawn.", "info");
   if (zoom) {

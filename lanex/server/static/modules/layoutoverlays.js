@@ -26,28 +26,49 @@ export function instOfPin(pin) {
 }
 
 // A highlight request from another page (Verify's "Show on layout"), made
-// safe and complete. The contract (docs: design/LANE-3-design.md 1.5):
-//   { kind: "path"|"net"|"cells", label, insts:[], nets:[], pins:[],
+// safe and complete. The contract (design/LANE-3-design.md 1.5), as Verify
+// (lane 4, timing.js highlightOf) sends it:
+//   { kind: "path"|"net"|"cells", label: "setup · <corner> · <start> → <end> · <slack> ns",
+//     insts: [...], nets: [...], pins: ["inst/pin", ...], ports: ["x"],
+//     clock?: { launch: { insts, nets }, capture: { insts, nets } },
+//     corner?, check?: "setup"|"hold", slack? (ns),
+//     // optional, from report_checks -format json (the export's own paths):
 //     points?: [[pin, x_um, y_um, arrival_ns], ...] | [{pin, x, y, arrival, net, inst, cell}],
-//     slack?, corner?, startpoint?, endpoint?, delay_type? "max"|"min" }
+//     startpoint?, endpoint?, delay_type?: "max"|"min" }
+// Names are as OpenSTA prints them; DEF escapes brackets, so every "\" goes.
 export function normaliseHighlight(h = {}) {
   const kind = ["path", "net", "cells"].includes(h.kind) ? h.kind : "path";
   const num = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(+v) ? null : +v);
+  const list = (a) => (Array.isArray(a) ? a : []).map(cleanName).filter(Boolean);
   const points = (Array.isArray(h.points) ? h.points : []).map((p) => {
     if (Array.isArray(p)) return { pin: cleanName(p[0]), x: num(p[1]), y: num(p[2]), arrival: num(p[3]), net: "", inst: instOfPin(p[0]), cell: "" };
     return { pin: cleanName(p.pin), x: num(p.x), y: num(p.y), arrival: num(p.arrival), net: cleanName(p.net), inst: cleanName(p.inst) || instOfPin(p.pin), cell: p.cell || "" };
   }).filter((p) => p.pin);
-  const pins = (Array.isArray(h.pins) ? h.pins : []).map(cleanName).filter(Boolean);
+  const label = String(h.label || (kind === "path" ? "Timing path" : kind === "net" ? "Nets" : "Cells"));
+  // "setup · corner · x → _278_/D · +4.100 ns": the start and end, when not given.
+  const ends = label.split(" · ").find((s) => s.includes(" → "));
+  const [lStart, lEnd] = ends ? ends.split(" → ").map(cleanName) : ["", ""];
+  // The path's top-level ports go where they are on it: an input port
+  // starts the path, an output port ends it.
+  let pins = list(h.pins);
+  for (const port of list(h.ports)) {
+    if (pins.includes(port)) continue;
+    pins = port === lEnd && port !== lStart ? [...pins, port] : [port, ...pins];
+  }
   // Without points, the pins in order are the path (their places come later).
   const pts = points.length ? points : pins.map((pin) => ({ pin, x: null, y: null, arrival: null, net: "", inst: instOfPin(pin), cell: "" }));
-  const insts = uniq([...(h.insts || []).map(cleanName), ...pts.map((p) => p.inst)]);
-  const nets = uniq([...(h.nets || []).map(cleanName), ...pts.map((p) => p.net)]);
-  const label = String(h.label || (kind === "path" ? "Timing path" : kind === "net" ? "Nets" : "Cells"));
+  const insts = uniq([...list(h.insts), ...pts.map((p) => p.inst)]);
+  const nets = uniq([...list(h.nets), ...pts.map((p) => p.net)]);
+  const clk = h.clock || {};
+  const clockInsts = uniq([...list(clk.launch && clk.launch.insts), ...list(clk.capture && clk.capture.insts)]).filter((n) => !insts.includes(n));
+  const clockNets = uniq([...list(clk.launch && clk.launch.nets), ...list(clk.capture && clk.capture.nets)]).filter((n) => !nets.includes(n));
   const slack = num(h.slack);
+  const hold = h.delay_type === "min" || /^hold/i.test(String(h.check || ""));
   return { kind, label, insts, nets, pins, points: pts, slack, corner: h.corner ? String(h.corner) : "",
-    startpoint: cleanName(h.startpoint || (pts[0] && pts[0].pin) || ""),
-    endpoint: cleanName(h.endpoint || (pts.length ? pts[pts.length - 1].pin : "")),
-    delay_type: h.delay_type === "min" ? "min" : "max" };
+    clockInsts, clockNets,
+    startpoint: cleanName(h.startpoint || lStart || (pts[0] && pts[0].pin) || ""),
+    endpoint: cleanName(h.endpoint || lEnd || (pts.length ? pts[pts.length - 1].pin : "")),
+    delay_type: hold ? "min" : "max" };
 }
 
 // A path from the analysis export (odbexport.read_paths) as a highlight.
@@ -154,6 +175,25 @@ export function drawPath(ctx, v, path, { active = -1, light = false } = {}) {
   if (!path) return;
   const vb = v.box;
   ctx.save();
+  // The clock path (launch and capture buffers and nets), under the data path, in violet.
+  for (const g of Object.values(path.clockNetGeom || {})) {
+    for (const b of g.boxes || []) {
+      const box = [b[1], b[2], b[3], b[4]];
+      if (!inView(box, vb)) continue;
+      const r = rect(ctx, v, box, 1.5);
+      ctx.fillStyle = hexA(CLOCK_COLOR, 0.5);
+      ctx.fillRect(r[0], r[1], r[2], r[3]);
+    }
+  }
+  for (const c of Object.values(path.clockCells || {})) {
+    if (!c.box || !inView(c.box, vb)) continue;
+    const r = rect(ctx, v, c.box, 4);
+    ctx.fillStyle = hexA(CLOCK_COLOR, 0.16);
+    ctx.fillRect(r[0], r[1], r[2], r[3]);
+    ctx.strokeStyle = CLOCK_COLOR;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(Math.round(r[0]) + 0.5, Math.round(r[1]) + 0.5, Math.round(r[2]), Math.round(r[3]));
+  }
   // nets first (under the cells)
   for (const g of Object.values(path.netGeom || {})) {
     for (const b of g.boxes || []) {

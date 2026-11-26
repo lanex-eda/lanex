@@ -627,19 +627,29 @@ def spawn_viewer(argv: List[str], *, tool: str, label: str, cwd: str,
     return {"id": lid, "log": str(log), "proc": proc}
 
 
-def _tail(path: str, n: int = 20) -> List[str]:
+import re as _re
+
+# A crash dump's noise: memory maps, register and backtrace lines.
+_RX_NOISE = _re.compile(r"^\s*([0-9a-f]{6,}-[0-9a-f]{6,}\s|[A-Z0-9]{2,3}: 0x|c:\d{4} |-- |#\d+\s+0x|0x[0-9a-f]+ |\d+ /|/nix/store/)"
+                        r"|\) \[0x[0-9a-f]+\]$")
+_RX_SAYS = _re.compile(r"fatal|error|could not|cannot|can't|failed|no such|permission denied|not found|unable|refused|"
+                       r"segmentation fault|killed", _re.I)
+
+
+def _tail(path: str, n: int = 8) -> List[str]:
+    """What a viewer said before it died: its error lines when it printed
+    any (a Qt "could not connect to display", a missing file), else its
+    last lines; a crash's memory map and register dump left out."""
     try:
         with open(path, "rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            f.seek(max(0, size - 16384))
-            text = f.read().decode("utf-8", "replace")
+            text = f.read(262144).decode("utf-8", "replace")
     except OSError:
         return []
-    lines = [ln.rstrip() for ln in text.splitlines()]
+    lines = [ln.rstrip()[:300] for ln in text.splitlines()]
     # The command line we wrote first is not the tool's output.
-    lines = [ln for ln in lines if ln.strip() and not ln.startswith("$ ")]
-    return lines[-n:]
+    lines = [ln for ln in lines if ln.strip() and not ln.startswith("$ ") and not _RX_NOISE.match(ln)]
+    says = [ln for ln in lines if _RX_SAYS.search(ln)]
+    return (says[:n] if says else lines[-n:])
 
 
 def viewer_status(lid: str) -> Dict[str, Any]:

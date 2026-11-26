@@ -108,7 +108,8 @@ export function launchVerdict(st) {
   if (!st || st.state !== "exited") return null;
   // A window closed by the user after a while is not a failure.
   if (st.code === 0 && st.seconds > 6) return null;
-  const tail = (st.tail || []).filter((l) => !/^\s*$/.test(l)).slice(-3);
+  // The server puts the tool's own error lines first (desktop._tail).
+  const tail = (st.tail || []).filter((l) => !/^\s*$/.test(l)).slice(0, 3);
   return (st.label || "The viewer") + " closed right after it started" + (st.code != null ? " (exit code " + st.code + ")" : "") + "." +
     (tail.length ? " Last lines: " + tail.join(" · ").replace(/[.\s]+$/, "") + "." : " It printed nothing.") + " The full log is " + st.log + ".";
 }

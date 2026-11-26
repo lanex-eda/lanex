@@ -561,6 +561,7 @@ body.theme-light .lx-dfor { color: var(--accent); }
 /* the key: in the corner card under the badge */
 .lx-corner .lx-key, .lx-badge .lx-key-fold, .lx-badge .lx-badge-act { pointer-events: auto; }
 .lx-view:not(.is-3d) .lx-corner:has(.lx-key:not([hidden])) { width: 286px; }
+@container lx-view (max-width: 1050px) { .lx-view:not(.is-3d) .lx-corner:has(.lx-key:not([hidden])) { width: 256px; } }
 @container lx-view (min-width: 1500px) { .lx-view:not(.is-3d) .lx-corner:has(.lx-key:not([hidden])) { width: 300px; } }
 .lx-view { container: lx-view / inline-size; }
 .lx-key-fold {
@@ -734,6 +735,8 @@ body.theme-light .lx-focus-k { color: var(--accent); }
 .lx-focus-s { margin: 4px 14px 0; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
 .lx-focus-s b { font-family: var(--mono); color: var(--text-strong); }
 .lx-focus-l { margin: 6px 14px 0; font-size: 12px; line-height: 1.4; }
+.lx-focus-clk { display: flex; align-items: baseline; gap: 7px; color: var(--text); }
+.lx-focus-clk i { width: 10px; height: 8px; flex: none; border-radius: 2px; }
 .lx-focus-miss { margin: 8px 14px 0; padding: 7px 9px; border-radius: var(--r-md); font-size: 12.5px; line-height: 1.4;
   border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 8%, transparent); color: var(--text); }
 .lx-focus-seg { background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--border); }
@@ -750,6 +753,7 @@ body.theme-light .lx-focus-k { color: var(--accent); }
 .lx-ptab th:nth-child(1) { width: 28px; }
 .lx-ptab th:nth-child(4), .lx-ptab th:nth-child(5) { width: 54px; }
 .lx-ptab th:nth-child(3) { width: 26%; }
+.lx-ptab.is-untimed th:nth-child(3) { width: 40%; }
 .lx-ptab td { padding: 4px 4px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); color: var(--text); vertical-align: top; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lx-ptab td code { font-size: 11.5px; color: var(--text-strong); background: transparent; padding: 0; }
 .lx-ptab .num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; position: relative; }

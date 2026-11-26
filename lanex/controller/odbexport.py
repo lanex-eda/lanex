@@ -502,6 +502,8 @@ class _Job:
             return
         self.phase = "preparing the overlays"
         out = convert(self.cdir, lines)
+        # Qt and fontconfig leave caches in HOME (the cache folder): not results.
+        shutil.rmtree(self.cdir / ".cache", ignore_errors=True)
         out["seconds"] = seconds
         out["step"] = self.db["step"]
         out["note"] = self.db["note"]

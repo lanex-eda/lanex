@@ -345,6 +345,13 @@ def test_a_viewer_that_dies_at_start_is_reported_with_its_log(tmp_path, monkeypa
     assert st["state"] == "exited" and st["code"] == 3
     assert st["tail"] == ["cannot open display :0"]
     assert desktop.viewer_status("nope")["state"] == "unknown"
+    # A crash dump: the tool's own error lines, not its memory map.
+    log = tmp_path / "crash.log"
+    log.write_text("$ docker run klayout\nInfo: Could not load the Qt platform plugin \"xcb\"\n"
+                   "Fatal: This application failed to start\n"
+                   "7e5d67317000-7e5d6731a000 r--p 00000000 08:30 213837   /nix/store/x/lib/libz.so.1\n"
+                   " RIP: 0x00007e5d57a779e5 RBP: 0x00007ffe615f0f10\n")
+    assert desktop._tail(str(log)) == ["Info: Could not load the Qt platform plugin \"xcb\"", "Fatal: This application failed to start"]
 
 
 def test_def_open_scripts_load_the_lefs_first(tmp_path):

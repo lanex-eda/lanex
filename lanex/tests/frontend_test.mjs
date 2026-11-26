@@ -1712,6 +1712,27 @@ check("layout path contract: names, points and pins become one clean path", () =
   assert.equal(LO.normaliseHighlight({ kind: "bogus" }).kind, "path");
 });
 
+check("layout path contract: exactly what Verify's Show on layout sends (lane 4 highlightOf)", () => {
+  const h = LO.normaliseHighlight({ kind: "path", label: "setup · max_ss_100C_1v60 · x → _278_/D · +4.100 ns",
+    insts: ["input34", "fanout47", "_278_"], nets: ["x", "net34", "dsa\\[13\\].y_out_next"],
+    pins: ["input34/A", "input34/X", "fanout47/A", "_278_/D"], ports: ["x"],
+    clock: { launch: { insts: [], nets: [] }, capture: { insts: ["clkbuf_0_clk", "_278_"], nets: ["clk", "clknet_0_clk"] } },
+    corner: "max_ss_100C_1v60", check: "setup", slack: 4.10026, run: "baseline" });
+  assert.deepEqual(h.pins, ["x", "input34/A", "input34/X", "fanout47/A", "_278_/D"], "the input port starts the path");
+  assert.equal(h.points[0].pin, "x");
+  assert.equal(h.startpoint, "x");
+  assert.equal(h.endpoint, "_278_/D");
+  assert.deepEqual(h.nets, ["x", "net34", "dsa[13].y_out_next"]);
+  assert.deepEqual(h.clockInsts, ["clkbuf_0_clk"], "a data-path cell is not counted twice");
+  assert.deepEqual(h.clockNets, ["clk", "clknet_0_clk"]);
+  assert.equal(h.delay_type, "max");
+  assert.equal(h.slack, 4.10026);
+  // An output port ends the path; a hold check is a min path.
+  const o = LO.normaliseHighlight({ label: "hold · nom · _314_/CLK → y · +0.2 ns", pins: ["_314_/CLK", "_314_/Q"], ports: ["y"], check: "hold" });
+  assert.deepEqual(o.pins, ["_314_/CLK", "_314_/Q", "y"]);
+  assert.equal(o.delay_type, "min");
+});
+
 check("layout path: places from the cells or the pin labels, increments per stage", () => {
   const pts = [{ pin: "x", inst: "", x: null, y: null, arrival: 2.0 }, { pin: "u1/A", inst: "u1", x: null, y: null, arrival: 2.25 },
     { pin: "u1/X", inst: "u1", x: 5, y: 6, arrival: 2.5 }];
