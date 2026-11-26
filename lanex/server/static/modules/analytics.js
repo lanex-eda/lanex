@@ -92,6 +92,8 @@ function deltaHtml(key, { short = false } = {}) {
   const dir = M.directionOf(_meta, key);
   const d = M.delta(a, b, dir);
   if (!d) return "";
+  // OpenSTA's "no path" (1e30) is not a slack: no change to or from it means anything.
+  if (F.unitOf(M.parseKey(key).base) === "ns" && (Math.abs(a) >= 1e12 || Math.abs(b) >= 1e12)) return "";
   // "No change" by the one rule Runs and Compare use (metricfmt.delta:
   // within 0.05 %, and 5 ps of slack), not only an exact match.
   const one = F.delta(key, a, b, null, { dir });
@@ -379,10 +381,11 @@ function renderOverview() {
     "<div class='an-check-group'><div class='an-check-gname'>" + esc(gp.name) + "</div><div class='an-check-items'>" +
     gp.items.map((c) => {
       const val = c.status === "absent" ? "not run" : F.num(c.value);
-      const meaning = c.status === "absent" ? "This run has no value for it (the check didn't run, or the run stopped first)."
+      const sumW = c.status !== "absent" && c.value > 0 ? F.cornerSumWords(F.cornerSum(_v, c.key)) : "";
+      const meaning = (c.status === "absent" ? "This run has no value for it (the check didn't run, or the run stopped first)."
         : c.status === "pass" ? "Zero: passed."
         : c.status === "fail" ? "Non-zero, and LibreLane treats it as an error."
-        : "Non-zero; LibreLane doesn't treat it as fatal.";
+        : "Non-zero; LibreLane doesn't treat it as fatal.") + (sumW ? " " + val + " is " + sumW + "." : "");
       return "<span class='an-check is-" + c.status + "' tabindex='0' data-an-tip='" + esc(c.label + ": " + val + "\n" + c.tip + "\n" + meaning + "\n" + c.key) + "'>" +
         "<i class='an-check-mark' aria-hidden='true'></i><span class='an-check-l'>" + esc(c.label) + "</span>" +
         "<span class='an-check-v'>" + esc(val) + "</span></span>";
@@ -448,6 +451,15 @@ function kpiRow(label, html, tip = "") {
   return "<div><dt" + (tip ? " tabindex='0' data-an-tip='" + esc(tip) + "' class='has-tip'" : "") + ">" + esc(label) + "</dt><dd>" + html + "</dd></div>";
 }
 
+// The hover words for the setup / hold violation counts: LibreLane's totals
+// add every corner up, so say so and give the worst corner's own count.
+function vioTip() {
+  const s = F.cornerSum(_v, "timing__setup_vio__count"), h = F.cornerSum(_v, "timing__hold_vio__count");
+  const words = (x, kind) => (x && x.n > 1 ? kind + " " + F.cornerSumWords(x) + "." : "");
+  const body = [words(s, "Setup:"), words(h, "Hold:")].filter(Boolean).join(" ");
+  return "Failing endpoints, setup / hold." + (body ? " " + body + " " + F.CORNER_SUM_NOTE : "");
+}
+
 function kpiTiming() {
   const k = "timing__setup__ws";
   const cp = _ctx.stages.clock_period;
@@ -462,7 +474,7 @@ function kpiTiming() {
       "Worst hold slack across corners. Below zero means a signal changes too soon after the clock edge.") : "") +
     (clock ? kpiRow("Clock period", clock + varBtn("CLOCK_PERIOD"), "CLOCK_PERIOD from this run's resolved config.") : "") +
     (has("timing__setup_vio__count") ? kpiRow("Setup / hold violations", esc(F.num(g("timing__setup_vio__count"))) + provBtn("timing__setup_vio__count") + " / " +
-      esc(F.num(g("timing__hold_vio__count"))) + provBtn("timing__hold_vio__count"), "Violating paths across all corners.") : "");
+      esc(F.num(g("timing__hold_vio__count"))) + provBtn("timing__hold_vio__count"), vioTip()) : "");
   return kpi({
     title: "Timing (setup slack)", heroKey: k, tone,
     tip: "Worst setup slack across every corner: the spare time on the slowest path. Positive means the design meets the clock.",
@@ -542,11 +554,15 @@ function renderTiming() {
     return;
   }
   // Vivado/PrimeTime-style summary: setup and hold side by side.
+  // LibreLane adds the violation counts of every corner up (metricfmt.cornerSum).
+  const sumS = F.cornerSum(_v, "timing__setup_vio__count"), sumH = F.cornerSum(_v, "timing__hold_vio__count");
+  const nC = Math.max(sumS ? sumS.n : 0, sumH ? sumH.n : 0);
   const rows = [
     ["Worst slack", "ws", "The smallest slack of any path. Positive means met."],
     ["WNS", "wns", "Worst negative slack: the worst failing path, or 0 when nothing fails."],
     ["TNS", "tns", "Total negative slack: all failing slack added up. 0 when nothing fails."],
-    ["Violations", "_vio__count", "How many paths fail."],
+    [nC > 1 ? "Violations, " + nC + " corners summed" : "Violations", "_vio__count", "Failing endpoints." + (nC > 1 ? " Summed over " + nC + " corners: " + F.CORNER_SUM_NOTE +
+      (sumS ? " Setup: " + F.num(sumS.worst) + " in the worst corner (" + sumS.corner + ")." : "") + (sumH ? " Hold: " + F.num(sumH.worst) + " in the worst corner (" + sumH.corner + ")." : "") : "")],
     ["Reg-to-reg slack", "_r2r__ws", "Worst slack between two flip-flops (ignores I/O paths). ∞ means there are no such paths."],
   ];
   const cell = (kind, suf) => {
@@ -555,7 +571,9 @@ function renderTiming() {
     const v = g(key);
     const neg = M.isNum(v) && v < 0;
     const isCount = /count$/.test(key);
-    return "<td" + (neg || (isCount && v > 0) ? " class='is-bad'" : "") + ">" + vh(key) + (suf === "ws" ? " " + deltaHtml(key, { short: true }) : "") + provBtn(key) + "</td>";
+    const cs = suf === "_vio__count" && M.isNum(v) && v > 0 ? F.cornerSum(_v, key) : null;
+    return "<td" + (neg || (isCount && v > 0) ? " class='is-bad'" : "") + ">" + vh(key) + (suf === "ws" ? " " + deltaHtml(key, { short: true }) : "") + provBtn(key) +
+      (cs && cs.n > 1 ? " <span class='an-u'>" + esc(F.num(cs.worst)) + " in the worst</span>" : "") + "</td>";
   };
   const table = "<table class='an-ttable'><thead><tr><th></th><th>Setup <small>(max delay)</small></th><th>Hold <small>(min delay)</small></th></tr></thead><tbody>" +
     rows.map(([label, suf, tip]) => "<tr><th scope='row'><span tabindex='0' class='has-tip' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span></th>" + cell("setup", suf) + cell("hold", suf) + "</tr>").join("") +

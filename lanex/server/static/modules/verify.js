@@ -63,7 +63,7 @@ function statusPill(c) {
   const st = V.STATUS[c.status] || V.STATUS.not_run;
   let sub = "";
   if (c.status === "fail") sub = c.gate === "blocks" ? "blocks tape-out" : "";
-  else if (c.status === "warn") sub = c.gate === "info" ? "not checked by LibreLane" : "LibreLane only warns";
+  else if (c.status === "warn") sub = c.unclocked_warn ? "flip-flops not timed" : c.gate === "info" ? "not checked by LibreLane" : "LibreLane only warns";
   else if (c.status === "info" || (c.gate === "info" && c.status === "pass")) sub = "for information";
   return "<span class='vf-pill is-" + esc(c.status) + "'>" + esc(st.label) + "</span>" +
     (sub ? "<small class='vf-pill-sub'>" + esc(sub) + "</small>" : "");
@@ -74,12 +74,7 @@ function valueText(c) {
   if (c.status === "not_run") return "—";
   if (c.id === "setup" || c.id === "hold") {
     const parts = [];
-    if (c.value !== null && c.value !== undefined && c.metric && c.metric.endsWith("vio__count")) {
-      // The total covers every corner; say how many are in the corners that fail the run.
-      const gated = (c.corners || []).filter((r) => r.gating && V.isNum(r.value)).reduce((a, r) => a + r.value, 0);
-      const someWarnOnly = (c.corners || []).some((r) => !r.gating && V.isNum(r.value) && r.value > 0);
-      parts.push(n(c.value) + " violating" + (someWarnOnly && c.value > 0 ? " (" + n(gated) + " in checked corners)" : ""));
-    }
+    if (c.value !== null && c.value !== undefined && c.metric && c.metric.endsWith("vio__count")) parts.push(V.vioCountText(c));
     if (V.isNum(c.worst)) parts.push("worst " + ns(c.worst) + " ns");
     return parts.join(" · ") || "—";
   }
@@ -426,7 +421,9 @@ function pillar(p) {
     hero = sw ? "<span class='vf-hero-v'>" + esc(ns(s.worst)) + "</span><span class='an-u'>ns setup slack</span>" + mprov("timing__setup__ws") : "<span class='vf-hero-v'>—</span>";
     rows = [
       ["Worst hold slack", hw ? ns(h.worst) + " ns" : "—", h, hw ? mprov("timing__hold__ws") : ""],
-      ["Setup / hold violations", (s && s.value != null ? n(s.value) : "—") + " / " + (h && h.value != null ? n(h.value) : "—"), null,
+      // LibreLane's counts add every corner up: the label says so.
+      [corners.length > 1 && ((s && s.value > 0) || (h && h.value > 0)) ? "Setup / hold violations, summed over " + corners.length + " corners" : "Setup / hold violations",
+        (s && s.value != null ? n(s.value) : "—") + " / " + (h && h.value != null ? n(h.value) : "—"), null,
         (s && s.value != null ? provFor(s) : "") + (h && h.value != null ? provFor(h) : "")],
       ["Corners analysed", corners.length ? String(corners.length) : "—", null],
     ];
@@ -631,7 +628,9 @@ function renderTiming() {
   const rule = (r) => r.wildcards == null ? "every corner (rule unknown)" : !r.wildcards.length ? "no corner (warnings only)" :
     r.wildcards.length === 1 && r.wildcards[0] === "*" ? "every corner" : "corners matching " + r.wildcards.join(", ");
   const clk = V.isNum(t.clock_period) ? t.clock_period : Number(t.clock_period);
-  const lede = rows.length && t.no_clock
+  const lede = rows.length && t.no_clock && t.no_clock.io_paths
+    ? "OpenSTA ran in " + rows.length + " corners but no clock reached the registers: the slack below is only for paths from an input straight to an output, no flip-flop was timed, and \"0 violations\" says nothing about the registers."
+    : rows.length && t.no_clock
     ? "OpenSTA ran in " + rows.length + " corners but timed no path: no clock reached the registers, so there is no slack to show and \"0 violations\" means nothing was checked."
     : rows.length
     ? "OpenSTA timed the routed layout in " + rows.length + " corners" + (Number.isFinite(clk) ? " against a " + clk + " ns clock (" + +(1000 / clk).toFixed(2) + " MHz)" + vprov("CLOCK_PERIOD") : "") +
