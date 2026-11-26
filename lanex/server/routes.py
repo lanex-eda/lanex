@@ -2536,6 +2536,22 @@ def h_open_in_tool(handler: Any) -> None:
     if location == "container":
         from ..controller import container_tools
         design_dir = _get_active_design_dir()
+        # A stage's DEF (the Layout tab's "open the stage on screen") opens
+        # through a startup script that loads the run's LEFs first.
+        if target is not None and tool in ("magic", "klayout") and target.suffix.lower() == ".def":
+            from ..controller import desktop
+            if not target.is_file():
+                _respond(handler, {"ok": False, "error": f"this step wrote no DEF ({target.name})"}, 200)
+                return
+            script = desktop.def_open_script(tool, target, run_dir)
+            if script is None:
+                _respond(handler, {"ok": False, "error": f"{tool} needs the run's LEF files to open "
+                                   f"{target.name}, and they were not found."}, 200)
+                return
+            _respond(handler, container_tools.open_in_container_tool(
+                tool, design_dir=design_dir or str(run_dir.parent.parent),
+                work_dir=str(run_dir), pdk=pdk, pdk_root=pdk_root, layout_script=script), 200)
+            return
         # An explicitly requested file is honoured or refused — NEVER silently
         # swapped for the final GDS (the host path honours any file; silently
         # opening a different file than asked is a fidelity bug).
@@ -2661,9 +2677,14 @@ def h_layout_render(handler: Any) -> None:
     bg = _query_param(p, "bg", "#06080d")
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", bg):
         bg = "#06080d"
+    w = int(_float_param(p, "w", 800) or 800)
+    h = int(_float_param(p, "h", 600) or 600)
+    # A saved picture (4K, 8K) draws in the background worker: the view and
+    # the stage strip stay live meanwhile.
+    heavy = bool(_query_param(p, "dl")) or _query_param(p, "heavy") == "1" or w * h > 6_000_000
     try:
         png = layoutview.render(
-            sid, box=box, w=int(_float_param(p, "w", 800) or 800), h=int(_float_param(p, "h", 600) or 600),
+            sid, heavy=heavy, box=box, w=w, h=h,
             visible=visible, depth=depth, labels=_query_param(p, "labels", "1") != "0", bg=bg,
             boxes=_query_param(p, "boxes", "1") != "0",
             oversampling=int(_float_param(p, "os", 1) or 1), resolution=_float_param(p, "res", 0.0) or 0.0)
@@ -2759,6 +2780,9 @@ def h_layout_mesh(handler: Any) -> None:
             _respond(handler, "too much geometry for 3D here; zoom in to a smaller area first", 413)
             return
         raise
+    except layoutview.MeshCancelled:
+        _respond(handler, "the 3D build was cancelled", 409)
+        return
     except Exception as ex:
         _log.exception("layout mesh failed")
         _respond(handler, "3D failed: " + str(ex), 500)
@@ -2788,6 +2812,115 @@ def h_layout_commands(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     _respond(handler, layoutview.viewer_commands(run_dir, tag))
+
+
+def h_layout_nets(handler: Any) -> None:
+    """Nets of the layout on screen whose name holds ?q= (net search)."""
+    from ..controller import layoutview
+    p = handler.path
+    try:
+        res = layoutview.nets(_query_param(p, "sid"), _query_param(p, "q", ""),
+                              int(_float_param(p, "limit", 60) or 60))
+    except Exception as ex:
+        _log.exception("layout net search failed")
+        _respond(handler, "net search failed: " + str(ex), 500)
+        return
+    if res is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, res)
+
+
+def h_layout_net(handler: Any) -> None:
+    """One net's shapes and pins (?sid=&name=), for a highlight."""
+    from ..controller import layoutview
+    p = handler.path
+    try:
+        res = layoutview.net(_query_param(p, "sid"), _query_param(p, "name", ""))
+    except Exception as ex:
+        _log.exception("layout net lookup failed")
+        _respond(handler, "net lookup failed: " + str(ex), 500)
+        return
+    if res is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, res)
+
+
+def h_layout_locate(handler: Any) -> None:
+    """Where named instances and nets are (POST {sid, insts, nets}): a timing
+    path's cells and wires, from another page's highlight request."""
+    from ..controller import layoutview
+    body = getattr(handler, "_body", {}) or {}
+    insts = [str(x) for x in (body.get("insts") or []) if x][:5000]
+    nets = [str(x) for x in (body.get("nets") or []) if x][:400]
+    try:
+        res = layoutview.locate(str(body.get("sid") or ""), insts, nets)
+    except Exception as ex:
+        _log.exception("layout locate failed")
+        _respond(handler, "could not find those on the layout: " + str(ex), 500)
+        return
+    if res is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, res)
+
+
+def h_layout_mesh_cancel(handler: Any) -> None:
+    """Stop a 3D build in progress (POST {sid})."""
+    from ..controller import layoutview
+    body = getattr(handler, "_body", {}) or {}
+    _respond(handler, {"cancelled": layoutview.cancel_mesh(str(body.get("sid") or ""))})
+
+
+def _analysis_run(handler: Any, tag: Optional[str]) -> Optional["Path"]:
+    run_dir = _resolve_run_dir(tag) if tag else None
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+    return run_dir
+
+
+def h_layout_analysis(handler: Any) -> None:
+    """The OpenROAD analysis of one stage (?tag=&source=): its state, and when
+    it is ready the overlays' data (density, congestion, clock tree, paths)."""
+    from ..controller import odbexport
+    p = handler.path
+    run_dir = _analysis_run(handler, _query_param(p, "tag"))
+    if run_dir is None:
+        return
+    source = _query_param(p, "source", "final")
+    st = odbexport.status(run_dir, source)
+    if st.get("state") == "ready" and _query_param(p, "data", "1") != "0":
+        st["data"] = odbexport.data(run_dir, source)
+    _respond(handler, st)
+
+
+def h_layout_analysis_start(handler: Any) -> None:
+    """Measure one stage with OpenROAD (POST {tag, source, force}), or keep the
+    measurement that is running."""
+    from ..controller import odbexport
+    body = getattr(handler, "_body", {}) or {}
+    run_dir = _analysis_run(handler, body.get("tag"))
+    if run_dir is None:
+        return
+    _respond(handler, odbexport.start(run_dir, str(body.get("source") or "final"), force=bool(body.get("force"))))
+
+
+def h_layout_analysis_cancel(handler: Any) -> None:
+    """Stop measuring one stage (POST {tag, source})."""
+    from ..controller import odbexport
+    body = getattr(handler, "_body", {}) or {}
+    run_dir = _analysis_run(handler, body.get("tag"))
+    if run_dir is None:
+        return
+    _respond(handler, {"cancelled": odbexport.cancel(run_dir, str(body.get("source") or "final"))})
+
+
+def h_layout_viewer_status(handler: Any) -> None:
+    """How a desktop-viewer launch went (?id= from /api/open-in-tool): still
+    running, or exited with its code and the last lines of its log."""
+    from ..controller import desktop
+    _respond(handler, desktop.viewer_status(_query_param(handler.path, "id")))
 
 
 def h_run_note(handler: Any) -> None:
@@ -5330,6 +5463,14 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/layout/mesh", h_layout_mesh),
     ("/api/layout/markers", h_layout_markers),
     ("/api/layout/commands", h_layout_commands),
+    ("/api/layout/nets", h_layout_nets),
+    ("/api/layout/net", h_layout_net),
+    ("/api/layout/locate", h_layout_locate),
+    ("/api/layout/mesh/cancel", h_layout_mesh_cancel),
+    ("/api/layout/analysis", h_layout_analysis),
+    ("/api/layout/analysis/start", h_layout_analysis_start),
+    ("/api/layout/analysis/cancel", h_layout_analysis_cancel),
+    ("/api/layout/viewer-status", h_layout_viewer_status),
     ("/api/runs/", h_run),
     ("/api/tools", h_tools),
     ("/api/metrics-catalog", h_metrics_catalog),
@@ -5402,6 +5543,9 @@ _POST_ROUTES = {
     "/api/tools/install/", "/api/tools/uninstall/", "/api/pdk/uninstall",
     "/api/pdk/fix-permissions", "/api/copy-spm",
     "/api/verify/report", "/api/warnings/waive", "/api/warnings/unwaive",
+    # Layout (lane 3)
+    "/api/layout/locate", "/api/layout/mesh/cancel", "/api/layout/analysis/start",
+    "/api/layout/analysis/cancel",
 }
 _BOTH_ROUTES = {
     "/api/run-note", "/api/watch", "/api/settings/pdk-root", "/api/suggest-config",
@@ -5426,6 +5570,8 @@ _GET_ROUTES = {
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
     "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
     "/api/timing/paths", "/api/timing/path", "/api/warnings", "/api/verify/summary",
+    # Layout (lane 3)
+    "/api/layout/nets", "/api/layout/net", "/api/layout/analysis", "/api/layout/viewer-status",
 }
 # A route in none of the sets keeps the old answer-anything behaviour, so a
 # route added elsewhere never breaks at run time; the test names it instead.

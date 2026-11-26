@@ -96,6 +96,8 @@ function actions() {
     const base = contextBaseline();
     if (base) list.push(A("ctx-compare", "Compare " + run + " with " + base, "Analytics", "diff", () => tab("analytics", { section: "analytics-compare" })));
     list.push(A("ctx-gds", "Open " + run + " in Layout", "Layout", "grid", () => tab("layout")));
+    list.push(A("ctx-read", "How to read a chip (a five-step lesson on " + run + ")", "Layout", "bulb",
+      () => { tab("layout"); import("./layout.js").then((m) => m.startReadingLesson()); }));
     list.push(A("ctx-cmd", "Copy the command of " + run, "Console › Command", "command", () => copyRunCommand(run)));
     list.push(A("ctx-verify", "Sign-off checks of " + run + " (DRC, LVS)", "Verify", "check", () => tab("verify")));
   }

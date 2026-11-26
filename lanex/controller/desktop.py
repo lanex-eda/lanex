@@ -22,6 +22,7 @@ honest: if the tool isn't installed it says so. Pure stdlib; no new dependency.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -514,6 +515,20 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         except Exception:
             pass
     argv = _build_argv(tool, binary, str(f), tech, use_tech)
+    # A stage's DEF opens through a startup script that loads the LEFs (KLayout:
+    # a -rm macro; Magic: a Tcl script after the rc file), as LibreLane's own
+    # "open in GUI" steps do; a bare DEF would show nothing useful.
+    if f.suffix.lower() == ".def" and tool in ("klayout", "magic") and run_dir is not None:
+        script = def_open_script(tool, f, Path(run_dir), magicrc=tech.get("magicrc") if use_tech else None,
+                                 lyp=tech.get("klayout_lyp") if use_tech else None)
+        if script is None:
+            return {"ok": False, "error": f"{spec['label']} needs the run's LEF files to open {f.name}, "
+                                          "and they were not found."}
+        if tool == "klayout":
+            argv = [binary, "-rm", str(script)]
+        else:
+            rc = tech.get("magic_startup") or (tech.get("magicrc") if use_tech else None)
+            argv = [binary] + (["-rcfile", rc] if rc else []) + [str(script)]
     # Magic's magicrc resolves $PDK_ROOT/$PDK/$PDKPATH; export them so it doesn't
     # error out with the 'minimum' tech and close immediately.
     launch_env = os.environ.copy()
@@ -535,22 +550,13 @@ def open_in_tool(tool: str, file_path: str | Path, *,
     except Exception:
         pass
     try:
-        kwargs: Dict[str, Any] = {
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "cwd": str(f.parent),
-            "env": launch_env,
-        }
-        if sys.platform != "win32":
-            kwargs["start_new_session"] = True  # detach from the server process
-        proc = subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool only
-        from . import activity
-        activity.track_viewer(proc, spec["label"])
+        launch = spawn_viewer(argv, tool=tool, label=spec["label"], cwd=str(f.parent), env=launch_env)
         out: Dict[str, Any] = {
             "ok": True, "tool": tool, "label": spec["label"], "file": str(f),
             "used_tech": bool((use_tech and (tech.get("magicrc") or tech.get("klayout_lyp")))
                               or tech.get("gds3d_process")),
             "tech_root": tech.get("root"),
+            "launch": launch["id"], "log": launch["log"],
         }
         if tech.get("marker_dbs"):
             out["marker_dbs"] = [str(p) for p in tech["marker_dbs"]]
@@ -567,3 +573,192 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         return out
     except Exception as ex:  # pragma: no cover - platform dependent
         return {"ok": False, "error": str(ex)}
+
+
+# --------------------------------------------------------------------------- launches with a log
+# A viewer that dies at start used to leave "Opening KLayout…" and then
+# nothing: its output went to /dev/null. Every launch (host or container) now
+# writes to its own log, and the page asks a few seconds later how it went.
+_LAUNCHES: Dict[str, Dict[str, Any]] = {}
+_MAX_LOGS_PER_TOOL = 30
+
+
+def viewer_log_dir() -> Path:
+    from . import platform_env
+    d = platform_env.home() / "logs" / "viewers"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _prune_logs(d: Path, tool: str) -> None:
+    try:
+        logs = sorted(d.glob(tool + "-*.log"), key=lambda p: p.stat().st_mtime)
+        for p in logs[:max(0, len(logs) - _MAX_LOGS_PER_TOOL)]:
+            p.unlink()
+    except OSError:
+        pass
+
+
+def spawn_viewer(argv: List[str], *, tool: str, label: str, cwd: str,
+                 env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """Start a desktop tool detached, its output in a log of its own.
+    Returns ``{id, log, proc}``; ``viewer_status(id)`` says how it went."""
+    import time
+    import uuid
+
+    d = viewer_log_dir()
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in tool)[:30] or "viewer"
+    log = d / (safe + "-" + time.strftime("%Y%m%d-%H%M%S") + ".log")
+    _prune_logs(d, safe)
+    kwargs: Dict[str, Any] = {"cwd": cwd, "env": env}
+    if sys.platform != "win32":
+        kwargs["start_new_session"] = True  # detach from the server process
+    with open(log, "ab") as logf:
+        logf.write(("$ " + " ".join(argv) + "\n").encode("utf-8", "replace"))
+        logf.flush()
+        proc = subprocess.Popen(argv, stdout=logf, stderr=subprocess.STDOUT, **kwargs)  # noqa: S603 - whitelisted tool only
+    from . import activity
+    activity.track_viewer(proc, label)
+    lid = uuid.uuid4().hex[:12]
+    _LAUNCHES[lid] = {"proc": proc, "label": label, "tool": tool, "log": str(log), "t0": time.time()}
+    if len(_LAUNCHES) > 64:
+        for k in list(_LAUNCHES)[:len(_LAUNCHES) - 64]:
+            _LAUNCHES.pop(k, None)
+    return {"id": lid, "log": str(log), "proc": proc}
+
+
+import re as _re
+
+# A crash dump's noise: memory maps, register and backtrace lines.
+_RX_NOISE = _re.compile(r"^\s*([0-9a-f]{6,}-[0-9a-f]{6,}\s|[A-Z0-9]{2,3}: 0x|c:\d{4} |-- |#\d+\s+0x|0x[0-9a-f]+ |\d+ /|/nix/store/)"
+                        r"|\) \[0x[0-9a-f]+\]$")
+_RX_SAYS = _re.compile(r"fatal|error|could not|cannot|can't|failed|no such|permission denied|not found|unable|refused|"
+                       r"segmentation fault|killed", _re.I)
+
+
+def _tail(path: str, n: int = 8) -> List[str]:
+    """What a viewer said before it died: its error lines when it printed
+    any (a Qt "could not connect to display", a missing file), else its
+    last lines; a crash's memory map and register dump left out."""
+    try:
+        with open(path, "rb") as f:
+            text = f.read(262144).decode("utf-8", "replace")
+    except OSError:
+        return []
+    lines = [ln.rstrip()[:300] for ln in text.splitlines()]
+    # The command line we wrote first is not the tool's output.
+    lines = [ln for ln in lines if ln.strip() and not ln.startswith("$ ") and not _RX_NOISE.match(ln)]
+    says = [ln for ln in lines if _RX_SAYS.search(ln)]
+    return (says[:n] if says else lines[-n:])
+
+
+def viewer_status(lid: str) -> Dict[str, Any]:
+    """How a launch went: ``running``, or ``exited`` with its code and the
+    last lines it printed."""
+    import time
+
+    e = _LAUNCHES.get(lid or "")
+    if e is None:
+        return {"state": "unknown"}
+    code = e["proc"].poll()
+    out: Dict[str, Any] = {"state": "running" if code is None else "exited", "code": code,
+                           "seconds": round(time.time() - e["t0"], 1), "label": e["label"], "log": e["log"]}
+    if code is not None:
+        out["tail"] = _tail(e["log"])
+    return out
+
+
+def _def_design(def_path: Path) -> Optional[str]:
+    try:
+        with open(def_path, encoding="utf-8", errors="replace") as f:
+            for _i, line in zip(range(200), f):
+                s = line.split()
+                if len(s) >= 2 and s[0] == "DESIGN":
+                    return s[1]
+    except OSError:
+        return None
+    return None
+
+
+def def_open_script(tool: str, def_path: Path, run_dir: Path, *, magicrc: Optional[str] = None,
+                    lyp: Optional[str] = None) -> Optional[Path]:
+    """A startup script that opens a stage's DEF the way LibreLane's own
+    ``KLayout.OpenGUI`` / ``Magic.OpenGUI`` steps do: the tech and cell LEFs
+    first, the layer map and colours, then the DEF. Written under
+    ``<run>/.lanex/viewers/`` (inside the mounted run folder, so the same path
+    works in the container). None when the run's LEFs are missing."""
+    import hashlib
+
+    from . import layoutview as lv
+
+    cfg = lv._resolved(run_dir)
+    lefs = lv._lef_list(cfg)
+    if not lefs:
+        return None
+    tech = lv._tech_files(cfg)
+    lyt = lv._existing(cfg.get("KLAYOUT_TECH")) or ""
+    if tool == "klayout":
+        text = (
+            "# Written by LanEx: open one stage's DEF in KLayout, as LibreLane's\n"
+            "# scripts/klayout/open_design.py does (LEF abstracts, layer map, colours).\n"
+            "import pya\n"
+            f"LEFS = {json.dumps(lefs)}\nLYT = {json.dumps(lyt)}\nLYP = {json.dumps(lyp or tech.get('lyp') or '')}\n"
+            f"LYM = {json.dumps(tech.get('lym') or '')}\nDEF = {json.dumps(str(def_path))}\n"
+            "mw = pya.Application.instance().main_window()\n"
+            "opt = pya.LoadLayoutOptions()\n"
+            "tech_name = ''\n"
+            "if LYT:\n"
+            "    try:\n"
+            "        t = pya.Technology()\n"
+            "        t.load(LYT)\n"
+            "        try:\n"
+            "            pya.Technology.register_technology(t)\n"
+            "        except Exception:\n"
+            "            pass\n"
+            "        opt = t.load_layout_options\n"
+            "        tech_name = t.name\n"
+            "    except Exception as e:\n"
+            "        print('LanEx: technology not loaded:', e)\n"
+            "c = opt.lefdef_config\n"
+            "c.macro_resolution_mode = 1\n"
+            "c.read_lef_with_def = False\n"
+            "c.lef_files = LEFS\n"
+            "if LYM:\n"
+            "    c.map_file = LYM\n"
+            "cv = mw.load_layout(DEF, opt, tech_name, 0)\n"
+            "view = cv.view()\n"
+            "if LYP:\n"
+            "    view.load_layer_props(LYP)\n"
+            "view.max_hier()\n"
+            "view.zoom_fit()\n"
+            "print('LanEx: opened', DEF)\n"
+        )
+        ext = ".py"
+    elif tool == "magic":
+        design = _def_design(def_path) or str(cfg.get("DESIGN_NAME") or "")
+
+        def w(s: str) -> str:
+            return "{" + str(s).replace("}", "") + "}"
+
+        lines = ["# Written by LanEx: open one stage's DEF in Magic, as LibreLane's",
+                 "# scripts/magic/open.tcl does (tech LEF, cell LEFs, then the DEF)."]
+        lines += ["lef read " + w(p) for p in lefs]
+        lines.append("def read " + w(def_path))
+        if design:
+            lines.append("load " + w(design))
+        lines += ["select top cell", "catch {view}", "puts \"LanEx: opened " + def_path.name + "\""]
+        text = "\n".join(lines) + "\n"
+        ext = ".tcl"
+    else:
+        return None
+    try:
+        d = run_dir / ".lanex" / "viewers"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / ("open-" + tool + "-" + hashlib.sha1(text.encode()).hexdigest()[:12] + ext)
+        if not p.is_file():
+            tmp = p.with_name(p.name + ".%d.tmp" % os.getpid())
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, p)
+        return p
+    except OSError:
+        return None

@@ -32,13 +32,22 @@ What a run offers (:func:`sources`):
 
 Nothing here computes silicon numbers: geometry, layer names and colours come
 straight from KLayout and the PDK files the run itself used (``resolved.json``).
-KLayout objects are not thread-safe, so every call holds one lock.
+
+Where the work runs. KLayout keeps Python's interpreter lock for the whole of
+a render, so in the server (``enable_workers``) every KLayout call goes to a
+worker process (``layoutworker``): *view* for what the user waits on (open,
+render, probe, nets) and *bg* for the slow rest (thumbnails, the 3D mesh, 4K
+and 8K saves). The server keeps each session's spec, so a worker that was
+restarted reopens a session by itself. Without workers (library use, tests)
+the same code runs in this process. KLayout objects are not thread-safe, so
+in either place every call holds one lock.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -53,7 +62,9 @@ _log = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
 _SESSIONS: "OrderedDict[str, _Session]" = OrderedDict()
-_MAX_SESSIONS = 4
+# The background worker keeps fewer sessions: it holds copies of layouts the
+# view worker already has, only for thumbnails and 3D.
+_MAX_SESSIONS = 2 if os.environ.get("LANEX_LAYOUT_ROLE") == "bg" else 4
 # Sessions on one standard cell of a PDK library (the Cells tab) have their own,
 # smaller cap so browsing cells never pushes a run's layout out.
 _CELL_PREFIX = "cell::"
@@ -66,6 +77,16 @@ _MAX_PX = 8192
 _MAX_MARKERS = 4000
 _MAX_INSTANCES = 30000
 _MAX_LABELS = 6000
+# One net's shapes sent to the page for a highlight (a power net on a big chip
+# has more; the reply says how many were left out).
+_MAX_NET_SHAPES = 20000
+_MAX_NET_HITS = 200
+
+# Worker processes (enable_workers); None = everything in this process.
+_WORKERS: Optional[Dict[str, Any]] = None
+# Session specs the server has handed out: enough to reopen one anywhere.
+_SPECS: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_MAX_SPECS = 64
 
 # Flow stages that leave a picture, in flow order, named as on every other page
 # (flowstages.py). Each is shown from the LAST step (by ordinal) whose name
@@ -155,6 +176,36 @@ def _final_gds(run_dir: Path) -> Optional[Path]:
             if hits:
                 return hits[0]
     return None
+
+
+def _final_def(run_dir: Path) -> Optional[Path]:
+    """``final/def/<design>.def``: the same chip as the final GDS, with names."""
+    d = run_dir / "final" / "def"
+    try:
+        hits = sorted(d.glob("*.def")) if d.is_dir() else []
+    except Exception:
+        return None
+    return hits[0] if hits else None
+
+
+def _first_name(v: Any) -> Optional[str]:
+    if isinstance(v, (list, tuple)):
+        v = v[0] if v else None
+    if isinstance(v, str):
+        v = v.split()[0] if v.split() else None
+    return str(v) if v else None
+
+
+def pdn_info(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """The run's power grid as LibreLane built it: the layers of the rails and
+    straps, and the supply and ground net names (for the Power preset)."""
+    return {
+        "rail": cfg.get("PDN_RAIL_LAYER") or None,
+        "vertical": cfg.get("PDN_VERTICAL_LAYER") or None,
+        "horizontal": cfg.get("PDN_HORIZONTAL_LAYER") or None,
+        "vdd": _first_name(cfg.get("VDD_NETS")) or _first_name(cfg.get("VDD_PIN")) or None,
+        "gnd": _first_name(cfg.get("GND_NETS")) or _first_name(cfg.get("GND_PIN")) or None,
+    }
 
 
 def _resolved(run_dir: Path) -> Dict[str, Any]:
@@ -278,7 +329,8 @@ def sources(run_dir: Path) -> Dict[str, Any]:
         if (run_dir / "final" / "render").is_dir() else None
     cfg = _resolved(run_dir)
     return {"stages": stages, "steps": all_steps, "variants": variants, "render": render,
-            "pdk": cfg.get("PDK"), "scl": cfg.get("STD_CELL_LIBRARY"), "design": cfg.get("DESIGN_NAME")}
+            "pdk": cfg.get("PDK"), "scl": cfg.get("STD_CELL_LIBRARY"), "design": cfg.get("DESIGN_NAME"),
+            "pdn": pdn_info(cfg)}
 
 
 def _source_path(run_dir: Path, source: str) -> Tuple[Optional[Path], str]:
@@ -492,11 +544,107 @@ def _hex(c: int) -> str:
     return "#%06x" % (int(c) & 0xFFFFFF)
 
 
+# --------------------------------------------------------------------------- names
+def _prop(obj: Any, key: int) -> Optional[str]:
+    """A KLayout shape's or instance's property *key* as text, or None."""
+    try:
+        if not obj.prop_id:
+            return None
+        v = obj.property(key)
+    except Exception:
+        return None
+    return str(v) if v not in (None, "") else None
+
+
+def _clean(name: Any) -> str:
+    """A net or instance name as KLayout and STA spell it: DEF escapes the
+    brackets (``dsa\\[0\\].x``), the others do not."""
+    return str(name or "").replace("\\", "").strip()
+
+
+def _box_key(b: List[float]) -> Tuple[int, int, int, int]:
+    return tuple(int(round(v * 1000)) for v in b[:4])  # type: ignore[return-value]
+
+
+_RX_DEF_TOK = re.compile(r"\(|\)|;|[^\s();]+")
+
+
+def parse_def_nets(path: Path) -> Dict[str, Any]:
+    """The connections of a DEF's NETS and SPECIALNETS sections, streamed:
+    ``nets: name -> [(inst, pin)]`` (``("PIN", name)`` for a top-level pin),
+    ``pins: "inst/pin" -> net`` and ``use: name -> SIGNAL|CLOCK|POWER|GROUND``.
+    Only what comes before a statement's first ``+`` is a connection; the
+    routing after it is read by KLayout, not here."""
+    nets: Dict[str, List[Tuple[str, str]]] = {}
+    pins: Dict[str, str] = {}
+    use: Dict[str, str] = {}
+    section = ""
+    cur: Optional[str] = None
+    conns: List[Tuple[str, str]] = []
+    in_conn = False
+    grp: List[str] = []
+    in_grp = False
+    want_use = False
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            s = line.strip()
+            if not section:
+                if s.startswith("NETS ") or s.startswith("SPECIALNETS "):
+                    section = s.split()[0]
+                continue
+            if s.startswith("END ") and s.split()[1:2] == [section]:
+                section = ""
+                continue
+            for tok in _RX_DEF_TOK.findall(s):
+                if cur is None:
+                    if tok == "-":
+                        cur = ""
+                    continue
+                if cur == "":
+                    cur = _clean(tok)
+                    conns, in_conn, in_grp, want_use = [], True, False, False
+                    continue
+                if tok == ";":
+                    if cur:
+                        nets.setdefault(cur, []).extend(conns)
+                        for inst, pin in conns:
+                            if inst == "*":
+                                # A special net on every instance's pin of that
+                                # name (``( * VPWR )``).
+                                pins.setdefault("*/" + pin, cur)
+                            elif inst != "PIN":
+                                pins.setdefault(inst + "/" + pin, cur)
+                    cur = None
+                    continue
+                if want_use:
+                    use[cur] = tok.upper()
+                    want_use = False
+                    continue
+                if tok == "+":
+                    in_conn = False
+                    continue
+                if tok == "USE" and not in_conn:
+                    want_use = True
+                    continue
+                if not in_conn:
+                    continue
+                if tok == "(":
+                    grp, in_grp = [], True
+                elif tok == ")":
+                    if in_grp and len(grp) >= 2:
+                        conns.append((_clean(grp[0]), _clean(grp[1])))
+                    in_grp = False
+                elif in_grp:
+                    grp.append(tok)
+    return {"nets": nets, "pins": pins, "use": use}
+
+
 # --------------------------------------------------------------------------- sessions
 class _Session:
     """One loaded layout (a run's GDS or a stage DEF) in a headless LayoutView."""
 
-    def __init__(self, sid: str, path: Path, kind: str, cfg: Dict[str, Any], top: Optional[str] = None):
+    def __init__(self, sid: str, path: Path, kind: str, cfg: Dict[str, Any], top: Optional[str] = None,
+                 names_def: Optional[str] = None):
         import klayout.db as kdb
         import klayout.lay as klay
 
@@ -508,6 +656,14 @@ class _Session:
         self.notes: List[str] = []
         # A cell session has no run folder to find its PDK from later (3D).
         self.cfg: Optional[Dict[str, Any]] = cfg if top else None
+        self._cfg: Dict[str, Any] = cfg if isinstance(cfg, dict) else {}
+        # A GDS has no net or instance names; the run's final DEF (the same
+        # chip, same coordinates) answers those questions for it.
+        self.names_def = names_def if kind == "gds" else None
+        self._companion: Any = None
+        self._nets: Optional[Dict[str, Any]] = None
+        self._insts: Optional[Dict[str, Any]] = None
+        self._conn: Optional[Dict[str, Any]] = None
         # The run's PDK and library: the census uses the Cells tab's taxonomy.
         self.lib = ((cfg or {}).get("PDK"), (cfg or {}).get("STD_CELL_LIBRARY")) if isinstance(cfg, dict) else (None, None)
         tech = _tech_files(cfg)
@@ -526,6 +682,15 @@ class _Session:
             else:
                 self.notes.append("No LEF/DEF layer map found, so layers keep KLayout's generic names.")
             c.produce_cell_outlines = True
+            # Names on the shapes: routed shapes carry their net and placed
+            # cells their instance under property 1 (KLayout's default); pin
+            # shapes inside a cell carry the pin's name under property 2.
+            try:
+                c.net_property_name = 1
+                c.instance_property_name = 1
+                c.pin_property_name = 2
+            except Exception:
+                pass
             v.load_layout(str(path), opt, True)
         else:
             v.load_layout(str(path), True)
@@ -565,10 +730,27 @@ class _Session:
         self._layers = self._scan_layers()
 
     # -- layers
+    def _stipple(self, idx: int, cache: Dict[int, List[str]]) -> List[str]:
+        """KLayout's stipple bitmap for a dither index, as rows of ``*``/``.``
+        (sky130 gives several layers one colour; only the stipple tells them
+        apart, so the page's key draws the real one)."""
+        if idx in cache:
+            return cache[idx]
+        rows: List[str] = []
+        try:
+            raw = self.view.get_stipple(idx) if idx >= 0 else ""
+            rows = [r.strip() for r in str(raw or "").splitlines() if r.strip() and set(r.strip()) <= {"*", "."}]
+            rows = [r[:32] for r in rows[:32]]
+        except Exception:
+            rows = []
+        cache[idx] = rows
+        return rows
+
     def _scan_layers(self) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         it = self.view.begin_layers()
         pos = 0
+        stipples: Dict[int, List[str]] = {}
         while not it.at_end():
             lp = it.current()
             li = lp.layer_index()
@@ -580,11 +762,16 @@ class _Session:
                     empty = True
             if not empty:
                 base, purpose, src, label = _layer_ident(lp.name or "", lp.source or "")
+                try:
+                    dither = int(lp.eff_dither_pattern(True))
+                except Exception:
+                    dither = int(lp.dither_pattern)
                 out.append({
                     "id": pos, "name": base, "purpose": purpose, "src": src,
                     "label": label,
                     "fill": _hex(lp.fill_color), "frame": _hex(lp.frame_color),
                     "dither": int(lp.dither_pattern), "visible": bool(lp.visible),
+                    "stipple": self._stipple(dither, stipples),
                     "group": _group_of(base, purpose), "z": _z_rank(base, purpose),
                     "about": _layer_words(base), "li": li,
                 })
@@ -595,6 +782,11 @@ class _Session:
     def info(self) -> Dict[str, Any]:
         bb = self.top.dbbox()
         groups = [{"id": g, "label": lbl} for g, lbl in _GROUPS]
+        names = None
+        if self.kind == "def":
+            names = {"from": "def", "file": self.path.name}
+        elif self.names_def:
+            names = {"from": "companion", "file": Path(self.names_def).name}
         return {
             "sid": self.sid, "kind": self.kind, "file": self.path.name,
             "top": self.top.name, "dbu": self.dbu,
@@ -602,6 +794,7 @@ class _Session:
             "layers": [{k: v for k, v in L.items() if k != "li"} for L in self._layers],
             "groups": groups, "notes": self.notes,
             "cells": self.cell_stats(), "labels": self.labels(),
+            "names": names, "pdn": pdn_info(self._cfg) if self._cfg else None,
         }
 
     def _apply(self, visible: Optional[List[int]], depth: Optional[int], labels: bool,
@@ -712,15 +905,23 @@ class _Session:
                     return out
         return out
 
-    def probe(self, x: float, y: float, r: float) -> List[Dict[str, Any]]:
-        """Shapes under a click on the visible layers, top of the stack first."""
+    def probe(self, x: float, y: float, r: float, layers: Optional[List[str]] = None,
+              all_layers: bool = False) -> List[Dict[str, Any]]:
+        """Shapes under a click on the visible layers, top of the stack first.
+
+        On a DEF each hit names its net (a routed shape) or its instance and
+        pin (a shape inside a placed cell); on a final GDS the run's final DEF
+        answers for the top hits (see ``names_def``)."""
         import klayout.db as kdb
 
         box = kdb.DBox(x - r, y - r, x + r, y + r)
-        vis = self.applied.get("visible")
+        vis = None if all_layers else self.applied.get("visible")
         hits: List[Dict[str, Any]] = []
+        want = set(layers) if layers else None
         for L in self._layers:
             if vis is not None and L["id"] not in vis:
+                continue
+            if want is not None and L["src"] not in want:
                 continue
             it = self.top.begin_shapes_rec_touching(L["li"], box)
             n = 0
@@ -729,21 +930,232 @@ class _Session:
                 path = it.path()
                 inst_cell = None
                 inst_box = None
+                inst_name = None
+                pin = None
+                net = None
                 if path:
                     inst = path[0].inst()
                     inst_cell = self.layout.cell(inst.cell_index).name
                     ib = inst.dbbox()
                     inst_box = [ib.left, ib.bottom, ib.right, ib.top]
+                    if self.kind == "def":
+                        inst_name = _prop(inst, 1)
+                        pin = _prop(shape, 2)
+                elif self.kind == "def":
+                    net = _prop(shape, 1)
                 sb = shape.dbbox().transformed(it.dtrans())
                 text = shape.text_string if shape.is_text() else None
                 hits.append({"layer": L["label"], "src": L["src"], "fill": L["fill"], "z": L["z"],
                              "about": L["about"], "cell": inst_cell, "cell_box": inst_box,
                              "box": [sb.left, sb.bottom, sb.right, sb.top], "text": text,
-                             "area": sb.width() * sb.height()})
+                             "area": sb.width() * sb.height(),
+                             "inst": inst_name, "pin": pin, "net": net})
                 n += 1
                 it.next()
         hits.sort(key=lambda h: (-h["z"], h["area"]))
-        return hits[:40]
+        hits = hits[:40]
+        if self.kind == "def":
+            # A pin inside a cell: its net from the DEF's NETS connections.
+            for h in hits[:8]:
+                if h["inst"] and h["pin"] and not h["net"]:
+                    h["net"] = self.conn_net(h["inst"], h["pin"])
+        elif self.names_def and hits:
+            comp = self.companion()
+            if comp is not None:
+                by_box = comp._inst_by_box()
+                for h in hits[:4]:
+                    h["named"] = True
+                    cb = h.get("cell_box")
+                    if cb:
+                        h["inst"] = by_box.get(_box_key(cb))
+                        continue
+                    # A top-level shape: the routed shape of the DEF at that
+                    # place, on the same layer, names its net.
+                    try:
+                        sub = comp.probe(x, y, r, layers=[h["src"]], all_layers=True)
+                    except Exception:
+                        sub = []
+                    h["net"] = next((s["net"] for s in sub if s.get("net")), None)
+        return hits
+
+    def _inst_by_box(self) -> Dict[Tuple[int, int, int, int], str]:
+        if getattr(self, "_ibox", None) is None:
+            self._ibox = {_box_key(b): n for n, (_c, b) in self._inst_index().items()}
+        return self._ibox
+
+    # -- names: nets and instances (DEF property 1, the DEF's NETS section)
+    def companion(self) -> Optional["_Session"]:
+        """The final DEF of the run this GDS belongs to, loaded for its names."""
+        if self.kind == "def":
+            return self
+        if not self.names_def:
+            return None
+        if self._companion is None:
+            try:
+                self._companion = _Session(self.sid + "#names", Path(self.names_def), "def", self._cfg)
+            except Exception as ex:
+                _log.info("companion DEF for names failed: %s", ex)
+                self._companion = False
+        return self._companion or None
+
+    def _net_index(self) -> Dict[str, Any]:
+        """``net -> {layers: {src: [x0,y0,x1,y1, ...]}, n, bbox, length}`` from
+        the routed shapes (built once, on the first question)."""
+        if self._nets is not None:
+            return self._nets
+        import klayout.db as kdb
+
+        idx: Dict[str, Any] = {}
+        for L in self._layers:
+            if L["group"] not in ("metal", "local", "pin"):
+                continue
+            for s in self.top.shapes(L["li"]).each(kdb.Shapes.SBoxes | kdb.Shapes.SPolygons | kdb.Shapes.SPaths):
+                name = _prop(s, 1)
+                if not name:
+                    continue
+                b = s.dbbox()
+                e = idx.get(name)
+                if e is None:
+                    e = idx[name] = {"layers": {}, "n": 0, "bbox": [b.left, b.bottom, b.right, b.top], "length": 0.0}
+                arr = e["layers"].setdefault(L["src"] or L["label"], [])
+                arr.extend((round(b.left, 4), round(b.bottom, 4), round(b.right, 4), round(b.top, 4)))
+                e["n"] += 1
+                bb = e["bbox"]
+                bb[0] = min(bb[0], b.left); bb[1] = min(bb[1], b.bottom)
+                bb[2] = max(bb[2], b.right); bb[3] = max(bb[3], b.top)
+                if L["group"] != "pin":
+                    e["length"] += max(b.width(), b.height())
+        self._nets = idx
+        return idx
+
+    def _inst_index(self) -> Dict[str, Any]:
+        """``instance -> (cell, [x0,y0,x1,y1])`` of every placed cell."""
+        if self._insts is not None:
+            return self._insts
+        out: Dict[str, Any] = {}
+        for inst in self.top.each_inst():
+            name = _prop(inst, 1)
+            if not name:
+                continue
+            b = inst.dbbox()
+            out[name] = (self.layout.cell(inst.cell_index).name, [round(b.left, 4), round(b.bottom, 4), round(b.right, 4), round(b.top, 4)])
+        self._insts = out
+        return out
+
+    def _connections(self) -> Dict[str, Any]:
+        """The DEF's NETS and SPECIALNETS: who each net joins, and its use."""
+        if self._conn is None:
+            try:
+                self._conn = parse_def_nets(self.path)
+            except Exception as ex:
+                _log.info("DEF NETS parse failed: %s", ex)
+                self._conn = {"nets": {}, "pins": {}, "use": {}}
+        return self._conn
+
+    def conn_net(self, inst: str, pin: str) -> Optional[str]:
+        pins = self._connections()["pins"]
+        return pins.get(_clean(inst) + "/" + pin) or pins.get("*/" + pin)
+
+    def _net_pins(self, name: str) -> List[Dict[str, Any]]:
+        """Where a net's pins are: each cell pin at its instance's centre, a
+        top-level pin at its label."""
+        conn = self._connections()["nets"].get(name) or []
+        insts = self._inst_index()
+        labels = None
+        out: List[Dict[str, Any]] = []
+        for inst, pin in conn[:2000]:
+            if inst == "PIN":
+                if labels is None:
+                    labels = {lb["text"]: lb for lb in self.labels()}
+                lb = labels.get(pin)
+                if lb:
+                    out.append({"inst": None, "pin": pin, "x": lb["x"], "y": lb["y"]})
+                continue
+            hit = insts.get(inst)
+            if hit:
+                b = hit[1]
+                out.append({"inst": inst, "pin": pin, "cell": hit[0], "x": round((b[0] + b[2]) / 2, 4), "y": round((b[1] + b[3]) / 2, 4)})
+        return out
+
+    def nets_search(self, q: str, limit: int = 60) -> Dict[str, Any]:
+        """Nets whose name holds *q* (case-insensitive, DEF escapes ignored),
+        exact and prefix matches first."""
+        comp = self.companion()
+        if comp is None:
+            return {"nets": [], "total": 0, "names": False}
+        idx = comp._net_index()
+        conn = comp._connections()
+        names = set(idx) | set(conn["nets"])
+        qq = _clean(q).lower()
+        hits = [n for n in names if qq in n.lower()] if qq else []
+        hits.sort(key=lambda n: (n.lower() != qq, not n.lower().startswith(qq), len(n), n))
+        out = []
+        lim = max(1, min(int(limit), _MAX_NET_HITS))
+        for n in hits[:lim]:
+            e = idx.get(n) or {}
+            out.append({"name": n, "shapes": e.get("n", 0), "layers": sorted(e.get("layers", {}).keys()),
+                        "bbox": e.get("bbox"), "length": round(e.get("length", 0.0), 2),
+                        "pins": len(conn["nets"].get(n) or []), "use": conn["use"].get(n, "")})
+        # Placed instances by name (``_186_``, ``clkbuf_0_clk``), same rules.
+        ii = comp._inst_index()
+        ihits = [n for n in ii if qq in n.lower()] if qq else []
+        ihits.sort(key=lambda n: (n.lower() != qq, not n.lower().startswith(qq), len(n), n))
+        insts = [{"name": n, "cell": ii[n][0], "box": ii[n][1]} for n in ihits[:lim]]
+        return {"nets": out, "total": len(hits), "names": True, "insts": insts, "insts_total": len(ihits)}
+
+    def net_geom(self, name: str) -> Dict[str, Any]:
+        """One net's shapes, pins and box, for a highlight."""
+        comp = self.companion()
+        if comp is None:
+            return {"name": name, "found": False, "names": False}
+        name = _clean(name)
+        idx = comp._net_index()
+        e = idx.get(name)
+        pins = comp._net_pins(name)
+        if e is None and not pins:
+            return {"name": name, "found": False, "names": True}
+        boxes: List[List[Any]] = []
+        total = 0
+        for src, arr in (e or {}).get("layers", {}).items():
+            for i in range(0, len(arr), 4):
+                total += 1
+                if len(boxes) < _MAX_NET_SHAPES:
+                    boxes.append([src, arr[i], arr[i + 1], arr[i + 2], arr[i + 3]])
+        bbox = (e or {}).get("bbox")
+        if bbox is None and pins:
+            xs = [p["x"] for p in pins]
+            ys = [p["y"] for p in pins]
+            bbox = [min(xs), min(ys), max(xs), max(ys)]
+        conn = comp._connections()
+        return {"name": name, "found": True, "names": True, "boxes": boxes, "total": total,
+                "truncated": total > len(boxes), "bbox": bbox, "pins": pins,
+                "layers": sorted((e or {}).get("layers", {}).keys()),
+                "length": round((e or {}).get("length", 0.0), 2), "use": conn["use"].get(name, "")}
+
+    def locate(self, insts: List[str], nets: List[str]) -> Dict[str, Any]:
+        """Where named instances and nets are (a timing path's cells and nets)."""
+        comp = self.companion()
+        if comp is None:
+            return {"insts": {}, "nets": {}, "missing": {"insts": list(insts), "nets": list(nets)}, "names": False}
+        ii = comp._inst_index()
+        found_i: Dict[str, Any] = {}
+        miss_i: List[str] = []
+        for n in insts[:5000]:
+            c = _clean(n)
+            hit = ii.get(c)
+            if hit:
+                found_i[n] = {"cell": hit[0], "box": hit[1]}
+            else:
+                miss_i.append(n)
+        found_n: Dict[str, Any] = {}
+        miss_n: List[str] = []
+        for n in nets[:400]:
+            g = self.net_geom(n)
+            if g.get("found"):
+                found_n[n] = g
+            else:
+                miss_n.append(n)
+        return {"insts": found_i, "nets": found_n, "missing": {"insts": miss_i, "nets": miss_n}, "names": True}
 
 
 def _sid(run_dir: Path, source: str) -> str:
@@ -759,10 +1171,31 @@ def open_session(run_dir: Path, source: str) -> Dict[str, Any]:
     path, kind = _source_path(run_dir, source)
     if path is None or not path.is_file():
         return {"ok": False, "error": "this run has no layout for '" + (source or "final") + "'"}
-    info = _open(_sid(run_dir, source), path, kind, lambda: _resolved(run_dir))
+    names_def = None
+    if kind == "gds" and (source in ("", "final") or source.startswith("final:")):
+        d = _final_def(run_dir)
+        names_def = str(d) if d is not None else None
+    spec = {"sid": _sid(run_dir, source), "path": str(path), "kind": kind, "run_dir": str(run_dir),
+            "top": None, "cfg": None, "names_def": names_def}
+    if _WORKERS is not None:
+        _remember(spec)
+        try:
+            info = _call("view", "open", {"spec": spec}, timeout=300)
+        except Exception as ex:
+            return {"ok": False, "error": _worker_words(ex, path.name)}
+    else:
+        info = _open_spec(spec)
     if info.get("ok"):
         info["klayout"] = av.get("version")
     return info
+
+
+def _open_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = spec.get("cfg")
+    run_dir = spec.get("run_dir")
+    return _open(spec["sid"], Path(spec["path"]), spec["kind"],
+                 (lambda: cfg) if cfg is not None else (lambda: _resolved(Path(run_dir)) if run_dir else {}),
+                 top=spec.get("top"), names_def=spec.get("names_def"))
 
 
 def _evict() -> None:
@@ -773,7 +1206,8 @@ def _evict() -> None:
         _SESSIONS.pop(k, None)
 
 
-def _open(sid: str, path: Path, kind: str, cfg: Any, top: Optional[str] = None) -> Dict[str, Any]:
+def _open(sid: str, path: Path, kind: str, cfg: Any, top: Optional[str] = None,
+          names_def: Optional[str] = None) -> Dict[str, Any]:
     """Load *path* into a session (or reuse a current one) and describe it.
     *cfg* is called only when a new session has to be built."""
     with _LOCK:
@@ -784,7 +1218,7 @@ def _open(sid: str, path: Path, kind: str, cfg: Any, top: Optional[str] = None) 
         if s is None:
             t0 = time.time()
             try:
-                s = _Session(sid, path, kind, cfg(), top=top)
+                s = _Session(sid, path, kind, cfg(), top=top, names_def=names_def)
             except LookupError as ex:
                 return {"ok": False, "error": str(ex).strip("'\"")}
             except Exception as ex:
@@ -814,7 +1248,16 @@ def open_cell_session(pdk: str, scl: str, cell: str) -> Dict[str, Any]:
         return {"ok": False, "error": why}
     root = celllib.pdk_dir(pdk)
     cfg = {"PDK": pdk, "PDK_ROOT": str(root.parent) if root is not None else ""}
-    info = _open(_CELL_PREFIX + pdk + "::" + scl + "::" + cell, gds, "gds", lambda: cfg, top=cell)
+    spec = {"sid": _CELL_PREFIX + pdk + "::" + scl + "::" + cell, "path": str(gds), "kind": "gds",
+            "run_dir": None, "top": cell, "cfg": cfg, "names_def": None}
+    if _WORKERS is not None:
+        _remember(spec)
+        try:
+            info = _call("view", "open", {"spec": spec}, timeout=120)
+        except Exception as ex:
+            return {"ok": False, "error": _worker_words(ex, Path(gds).name)}
+    else:
+        info = _open_spec(spec)
     if info.get("ok"):
         info["klayout"] = av.get("version")
     return info
@@ -822,6 +1265,14 @@ def open_cell_session(pdk: str, scl: str, cell: str) -> Dict[str, Any]:
 
 def close_session(sid: str) -> bool:
     """Forget a session now (the page moved on). True when one was open."""
+    if _WORKERS is not None:
+        known = _SPECS.pop(sid, None) is not None
+        for role in ("view", "bg"):     # the thumb worker keeps no sessions
+            try:
+                _call(role, "close", {"sid": sid}, timeout=20, spawn=False)
+            except Exception:
+                pass
+        return known
     with _LOCK:
         return _SESSIONS.pop(sid, None) is not None
 
@@ -834,28 +1285,75 @@ def session(sid: str) -> Optional[_Session]:
         return s
 
 
-def render(sid: str, **kw: Any) -> Optional[bytes]:
+def _with(sid: str, fn: Any, role: str = "view", op: str = "", kw: Optional[Dict[str, Any]] = None,
+          timeout: float = 120.0, key: Any = None) -> Any:
+    """Run *fn(session)* here, or *op* in a worker (None: no such session)."""
+    if _WORKERS is not None:
+        spec = _SPECS.get(sid)
+        if spec is None:
+            return None
+        _SPECS.move_to_end(sid)
+        return _call(role, op, dict(kw or {}, spec=spec), timeout=timeout, key=key)
     with _LOCK:
         s = _SESSIONS.get(sid)
-        if s is None:
-            return None
-        return s.render(**kw)
+        return None if s is None else fn(s)
+
+
+def render(sid: str, heavy: bool = False, **kw: Any) -> Optional[bytes]:
+    """PNG of a viewport. *heavy* (a 4K or 8K save) goes to the background
+    worker, so the view stays live while it draws."""
+    return _with(sid, lambda s: s.render(**kw), role="bg" if heavy else "view", op="render",
+                 kw={"kw": kw}, timeout=600 if heavy else 120)
 
 
 def probe(sid: str, x: float, y: float, r: float) -> Optional[List[Dict[str, Any]]]:
-    with _LOCK:
-        s = _SESSIONS.get(sid)
-        return None if s is None else s.probe(x, y, r)
+    return _with(sid, lambda s: s.probe(x, y, r), op="probe", kw={"x": x, "y": y, "r": r})
 
 
 def instances(sid: str, cell: str) -> Optional[Dict[str, Any]]:
+    return _with(sid, lambda s: s.instances(cell), op="instances", kw={"cell": cell})
+
+
+def nets(sid: str, q: str, limit: int = 60) -> Optional[Dict[str, Any]]:
+    """Nets whose name holds *q* (see ``_Session.nets_search``)."""
+    return _with(sid, lambda s: s.nets_search(q, limit), op="nets", kw={"q": q, "limit": limit}, timeout=300)
+
+
+def net(sid: str, name: str) -> Optional[Dict[str, Any]]:
+    return _with(sid, lambda s: s.net_geom(name), op="net", kw={"name": name}, timeout=300)
+
+
+def locate(sid: str, insts: List[str], nets_: List[str]) -> Optional[Dict[str, Any]]:
+    return _with(sid, lambda s: s.locate(insts, nets_), op="locate", kw={"insts": insts, "nets": nets_}, timeout=300)
+
+
+# Thumbnails live next to the run (``<run>/.lanex/thumbs``): made once per
+# layout file and served from disk, so the stage strip fills in at once on
+# every later visit and never waits on KLayout.
+_THUMB_VERSION = "1"
+
+
+def _thumb_file(run_dir: Path, source: str, path: Path, w: int, h: int, bg: str) -> Path:
+    st = path.stat()
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", source or "final")[:80]
+    return run_dir / ".lanex" / "thumbs" / ("%s__%dx%d__%s__%d_%d_v%s.png" % (
+        safe, int(w), int(h), bg.lstrip("#"), int(st.st_mtime), st.st_size, _THUMB_VERSION))
+
+
+def _thumb_png(path: str, kind: str, run_dir: str, w: int, h: int, bg: str) -> Optional[bytes]:
     with _LOCK:
-        s = _SESSIONS.get(sid)
-        return None if s is None else s.instances(cell)
+        # A throwaway view: thumbnails must never push the viewer's own
+        # sessions out of the cache (that made the main view expire).
+        try:
+            s = _Session("thumb", Path(path), kind, _resolved(Path(run_dir)))
+        except Exception:
+            _log.exception("layout thumbnail open failed")
+            return None
+        return s.render(None, w, h, visible=None, depth=None, labels=False, bg=bg, boxes=False, oversampling=3)
 
 
 def thumbnail(run_dir: Path, source: str, w: int, h: int, bg: str) -> Optional[bytes]:
-    """A small fit-to-window picture of one stage, cached by file mtime."""
+    """A small fit-to-window picture of one stage, cached on disk by file mtime."""
     run_dir = Path(run_dir)
     path, kind = _source_path(run_dir, source)
     if path is None or not path.is_file():
@@ -865,21 +1363,50 @@ def thumbnail(run_dir: Path, source: str, w: int, h: int, bg: str) -> Optional[b
         if key in _THUMBS:
             _THUMBS.move_to_end(key)
             return _THUMBS[key]
+    f = _thumb_file(run_dir, source, path, w, h, bg)
+    try:
+        if f.is_file():
+            png = f.read_bytes()
+            if png[:8] == b"\x89PNG\r\n\x1a\n":
+                _keep_thumb(key, png)
+                return png
+    except OSError:
+        pass
     if not available()["ok"]:
         return None
+    if _WORKERS is not None:
+        # Their own worker: a stage strip fills in while the view renders, a
+        # 3D model builds or an 8K picture is saved.
+        png = _call("thumb", "thumb", {"path": str(path), "kind": kind, "run_dir": str(run_dir),
+                                       "w": int(w), "h": int(h), "bg": bg}, timeout=300)
+    else:
+        png = _thumb_png(str(path), kind, str(run_dir), int(w), int(h), bg)
+    if not png:
+        return None
+    _keep_thumb(key, png)
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        # Older pictures of the same stage at this size (the layout changed).
+        for old in f.parent.glob(f.name.split("__", 1)[0] + "__%dx%d__%s__*.png" % (int(w), int(h), bg.lstrip("#"))):
+            if old != f:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+        tmp = f.with_name(f.name + ".%d.tmp" % os.getpid())
+        tmp.write_bytes(png)
+        os.replace(tmp, f)
+    except OSError:
+        pass      # a read-only run folder: memory only
+    return png
+
+
+def _keep_thumb(key: Tuple, png: bytes) -> None:
     with _LOCK:
-        # A throwaway view: thumbnails must never push the viewer's own
-        # sessions out of the cache (that made the main view expire).
-        try:
-            s = _Session("thumb", path, kind, _resolved(run_dir))
-        except Exception:
-            _log.exception("layout thumbnail open failed")
-            return None
-        png = s.render(None, w, h, visible=None, depth=None, labels=False, bg=bg, boxes=False, oversampling=3)
         _THUMBS[key] = png
+        _THUMBS.move_to_end(key)
         while len(_THUMBS) > _MAX_THUMBS:
             _THUMBS.popitem(last=False)
-    return png
 
 
 # --------------------------------------------------------------------------- markers
@@ -983,7 +1510,8 @@ def markers(run_dir: Path) -> Dict[str, Any]:
         if hit is None:
             continue
         res = parse_rdb(hit)
-        res.update({"id": src["id"], "label": src["label"], "path": hit.relative_to(run_dir).as_posix()})
+        res.update({"id": src["id"], "label": src["label"], "path": hit.relative_to(run_dir).as_posix(),
+                    "cap": _MAX_MARKERS})
         # The metric LibreLane judged the run on (what Verify uses). A report
         # file that disagrees with it (edited, or left over from an earlier
         # run) is shown, and the disagreement said, never silently trusted.
@@ -1146,18 +1674,43 @@ def _generic_stack(layers: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
     return out
 
 
+_MESH_CANCEL: set = set()
+
+
+class MeshCancelled(RuntimeError):
+    """The 3D build was stopped by the user."""
+
+
 def mesh(sid: str, box: Optional[List[float]], visible: Optional[List[int]]) -> Optional[bytes]:
     """Binary 3D mesh of a session's layout: ``u32 header length | JSON header |
     float32 data`` (triangles as x,y triples, edges as x1,y1,x2,y2, in µm
-    relative to ``origin``)."""
+    relative to ``origin``). Built in the background worker; ``cancel_mesh``
+    stops it."""
+    _MESH_CANCEL.discard(sid)
+    try:
+        return _with(sid, lambda s: _mesh_of(s, box, visible), role="bg", op="mesh",
+                     kw={"box": box, "visible": visible}, timeout=900, key=sid)
+    except Exception as ex:
+        if type(ex).__name__ == "Cancelled":
+            raise MeshCancelled("the 3D build was cancelled") from None
+        raise
+
+
+def cancel_mesh(sid: str) -> bool:
+    """Stop the 3D build of *sid* if one is running. True when one was."""
+    if _WORKERS is not None:
+        w = _WORKERS.get("bg")
+        return bool(w and w.cancel("mesh", key=sid))
+    _MESH_CANCEL.add(sid)
+    return True
+
+
+def _mesh_of(s: "_Session", box: Optional[List[float]], visible: Optional[List[int]]) -> bytes:
     import struct
     from array import array
     import klayout.db as kdb
 
     with _LOCK:
-        s = _SESSIONS.get(sid)
-        if s is None:
-            return None
         if s.cfg is not None:
             cfg = s.cfg
         else:
@@ -1199,6 +1752,9 @@ def mesh(sid: str, box: Optional[List[float]], visible: Optional[List[int]]) -> 
                 todo.append((L, spec))
         todo.sort(key=lambda t: (-t[1]["z0"], -t[1]["z1"]))
         for L, spec in todo:
+            if s.sid in _MESH_CANCEL:
+                _MESH_CANCEL.discard(s.sid)
+                raise MeshCancelled("the 3D build was cancelled")
             if dropped:
                 dropped.append(spec["name"])
                 continue
@@ -1242,3 +1798,114 @@ def mesh(sid: str, box: Optional[List[float]], visible: Optional[List[int]]) -> 
     hb = json.dumps(head).encode("utf-8")
     hb += b" " * ((4 - (len(hb) % 4)) % 4)
     return struct.pack("<I", len(hb)) + hb + tri.tobytes() + edg.tobytes()
+
+
+# --------------------------------------------------------------------------- workers
+def enable_workers(on: bool = True) -> None:
+    """Send KLayout work to worker processes (the server calls this once).
+    Off on Windows hosts (LanEx's server runs in WSL there) and when
+    ``LANEX_LAYOUT_WORKERS=0``."""
+    global _WORKERS
+    if not on or os.name == "nt" or os.environ.get("LANEX_LAYOUT_WORKERS") == "0":
+        stop_workers()
+        return
+    if _WORKERS is None:
+        from .layoutworker import Worker
+        # view: what the user waits on; bg: the 3D model and 4K/8K saves;
+        # thumb: stage thumbnails (throwaway sessions, nothing kept).
+        _WORKERS = {"view": Worker("view"), "bg": Worker("bg"), "thumb": Worker("thumb")}
+
+
+def stop_workers() -> None:
+    global _WORKERS
+    ws, _WORKERS = _WORKERS, None
+    for w in (ws or {}).values():
+        try:
+            w.stop()
+        except Exception:
+            pass
+
+
+def workers_on() -> bool:
+    return _WORKERS is not None
+
+
+def _remember(spec: Dict[str, Any]) -> None:
+    _SPECS[spec["sid"]] = spec
+    _SPECS.move_to_end(spec["sid"])
+    while len(_SPECS) > _MAX_SPECS:
+        _SPECS.popitem(last=False)
+
+
+def _call(role: str, op: str, kw: Dict[str, Any], timeout: float = 120.0, key: Any = None,
+          spawn: bool = True) -> Any:
+    ws = _WORKERS
+    if ws is None:
+        return _serve(op, kw)
+    w = ws[role]
+    if not spawn and w._proc is None:
+        return None
+    return w.call(op, kw, timeout=timeout, key=key)
+
+
+def _worker_words(ex: BaseException, name: str) -> str:
+    """What to tell the user when a worker call failed."""
+    kind = type(ex).__name__
+    if kind == "TimeoutError":
+        return "KLayout took too long to read " + name + " and was stopped. " + str(ex)
+    if kind == "WorkerError":
+        return "KLayout stopped while reading " + name + ". " + str(ex)
+    return "KLayout could not read " + name + ": " + str(ex)
+
+
+def _session_for(spec: Dict[str, Any]) -> "_Session":
+    """The session a spec names, opened here if this process has not got it
+    (a worker that was restarted, or the background worker's first use)."""
+    with _LOCK:
+        s = _SESSIONS.get(spec["sid"])
+        if s is not None:
+            try:
+                if s.mtime == Path(spec["path"]).stat().st_mtime:
+                    _SESSIONS.move_to_end(spec["sid"])
+                    return s
+            except OSError:
+                pass
+        info = _open_spec(spec)
+        if not info.get("ok"):
+            raise LookupError(info.get("error") or "the layout could not be opened")
+        return _SESSIONS[spec["sid"]]
+
+
+def _serve(op: str, kw: Dict[str, Any]) -> Any:
+    """One call, in this process (the worker loop, or no workers at all)."""
+    if op == "open":
+        return _open_spec(kw["spec"])
+    if op == "close":
+        with _LOCK:
+            return _SESSIONS.pop(kw["sid"], None) is not None
+    if op == "thumb":
+        return _thumb_png(kw["path"], kw["kind"], kw["run_dir"], kw["w"], kw["h"], kw["bg"])
+    if op == "ping":
+        return {"pid": os.getpid(), "sessions": list(_SESSIONS)}
+    s = _session_for(kw["spec"])
+    if op == "render":
+        with _LOCK:
+            return s.render(**kw["kw"])
+    if op == "probe":
+        with _LOCK:
+            return s.probe(kw["x"], kw["y"], kw["r"])
+    if op == "instances":
+        with _LOCK:
+            return s.instances(kw["cell"])
+    if op == "nets":
+        with _LOCK:
+            return s.nets_search(kw["q"], kw.get("limit", 60))
+    if op == "net":
+        with _LOCK:
+            return s.net_geom(kw["name"])
+    if op == "locate":
+        with _LOCK:
+            return s.locate(kw["insts"], kw["nets"])
+    if op == "mesh":
+        return _mesh_of(s, kw.get("box"), kw.get("visible"))
+    raise ValueError("unknown layout operation " + op)

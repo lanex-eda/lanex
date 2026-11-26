@@ -1005,6 +1005,13 @@ def serve_forever(httpd: ThreadingHTTPServer, *, open_after: bool, url: Optional
     """Block on serve_forever(). Optionally open the browser once."""
     if open_after and url:
         threading.Timer(0.5, open_browser, args=(url,)).start()
+    # The Layout tab's KLayout work runs in worker processes, so a render
+    # never freezes the other requests (controller/layoutview.py).
+    try:
+        from ..controller import layoutview
+        layoutview.enable_workers()
+    except Exception:
+        pass
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

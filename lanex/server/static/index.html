@@ -933,11 +933,14 @@
             <div class="lx-pane" id="lx-pane-cells" role="tabpanel" hidden></div>
             <div class="lx-pane" id="lx-pane-find" role="tabpanel" hidden>
               <div class="lx-find">
-                <input type="search" id="lx-find-q" placeholder="Pin, label or cell name" autocomplete="off" spellcheck="false" aria-label="Find a pin, label or cell"/>
+                <input type="search" id="lx-find-q" placeholder="Pin, net, instance or cell" autocomplete="off" spellcheck="false" aria-label="Find a pin, net, instance or cell (/)"/>
               </div>
+              <div class="lx-netchips" id="lx-netchips" hidden></div>
               <div class="lx-find-res" id="lx-find-res"></div>
             </div>
             <div class="lx-pane" id="lx-pane-checks" role="tabpanel" hidden></div>
+            <!-- A temporary view over the panes (a timing path, the clock tree), with a way back. -->
+            <div class="lx-focus" id="lx-focus" hidden></div>
           </aside>
 
           <div class="lx-view" id="lx-view">
@@ -954,15 +957,22 @@
               <button class="lx-tb" data-lx="zin" title="Zoom in (+)" aria-label="Zoom in"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
               <span class="lx-tb-sep"></span>
               <button class="lx-tb" data-lx="measure" aria-pressed="false" title="Measure: drag to draw a ruler (M). Esc clears them." aria-label="Measure"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2"/></svg></button>
-              <button class="lx-tb" data-lx="labels" aria-pressed="true" title="Pin and net labels (L)" aria-label="Labels"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg></button>
+              <button class="lx-tb" data-lx="labels" aria-pressed="true" title="Pin names (L)" aria-label="Pin names"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg></button>
               <button class="lx-tb" data-lx="detail" aria-pressed="false" title="Cell outlines: draw each standard cell as a named box instead of its insides (O)" aria-label="Cell outlines"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h8v6H3zM13 5h8v6h-8zM3 13h5v6H3zM10 13h11v6H10z"/></svg></button>
               <button class="lx-tb" data-lx="bg" title="Dark or white background" aria-label="Background"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg></button>
+              <span class="lx-tb-sep"></span>
+              <span class="lx-ovl-wrap">
+                <button class="lx-tb lx-tb-wide" id="lx-ovl" aria-haspopup="menu" aria-expanded="false" aria-pressed="false" title="Overlays measured by OpenROAD: routing congestion, cell density, the clock tree, timing paths (V shows or hides the last one)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 12.5l9 5 9-5"/><path d="M3 16.5l9 5 9-5" opacity="0.55"/></svg><span>Overlays</span></button>
+                <div class="lx-menu lx-ovl-menu" id="lx-ovl-menu" role="menu" hidden></div>
+              </span>
               <span class="lx-tb-sep"></span>
               <button class="lx-tb" data-lx="full" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
             </div>
             <!-- Top right: what is on screen, and in 3D the controls that shape it. -->
             <div class="lx-corner" id="lx-corner">
               <div class="lx-badge" id="lx-badge"></div>
+              <!-- The key: what each colour on screen is, and the overlay's scale (layoutkey.js). -->
+              <div class="lx-key" id="lx-key" hidden></div>
               <div class="lx-3dctl" id="lx-3dctl" hidden>
                 <div class="lx-3d-row">
                   <span class="lx-3d-k" id="lx-3d-schemek">Colours</span>
@@ -990,6 +1000,7 @@
             </div>
             <canvas class="lx-mini" id="lx-mini" width="180" height="120" aria-label="Overview map: click to move there"></canvas>
             <div class="lx-inspect" id="lx-inspect" hidden></div>
+            <div class="lx-stepper" id="lx-stepper" role="group" aria-label="Markers" hidden></div>
             <div class="lx-msg" id="lx-msg" hidden></div>
             <div class="lx-hint" id="lx-hint">Drag to pan · scroll to zoom · click anything to see what it is · <kbd>F</kbd> fits</div>
           </div>
