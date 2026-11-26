@@ -104,6 +104,7 @@ def build_lint_command(
     engine: str = "docker",
     image: Optional[str] = None,
     timing: bool = False,
+    disable_warnings: Sequence[str] = (),
 ) -> List[str]:
     """Build the argv for ``verilator --lint-only`` over *sources*.
 
@@ -125,6 +126,8 @@ def build_lint_command(
                         "--Werror-LATCH", "--Werror-MULTIDRIVEN"]
     if timing:
         flags.append("--timing")
+    for w in disable_warnings or ():
+        flags.append("-Wno-" + str(w))
     if top:
         flags += ["--top-module", str(top)]
     for inc in (include_dirs or []):
@@ -220,7 +223,7 @@ def config_inputs(design_dir: str | Path, *, for_lint: bool = False) -> Dict[str
 
     d = Path(design_dir).resolve()
     out: Dict[str, Any] = {"mode": "none", "files": [], "missing": [], "defines": {},
-                           "include_dirs": [], "name": None, "reason": None}
+                           "include_dirs": [], "name": None, "reason": None, "disable_warnings": []}
     try:
         info = configedit.read_config(d)
     except Exception as ex:  # pragma: no cover - defensive
@@ -245,6 +248,21 @@ def config_inputs(design_dir: str | Path, *, for_lint: bool = False) -> Dict[str
             out["files"].append(rel)
     defs = data.get("LINTER_DEFINES") if for_lint and data.get("LINTER_DEFINES") is not None else data.get("VERILOG_DEFINES")
     out["defines"] = parse_defines(defs)
+    if for_lint:
+        # The defines LibreLane's own lint step always adds (steps/verilator.py),
+        # so `ifdef __librelane__ / PDK_sky130A code reads the same here as in a run.
+        implicit: Dict[str, Optional[str]] = {"__librelane__": None, "__pnr__": None}
+        pdk, scl = data.get("PDK"), data.get("STD_CELL_LIBRARY")
+        if isinstance(pdk, str) and re.fullmatch(r"[\w.]+", pdk):
+            implicit["PDK_" + pdk] = None
+        if isinstance(scl, str) and re.fullmatch(r"[\w.]+", scl):
+            implicit["SCL_" + scl] = None
+        pwr = data.get("VERILOG_POWER_DEFINE")
+        if isinstance(pwr, str) and re.fullmatch(r"[A-Za-z_]\w*", pwr):
+            implicit[pwr] = None
+        out["defines"] = {**implicit, **out["defines"]}
+        out["disable_warnings"] = [w for w in _as_list(data.get("LINTER_DISABLE_WARNINGS"))
+                                   if re.fullmatch(r"[A-Z0-9_]+", w)]
     for inc in _as_list(data.get("VERILOG_INCLUDE_DIRS")):
         rel = _strip_dir(inc, d)
         if rel is not None and rel not in out["include_dirs"]:
@@ -372,6 +390,11 @@ class LintJob:
                 watchdog.cancel()
             self._proc = None
         diags = parse_verilator("\n".join(out_lines))
+        try:
+            from .vhdltools import parse_ghdl
+            diags += parse_ghdl("\n".join(out_lines))
+        except Exception:  # pragma: no cover - the Verilog check still stands
+            pass
         summary = summarize(diags)
         self.last_result = {"diagnostics": diags, "summary": summary}
         # rc==0 means verilator ran and found no *errors* (warnings don't fail

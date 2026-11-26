@@ -204,8 +204,20 @@ def test_config_inputs_follow_the_config(tmp_path: Path):
 
 def test_linter_defines_win_for_the_lint(tmp_path: Path):
     d = _project(tmp_path, {"VERILOG_FILES": ["dir::src/top.v"], "VERILOG_DEFINES": ["A"], "LINTER_DEFINES": ["B"]})
-    assert lint.config_inputs(d, for_lint=True)["defines"] == {"B": None}
+    # The lint also gets the defines LibreLane's own lint step always adds.
+    assert lint.config_inputs(d, for_lint=True)["defines"] == {"__librelane__": None, "__pnr__": None, "B": None}
     assert lint.config_inputs(d)["defines"] == {"A": None}
+
+
+def test_lint_reads_like_the_flows_lint(tmp_path: Path):
+    """PDK_/SCL_ defines and LINTER_DISABLE_WARNINGS, as steps/verilator.py passes them."""
+    d = _project(tmp_path, {"VERILOG_FILES": ["dir::src/top.v"], "PDK": "sky130A", "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+                            "LINTER_DISABLE_WARNINGS": ["UNUSEDSIGNAL", "bad rule"]})
+    ci = lint.config_inputs(d, for_lint=True)
+    assert {"PDK_sky130A", "SCL_sky130_fd_sc_hd", "__librelane__"} <= set(ci["defines"])
+    assert ci["disable_warnings"] == ["UNUSEDSIGNAL"]
+    argv = lint.build_lint_command(d, sources=ci["files"], defines=ci["defines"], disable_warnings=ci["disable_warnings"])
+    assert "-Wno-UNUSEDSIGNAL" in argv and "-DPDK_sky130A" in argv
 
 
 def test_config_inputs_report_missing_files(tmp_path: Path):
