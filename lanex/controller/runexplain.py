@@ -365,7 +365,9 @@ def _halted_card(run: "verify._Run", run_dir: Path, step: Dict[str, Any], out: D
                          "the log's last lines on the clipboard, for a forum post or an issue." % (tool, sid or step["dir"]))
         lead = (first or {}).get("text") or (errors[0] if errors else "")
         if lead:
-            card["evidence"] = [lead] + [e for e in errors if e != lead][:2]
+            # error.log repeats the step log's line without "ERROR ": once is enough.
+            same = lambda e: e.replace("[ERROR ", "[").strip() == lead.replace("[ERROR ", "[").strip()  # noqa: E731
+            card["evidence"] = [lead] + [e for e in errors if not same(e)][:2]
     if not card.get("evidence") and errors and len(errors) < len(out["errors"]):
         # error.log wrapped the tool's line in LibreLane's own: show the tool's.
         hit = [e for e in errors if problems._CODE_RX.search(e) or "ERROR" in e or "Error" in e]

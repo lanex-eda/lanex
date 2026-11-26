@@ -449,3 +449,48 @@ def test_no_clock_port_at_all(tmp_path):
 def test_route_drc_after_one_router_pass_is_a_check_not_a_halt(tmp_path):
     rx = runexplain.explain_run(_run(tmp_path, "route_drc"))
     assert rx["kind"] == "checks-failed" and rx["card"] is None
+
+
+def test_a_design_with_no_clock_is_a_note_not_a_problem(tmp_path):
+    # The 7-segment template: no register, no CLOCK_PORT. Its in-to-out paths
+    # are timed against the virtual clock, which is what the note says.
+    src = tmp_path / "seg7.v"
+    src.write_text("module seg7(input [3:0] hex, output reg [6:0] seg);\n"
+                   "  always @(*) case (hex) default: seg = 0; endcase\nendmodule\n")
+    run = _run(tmp_path, "no_clock", cfg_extra={"VERILOG_FILES": [str(src)], "DESIGN_NAME": "seg7", "CLOCK_PORT": None})
+    rx = runexplain.explain_run(run)
+    assert problems.clock_problems(run, {}, rx) == []
+    note = {g["code"]: g.get("note") for g in rx["warnings"]["by_code"]}["STA-0366"]
+    assert note.startswith("A design with no clock: LibreLane timed the paths from the inputs to the outputs")
+
+
+def test_antenna_advice_follows_the_cause_and_names_the_pdks_diode(tmp_path, monkeypatch):
+    src = tmp_path / "top.v"
+    src.write_text("module top(input clk, input [7:0] a, output y);\nendmodule\n")
+    cfg = {"DESIGN_NAME": "top", "VERILOG_FILES": [str(src)], "PDK": "gf180mcuD", "RUN_ANTENNA_REPAIR": True,
+           "DIODE_CELL": "gf180mcu_fd_sc_mcu7t5v0__antenna/I", "GRT_ANTENNA_REPAIR_ITERS": 3,
+           "GRT_ANTENNA_REPAIR_MARGIN": 10, "RUN_HEURISTIC_DIODE_INSERTION": False, "GPL_CELL_PADDING": 0,
+           "HEURISTIC_ANTENNA_THRESHOLD": 130, "DIODE_ON_PORTS": "none"}
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: cfg)
+    rep = {"checks": [{"id": "antenna", "name": "Antenna", "status": "warn", "value": 6}],
+           "details": {"antenna": {"rows": [{"net": n} for n in ("a[1]", "n1", "n2", "n3", "n4", "n5")]}}}
+    p = problems.check_problems(tmp_path, rep, set())[0]
+    s = {f["var"]: f for f in p["fixes"] if f["kind"] == "setting"}
+    # A port net: diodes on the inputs, named for this PDK's diode cell.
+    assert s["DIODE_ON_PORTS"]["to"] == "in" and "gf180mcu_fd_sc_mcu7t5v0__antenna on gf180mcuD" in s["DIODE_ON_PORTS"]["why"]
+    # Many nets: heuristic diodes, with the padding they need.
+    h = s["RUN_HEURISTIC_DIODE_INSERTION"]
+    assert "130 µm" in h["why"] and "GPL_CELL_PADDING" in h["why"] and h["sure"] == "try"
+    assert "GRT_REPAIR_ANTENNAS" not in s and "DRT_ANTENNA_REPAIR_MARGIN" not in s
+    assert p["learn"] == ["antenna"]
+
+
+def test_an_lvs_mismatch_says_what_differs(tmp_path, monkeypatch):
+    from lanex.controller import history
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: {})
+    monkeypatch.setattr(history, "_load_metrics", lambda run_dir: {
+        "design__lvs_error__count": 48, "design__lvs_unmatched_pin__count": 3, "design__lvs_net_difference__count": 1,
+        "design__lvs_property_fail__count": 0})
+    p = problems.check_problems(tmp_path, {"checks": [{"id": "lvs", "name": "LVS", "status": "fail", "value": 48}]}, set())[0]
+    assert p["evidence"] == ["Netgen: 3 pins don't match, 1 net differs."]
+    assert p["learn"] == ["lvs"]

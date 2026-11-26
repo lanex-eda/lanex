@@ -133,6 +133,8 @@ async function boot() {
     setupWizard();
     setupFullscreen();
     setupTooltips();
+    // Plain definitions on the labels that carry jargon (term.js).
+    import("./modules/term.js").then((m) => m.setupTerms()).catch((e) => console.error("terms", e));
     import("./modules/problems.js").then((m) => m.wireProblemCount()).catch(() => {});
     import("./modules/fixsheet.js").catch(() => {});
     paintNavIcons();

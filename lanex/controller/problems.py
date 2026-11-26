@@ -2229,6 +2229,32 @@ def xor_problem(run_dir: Path, rep: Dict[str, Any], check: Dict[str, Any]) -> Di
             "fixes": fixes, "notes": notes, "learn": ["xor"]}
 
 
+# The glossary term a check's card names (static/glossary.json).
+_CHECK_TERM = {"antenna": "antenna", "lvs": "lvs", "slew": "slew", "cap": "max-cap", "fanout": "fanout",
+               "latch": "latch", "lint_errors": "lint", "lint_warnings": "lint", "pdn": "pdn", "eqy": "eqy",
+               "disc_pin": "disconnected-pin", "overlap": "illegal-overlap", "wire_length": "wirelength",
+               "unmapped": "standard-cell", "assign": "netlist"}
+
+
+def _lvs_breakdown(run_dir: Path) -> List[str]:
+    """What LVS found, by kind, from the counts LibreLane computes from
+    Netgen's report (steps/netgen.py): "3 pins don't match" says more than
+    "48 LVS errors"."""
+    from . import history
+    m = history._load_metrics(run_dir)
+    parts = []
+    for key, one, many in (("design__lvs_unmatched_pin__count", "pin doesn't match", "pins don't match"),
+                           ("design__lvs_unmatched_net__count", "net is only on one side", "nets are only on one side"),
+                           ("design__lvs_unmatched_device__count", "device is only on one side", "devices are only on one side"),
+                           ("design__lvs_net_difference__count", "net differs", "nets differ"),
+                           ("design__lvs_device_difference__count", "device count differs", "device counts differ"),
+                           ("design__lvs_property_fail__count", "property differs", "properties differ")):
+        n = _num(m.get(key))
+        if n:
+            parts.append("%d %s" % (n, one if n == 1 else many))
+    return ["Netgen: " + ", ".join(parts) + "."] if parts else []
+
+
 def check_problems(run_dir: Path, rep: Dict[str, Any], skip: set) -> List[Dict[str, Any]]:
     cfg = _cfg(run_dir)
     out = []
@@ -2255,11 +2281,14 @@ def check_problems(run_dir: Path, rep: Dict[str, Any], skip: set) -> List[Dict[s
             fixes.append(_open(label, go, why))
         detail = c.get("detail") or c.get("note") or ""
         meaning = _CHECK_PLAIN.get(c["id"], "")
+        evidence: List[str] = []
+        if c["id"] == "lvs":
+            evidence = _lvs_breakdown(run_dir)
         out.append({"id": "check-" + c["id"], "severity": c["status"], "kind": "check", "title": c["name"],
                     "plain": (detail + " " + meaning).strip() if meaning and meaning not in detail else detail,
                     "where": {"check": c["id"]},
-                    "evidence": [], "diag": {"kind": "check", "value": c.get("value"), "limit": c.get("limit")},
-                    "fixes": fixes, "notes": notes, "learn": []})
+                    "evidence": evidence, "diag": {"kind": "check", "value": c.get("value"), "limit": c.get("limit")},
+                    "fixes": fixes, "notes": notes, "learn": [_CHECK_TERM[c["id"]]] if c["id"] in _CHECK_TERM else []})
     return out
 
 
