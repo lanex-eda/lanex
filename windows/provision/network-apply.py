@@ -226,7 +226,9 @@ def apt_text(net: Dict[str, Any]) -> str:
     lines.append(f'Acquire::http::Proxy "{net["http"]}";')
     lines.append(f'Acquire::https::Proxy "{net["https"]}";')
     for host, val in sorted(net["per_host"].items()):
-        if host.endswith("ubuntu.com"):
+        # Only the Ubuntu hosts apt uses, and only where they differ from the
+        # proxy above (a PAC that sends them direct, or to another proxy).
+        if host.endswith("ubuntu.com") and val not in (net["http"], net["https"]):
             v = "DIRECT" if val == "DIRECT" else val
             lines.append(f'Acquire::http::Proxy::{host} "{v}";')
             lines.append(f'Acquire::https::Proxy::{host} "{v}";')
