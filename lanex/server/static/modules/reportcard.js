@@ -121,7 +121,7 @@ export function reportCardHtml(c) {
       "and timing in every corner it checks. It does not cover simulating the finished netlist with its real delays (gate-level " +
       "simulation), a shuttle's own precheck, or the foundry's sign-off decks: LanEx is not a sign-off tool.</p></details></div>" +
     "<div class='fl-split-b'><div class='fl-kpis'>" + kpis + "</div></div>" +
-    (w.total ? "<div class='fl-split-c'>" + warningsHtml(w) + "</div>" : "") +
+    (w.total ? "<div class='fl-split-c'>" + warningsHtml(w, { verifyLink: true }) + "</div>" : "") +
     "</div><div class='an-verdict-act'>" + acts +
     "<button class='btn btn-ghost btn-sm' data-go='analytics'>" + icon("chart", { size: 13 }) + " Metrics</button></div></div>";
 }
@@ -183,19 +183,24 @@ function dieKpi(m, b) {
 }
 
 // "33 warnings: GPL-0302 ×1 (new) · STA-1140 ×18 · DRT-0349 ×10 · 3 more"
-export function warningsHtml(w) {
+export function warningsHtml(w, { verifyLink = false } = {}) {
   const groups = w.by_code || [];
   const top = groups.slice(0, 4).map((g) =>
     "<span class='fl-w" + (g.new ? " is-new" : "") + "' title='" + esc(g.sample || "") + "'><code>" + esc(g.code) + "</code> ×" + g.count +
       (g.new ? " <b>new</b>" : "") + "</span>").join("");
   const more = groups.length - 4 + (w.other ? 1 : 0);
   const notes = groups.filter((g) => g.note).map((g) => "<li><code>" + esc(g.code) + "</code> " + esc(g.note) + "</li>").join("");
+  // On Flow (the run in view) the full list is one click away in Verify's
+  // Warnings (grouped, explained, waivable) instead of a second copy here.
   const list = groups.map((g) => "<li><code>" + esc(g.code) + "</code> ×" + g.count + (g.new ? " <b>new</b>" : "") +
     " <span class='muted'>" + esc(g.sample || "") + "</span></li>").join("") +
     (w.other ? "<li><span class='muted'>" + w.other + " without a code</span></li>" : "");
+  const all = verifyLink
+    ? "<button class='btn btn-ghost btn-xs fl-w-go' data-go='verify' data-go-section='vf-warnings'>" + icon("chevron", { size: 12 }) +
+      " Every warning, explained, in Verify</button>"
+    : "<details class='fl-w-all'><summary>Every warning code</summary><ul>" + list + "</ul></details>";
   return "<div class='fl-warns'><div class='fl-warns-h'>" + icon("alert", { size: 13 }) + " <b>" + w.total + " warnings</b>" +
     (w.compared_with && groups.some((g) => g.new) ? " <span class='muted'>(new: not in " + esc(w.compared_with) + ")</span>" : "") + "</div>" +
     "<div class='fl-w-row'>" + top + (more > 0 ? "<span class='fl-w muted'>" + more + " more</span>" : "") + "</div>" +
-    (notes ? "<ul class='fl-notes'>" + notes + "</ul>" : "") +
-    "<details class='fl-w-all'><summary>Every warning code</summary><ul>" + list + "</ul></details></div>";
+    (notes ? "<ul class='fl-notes'>" + notes + "</ul>" : "") + all + "</div>";
 }

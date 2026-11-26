@@ -3409,6 +3409,156 @@ def h_timing_paths(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _base_run_dir(handler: Any) -> Optional[Path]:
+    base = _query_param(handler.path, "base")
+    return _resolve_run_dir(base) if base else None
+
+
+def h_timing_list(handler: Any) -> None:
+    """Verify's path explorer, one corner: ``?tag=&kind=setup|hold&corner=&q=&only=&base=``.
+    The corner's endpoints worst first (index rows, no path text), its slack
+    histogram (bins on 0) and, with ``base``, each endpoint's slack there."""
+    from ..controller import timing
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        _respond(handler, timing.path_list(
+            run_dir, kind=_query_param(handler.path, "kind") or "setup",
+            corner=_query_param(handler.path, "corner") or None, q=_query_param(handler.path, "q"),
+            only=_query_param(handler.path, "only"), base_dir=_base_run_dir(handler)))
+    except Exception as ex:
+        _log.exception("timing path list failed")
+        _respond(handler, f"Couldn't read this run's timing reports: {ex}", 500)
+
+
+def h_timing_detail(handler: Any) -> None:
+    """One path in full: ``?tag=&kind=&corner=&i=&base=`` (every pin, cell and
+    net, the required time's terms, the same endpoint in the other corners)."""
+    from ..controller import timing
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        i = int(_query_param(handler.path, "i") or "0")
+    except ValueError:
+        _respond(handler, "i must be a number", 400)
+        return
+    try:
+        _respond(handler, timing.path_detail(
+            run_dir, kind=_query_param(handler.path, "kind") or "setup",
+            corner=_query_param(handler.path, "corner") or None, i=i, base_dir=_base_run_dir(handler)))
+    except Exception as ex:
+        _log.exception("timing path detail failed")
+        _respond(handler, f"Couldn't read this path: {ex}", 500)
+
+
+def h_warnings(handler: Any) -> None:
+    """A run's warnings by tool and code (``?tag=&base=``), with the project's
+    waivers (``lanex-waivers.yaml``) and what is new since ``base``."""
+    from ..controller import runwarnings
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        _respond(handler, runwarnings.run_warnings(run_dir, _base_run_dir(handler), _get_active_design_dir()))
+    except Exception as ex:
+        _log.exception("warnings failed")
+        _respond(handler, f"Couldn't read this run's warnings: {ex}", 500)
+
+
+def _waiver_write(handler: Any, op: Any) -> None:
+    from ..controller import runwarnings
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "Open the project first: waivers are saved in the project folder.", 400)
+        return
+    # Never write the waiver file of a project this window isn't showing.
+    gone = _design_refusal(handler, design_dir)
+    if gone:
+        _respond(handler, gone, 409)
+        return
+    try:
+        _respond(handler, op(design_dir, body))
+    except runwarnings.WaiverError as ex:
+        _respond(handler, str(ex), 409)
+    except OSError as ex:
+        _respond(handler, f"Couldn't write {runwarnings.WAIVER_FILE} in {design_dir}: {ex}", 500)
+
+
+def h_warnings_waive(handler: Any) -> None:
+    """Add or edit a waiver: POST ``{entry: {tool, code, match, step, reason,
+    note, by, expect_count, id?}, mtime}`` (``mtime`` from the page's last read,
+    so two windows can't overwrite each other)."""
+    from ..controller import runwarnings
+    _waiver_write(handler, lambda d, b: runwarnings.save_waiver(
+        d, b.get("entry") or {}, mtime=b.get("mtime"), run_dir=_resolve_run_dir(b.get("tag")) if b.get("tag") else None))
+
+
+def h_warnings_unwaive(handler: Any) -> None:
+    """Remove a waiver: POST ``{id, mtime}``."""
+    from ..controller import runwarnings
+    _waiver_write(handler, lambda d, b: runwarnings.remove_waiver(d, str(b.get("id") or ""), mtime=b.get("mtime")))
+
+
+def h_verify_summary(handler: Any) -> None:
+    """The sign-off report's data without writing files (``?tag=&base=``):
+    the share card draws its numbers from it, so card and report agree."""
+    from ..controller import signoff
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else None
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        _respond(handler, signoff.build(run_dir, design_dir=_get_active_design_dir(),
+                                        base_dir=_base_run_dir(handler), hashes=False))
+    except Exception as ex:
+        _log.exception("sign-off summary failed")
+        _respond(handler, f"Couldn't read this run's results: {ex}", 500)
+
+
+def h_verify_report(handler: Any) -> None:
+    """Write the sign-off report of a run: POST ``{tag, base, verdict:{tone,
+    title, sub}, chip_png}`` -> ``<run>/lanex-report/report.{json,md,html}``.
+    *verdict* is Verify's own words, so the file says what the page says."""
+    import base64 as _b64
+    from ..controller import signoff
+    body = getattr(handler, "_body", {}) or {}
+    tag = body.get("tag")
+    run_dir = _resolve_run_dir(tag) if tag else None
+    if run_dir is None:
+        _respond(handler, "That run isn't in the open project any more. Refresh, or pick another run.", 404)
+        return
+    base = body.get("base")
+    chip = None
+    raw = body.get("chip_png")
+    if isinstance(raw, str) and raw:
+        try:
+            chip = _b64.b64decode(raw.split(",", 1)[-1], validate=False)[:6_000_000]
+        except Exception:
+            chip = None
+    try:
+        res = signoff.write(run_dir, design_dir=_get_active_design_dir(),
+                            base_dir=_resolve_run_dir(base) if base else None,
+                            verdict=body.get("verdict") if isinstance(body.get("verdict"), dict) else None,
+                            fonts_dir=Path(static_root()) / "vendor" / "fonts", chip_png=chip)
+        res["tag"] = run_dir.name
+        _respond(handler, res)
+    except OSError as ex:
+        _respond(handler, f"Couldn't write the report into {run_dir.name}/{signoff.REPORT_DIR}: {ex}", 500)
+    except Exception as ex:
+        _log.exception("sign-off report failed")
+        _respond(handler, f"Couldn't build the report: {ex}", 500)
+
+
 def h_cell_usage(handler: Any) -> None:
     """Per-cell-type usage table for a run."""
     tag = _query_param(handler.path, "tag")
@@ -5080,6 +5230,8 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/fs/native-pick", h_native_pick),
     ("/api/run-export", h_run_export),
     ("/api/verify/rerun", h_verify_rerun),
+    ("/api/verify/report", h_verify_report),
+    ("/api/verify/summary", h_verify_summary),
     ("/api/verify", h_verify),
     ("/api/compare", h_compare),
     ("/api/cell-usage", h_cell_usage),
@@ -5090,6 +5242,11 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/fix/apply", h_fix_apply),
     ("/api/config/undo", h_config_undo),
     ("/api/timing-paths", h_timing_paths),
+    ("/api/timing/paths", h_timing_list),
+    ("/api/timing/path", h_timing_detail),
+    ("/api/warnings/waive", h_warnings_waive),
+    ("/api/warnings/unwaive", h_warnings_unwaive),
+    ("/api/warnings", h_warnings),
     ("/api/dse/start", h_dse_start),
     ("/api/dse/plan", h_dse_plan),
     ("/api/dse/cancel", h_dse_cancel),
@@ -5244,6 +5401,7 @@ _POST_ROUTES = {
     "/api/container/enable-docker-group", "/api/container/start-engine", "/api/tools/cancel",
     "/api/tools/install/", "/api/tools/uninstall/", "/api/pdk/uninstall",
     "/api/pdk/fix-permissions", "/api/copy-spm",
+    "/api/verify/report", "/api/warnings/waive", "/api/warnings/unwaive",
 }
 _BOTH_ROUTES = {
     "/api/run-note", "/api/watch", "/api/settings/pdk-root", "/api/suggest-config",
@@ -5267,6 +5425,7 @@ _GET_ROUTES = {
     "/api/reports/drc", "/api/reports/lvs", "/api/fs/roots", "/api/fs/list", "/api/walk-sources",
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
     "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
+    "/api/timing/paths", "/api/timing/path", "/api/warnings", "/api/verify/summary",
 }
 # A route in none of the sets keeps the old answer-anything behaviour, so a
 # route added elsewhere never breaks at run time; the test names it instead.

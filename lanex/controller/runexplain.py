@@ -149,10 +149,15 @@ def help_text(run: "verify._Run", out: Dict[str, Any], card: Dict[str, Any], tai
 
 
 def _warnings(run_dir: Path, base_dir: Optional[Path], cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    lines = _lines(run_dir / "warning.log")
+    # One warning per record, not per line: a multi-line record ("Setup
+    # violations found in the following corners:" then "* corner" lines) is
+    # one warning (runwarnings.read_records, the same count Verify shows).
+    from . import runwarnings
+    lines = [r["text"] for r in runwarnings.read_records(run_dir)]
     base_codes = None
     if base_dir is not None:
-        base_codes = {m.group(1) for ln in _lines(base_dir / "warning.log") for m in [_CODE_RX.search(ln)] if m}
+        base_codes = {m.group(1) for ln in (r["text"] for r in runwarnings.read_records(base_dir))
+                      for m in [_CODE_RX.search(ln)] if m}
     groups: Dict[str, Dict[str, Any]] = {}
     other = 0
     for ln in lines:
