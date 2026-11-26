@@ -22,10 +22,11 @@
 import { fmt } from "./api.js";
 import { icon } from "./icons.js";
 import { fixListHtml } from "./problems.js";
+import { slack } from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
-const ns = (v, d = 2) => (isNum(v) ? (v < 0 ? "−" : v > 0 ? "+" : "") + Math.abs(v).toFixed(d) : "—");
+const ns = (v) => slack(v);
 
 const KIND = {
   "reg-reg": { label: "register → register", short: "reg → reg", c: "var(--chart-1)" },

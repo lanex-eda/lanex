@@ -299,15 +299,7 @@ function verdict(r) {
   return verdictOfRun(r);
 }
 
-function when(r) {
-  const d = r.started_at ? new Date(r.started_at) : null;
-  if (!d || Number.isNaN(d.getTime())) return "";
-  const now = new Date();
-  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  const day = new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  if (day === 0) return "today " + time;
-  if (day === 86400000) return "yesterday " + time;
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) }) + ", " + time;
-}
+// The one date shape (metricfmt.when), the same as Runs.
+function when(r) { return r.started_at ? MF.when(r.started_at) : ""; }
 
 const dur = fmtDur;

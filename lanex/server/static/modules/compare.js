@@ -551,15 +551,10 @@ function exportCompareCsv(data, cols) {
 // ------------------------------------------------------------------ charts
 // Curated key metrics to chart across runs (one small bar chart each). Only the
 // ones actually present in the comparison are drawn — never fabricated.
-const _CHART_METRICS = [
-  ["design__instance__count", "Cell count"],
-  ["design__core__area", "Core area (µm²)"],
-  ["design__instance__utilization", "Utilization"],
-  ["timing__setup__ws", "Setup WNS (ns)"],
-  ["timing__hold__ws", "Hold WNS (ns)"],
-  ["power__total", "Total power"],
-  ["route__wirelength__estimated", "Wirelength"],
-];
+// Names from the one list (metricfmt.js), units from the shared formatter.
+const _CHART_METRICS = ["design__instance__count", "design__core__area", "design__instance__utilization",
+  "timing__setup__ws", "timing__hold__ws", "power__total", "route__wirelength__estimated"]
+  .map((k) => [k, (MF.metricName(k) || k) + (MF.show(k, 1).unit && !/^(W|ratio)$/.test(MF.unitOf(MF.parseKey(k).base)) ? " (" + MF.show(k, 1).unit + ")" : "")]);
 
 // The chart instances of the last render (disposed when it is replaced) and
 // one ResizeObserver for all of them.

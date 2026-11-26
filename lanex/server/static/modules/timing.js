@@ -21,6 +21,7 @@ import { toast } from "./toast.js";
 import { histogramOption } from "./barchart.js";
 import { renderFileText } from "./fileview.js";
 import { cornerGridHtml, cornerWords, wireGridKeys } from "./cornergrid.js";
+import { slack as mfSlack } from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 // The time unit, from the payload (controller/timing.py TIME_UNIT; LibreLane's
@@ -60,12 +61,8 @@ function termTip(word) {
 }
 
 // A slack: signed, 3 decimals; a failure never rounds to 0.
-export function fmtSlack(v, d = 3) {
-  if (!isNum(v)) return "—";
-  if (Math.abs(v) >= 1e12) return "no path";
-  if (v < 0 && Math.abs(v) < 0.0005) return "−" + Math.abs(v).toFixed(6);
-  return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
-}
+// The one slack formatter (metricfmt.js), under the name this module exports.
+export function fmtSlack(v, d = 3) { return mfSlack(v, d); }
 
 const n3 = (v) => (isNum(v) ? v.toFixed(3) : "");
 

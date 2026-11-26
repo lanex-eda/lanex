@@ -423,7 +423,7 @@ function clockHint(cur) {
   }
   return null;
 }
-const mhz = (ns) => (ns > 0 ? localeNum(Number((1000 / ns).toPrecision(4)), "en-US", { maximumFractionDigits: 2 }) + " MHz" : "");
+const mhz = (ns) => F.mhz(ns);
 
 function paintAxes() {
   const host = S.el.querySelector("#sw-axes");
@@ -680,15 +680,19 @@ async function roomForRuns(n) {
 // ------------------------------------------------------------------ summary
 // The numbers a sweep is read by: key, label, the metric (for the shared
 // formatter), better direction.
+// The names are the one list's (metricfmt.js): a table head takes the short
+// name, a chart or a hover the full one. "Utilisation" stays this page's
+// spelling until the owner picks one (consistency plan O6).
+const mk = (id, key, dir, over = {}) => ({ id, key, label: F.metricShort(key || "runtime"), short: F.metricShort(key || "runtime"), name: F.metricName(key || "runtime"), dir, ...over });
 const METRICS = [
-  { id: "wns", key: "timing__setup__ws", label: "Setup WNS", short: "WNS", dir: 1 },
-  { id: "tns", key: "timing__setup__tns", label: "Setup TNS", short: "TNS", dir: 1 },
-  { id: "hold", key: "timing__hold__ws", label: "Hold WNS", short: "Hold", dir: 1 },
-  { id: "die", key: "design__die__area", label: "Die area", short: "Die", dir: -1 },
-  { id: "cells", key: "design__instance__area__stdcell", label: "Std-cell area", short: "Cells", dir: -1 },
-  { id: "util", key: "design__instance__utilization", label: "Utilisation", short: "Util", dir: 0 },
-  { id: "power", key: "power__total", label: "Power", short: "Power", dir: -1 },
-  { id: "runtime", key: "", label: "Runtime", short: "Time", dir: -1 },
+  mk("wns", "timing__setup__ws", 1),
+  mk("tns", "timing__setup__tns", 1),
+  mk("hold", "timing__hold__ws", 1),
+  mk("die", "design__die__area", -1),
+  mk("cells", "design__instance__area__stdcell", -1),
+  mk("util", "design__instance__utilization", 0, { label: "Utilisation", name: "Utilisation" }),
+  mk("power", "power__total", -1),
+  mk("runtime", "", -1),
 ];
 const M_BY = Object.fromEntries(METRICS.map((m) => [m.id, m]));
 // The settings that size the die: a sweep of one of them is judged by the die.
@@ -812,7 +816,7 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
     }
   } else {
     const bestT = passed.filter((p) => num(p.r, "timing__setup__ws") != null).sort((a, b) => num(b.r, "timing__setup__ws") - num(a.r, "timing__setup__ws"))[0];
-    if (bestT) head = tile("Best for timing", bestT, "<b>" + esc(F.showText("timing__setup__ws", num(bestT.r, "timing__setup__ws"))) + "</b> <span class='muted'>setup WNS</span>", valsText(bestT.v));
+    if (bestT) head = tile("Best for timing", bestT, "<b>" + esc(F.showText("timing__setup__ws", num(bestT.r, "timing__setup__ws"))) + "</b> <span class='muted'>" + esc(M_BY.wns.label.toLowerCase()) + "</span>", valsText(bestT.v));
   }
   // A "best" only when the number moved: every point with the same area has
   // no best for area.
@@ -1023,10 +1027,10 @@ async function drawCharts(el, sw, pts, scale) {
     const xk = xm.id === "power" && scale ? 1 / scale.div : xm.id === "util" ? 100 : 1;
     const xu = xm.id === "runtime" ? "s" : xm.id === "power" ? (scale ? scale.unit : "W") : xm.id === "util" ? "%" : F.show(xm.key, 1).unit;
     const wsU = F.show("timing__setup__ws", 1).unit;
-    opt = SC.paretoOption({ x: { label: xm.label, unit: xu, dir: xm.dir || -1 }, y: { label: "Setup WNS", unit: wsU, dir: 1 },
+    opt = SC.paretoOption({ x: { label: xm.label, unit: xu, dir: xm.dir || -1 }, y: { label: M_BY.wns.label, unit: wsU, dir: 1 },
       points: live.map((p) => ({ x: p.r ? (metricOf(p, xm.id) == null ? null : metricOf(p, xm.id) * xk) : null, y: p.r ? metricOf(p, "wns") : null,
         key: p.key, tag: p.tag, label: p.v ? Object.values(p.v).join("/") : p.tag })) });
-    cap.innerHTML = "<b>Trade-off</b>: setup WNS against " + esc(xm.label.toLowerCase()) + ". The line joins the points nothing beats on both.";
+    cap.innerHTML = "<b>Trade-off</b>: " + esc(M_BY.wns.label.toLowerCase()) + " against " + esc(xm.label.toLowerCase()) + ". The line joins the points nothing beats on both.";
   }
   const fails = live.filter((p) => p.key === "failed" || p.key === "stopped" || p.key === "interrupted");
   note.textContent = view === "trade" && fails.length ? fails.length + " point" + (fails.length === 1 ? "" : "s") + " failed and have no numbers, so they aren't on this chart: " + fails.map((p) => p.label).join(", ") + "."

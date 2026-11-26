@@ -525,7 +525,7 @@ check("metricfmt: one direction by base name, with LibreLane's 'unknown' kept", 
 
 check("metricfmt: one delta: Δ always, Δ% only where a ratio means something", () => {
   const ws = MF.delta("timing__setup__ws", 1.41, 2.362, null);
-  assert.equal(ws.absText, "−0.95"); assert.equal(ws.pctText, "", "never a percent of slack"); assert.equal(ws.cls, "is-worse");
+  assert.equal(ws.absText, "−0.952"); assert.equal(ws.pctText, "", "never a percent of slack"); assert.equal(ws.cls, "is-worse");
   const die = MF.delta("design__die__area", 7180, 8769, null);
   assert.equal(die.text, "−1,589 −18%"); assert.equal(die.cls, "is-better");
   assert.equal(MF.delta("design__die__area", 8769.2, 8769, null).same, true, "within 0.05 % is the same");
@@ -558,7 +558,7 @@ check("metricfmt: power, utilisation and slack read the same on every page", () 
   assert.equal(u.unit, "%");
   assert.equal(Number(u.text), Math.round(m.design__instance__utilization * 1000) / 10);
   assert.equal(MF.show("timing__setup__ws", 4.10025980329734).text, "+4.100");
-  assert.equal(MF.show("timing__setup__ws", 4.10025980329734, { compact: true }).text, "+4.10");
+  assert.equal(MF.show("timing__setup__ws", 4.10025980329734, { compact: true }).text, "+4.100", "slack is three decimals in a table too");
   assert.equal(MF.show("design__die__area", 7214.42, { compact: true }).text, "7,214");
   assert.equal(MF.show("design__die__area", 7214.42).text, "7,214.42", "compact only rounds in tables");
   // A table reads down one prefix: the largest value's.
@@ -825,7 +825,7 @@ check("compare: a delta says how far a number moved, and whether that is better"
   // The one delta (metricfmt.delta): Δ always, Δ% only where a ratio means
   // something (never slack); the unit is in the row label, once.
   const ws = cmp.deltaOf(4.1, 2.362, up, "ns");
-  assert.equal(ws.text, "+1.74"); assert.equal(ws.cls, "is-better");
+  assert.equal(ws.text, "+1.738"); assert.equal(ws.cls, "is-better");
   const area = cmp.deltaOf(10367.1, 8769, down, "µm²");
   assert.equal(area.text, "+1,598 +18%"); assert.equal(area.cls, "is-worse");
   assert.equal(cmp.deltaOf(0.001553, 0.001528, down, "", "power__total").text, "+0.025 +1.6%", "power: the row's prefix, and a percent");
@@ -1071,6 +1071,43 @@ check("verdict: the server's words win, an unknown state is amber, never a guess
   assert.equal(VD.verdictOfRun({ success: false }).cls, "fail");
   assert.equal(VD.verdictOfRun({ success: true }, { live: true }).cls, "run");
 });
+check("Z2 numbers: one formatter for slack, skew, sizes, durations, dates and clocks", () => {
+  // Slack: three decimals and U+2212 on every page; OpenSTA's 1e30 and +inf are "no path".
+  assert.equal(MF.slack(2.3621), "+2.362"); assert.equal(MF.slack(-0.17), "−0.170"); assert.equal(MF.slack(0), "0.000");
+  assert.equal(MF.slack(-0.0002), "−0.000200", "a failing slack never rounds to −0.000");
+  assert.equal(MF.slack(1e30), "no path"); assert.equal(MF.show("timing__setup_r2r__ws", "Infinity").text, "no path");
+  assert.equal(MF.show("timing__setup__ws", 2.3621, { compact: true }).text, "+2.362", "Runs and studies too");
+  // Skew: LibreLane's ns, shown in ps, with its delta in ps.
+  assert.deepEqual([MF.show("clock__skew__worst_setup", 0.105).text, MF.show("clock__skew__worst_setup", 0.105).unit], ["+105", "ps"]);
+  assert.equal(MF.show("clock__skew__worst_hold", -0.0067).text, "−6.7");
+  assert.equal(MF.delta("clock__skew__worst_setup", 0.03, 0.012, null).unit, "ps");
+  // Sizes: 1000-based, kB.
+  assert.equal(MF.bytes(85), "85 B"); assert.equal(MF.bytes(9300), "9.3 kB"); assert.equal(MF.bytes(1.2e6), "1.2 MB"); assert.equal(MF.bytes(7.52e9), "7.5 GB");
+  // Durations.
+  assert.equal(MF.dur(4.21), "4.2 s"); assert.equal(MF.dur(86), "1 min 26 s"); assert.equal(MF.dur(7500), "2 h 5 min");
+  // Dates: today/yesterday, then the date, the year only when it isn't this one; always the time.
+  const now = new Date(2026, 10, 26, 15, 0);
+  assert.match(MF.when(new Date(2026, 10, 26, 9, 5), now), /^today \S/);
+  assert.match(MF.when(new Date(2026, 10, 25, 9, 5), now), /^yesterday /);
+  assert.doesNotMatch(MF.when(new Date(2026, 9, 3, 9, 5), now), /2026|,/);
+  assert.match(MF.when(new Date(2025, 2, 3, 9, 5), now), /2025/);
+  assert.equal(MF.ago(Date.now() / 1000 - 30), "just now"); assert.equal(MF.ago(Date.now() / 1000 - 2 * 86400), "2 days ago");
+  // Clocks.
+  assert.equal(MF.mhz(10), "100 MHz"); assert.equal(MF.mhz(15), "66.67 MHz"); assert.equal(MF.mhz(0.8), "1.25 GHz");
+  // One name list: Runs, studies, Compare and Analytics say the same name.
+  assert.equal(MF.metricName("design__instance__area__stdcell"), "Std-cell area");
+  assert.equal(MF.metricShort("timing__setup__ws"), "Setup slack");
+  assert.equal(MF.metricName("timing__setup__ws__corner:max_ss_100C_1v60"), "Worst setup slack · max_ss_100C_1v60");
+  // No module keeps its own slack, size or date formatter.
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["timing.js", "verify.js", "verify-diag.js", "problems.js", "sharecard.js", "layout.js", "reportcard.js"]) {
+    assert.doesNotMatch(src(f), /Math\.abs\((v|a|d|ws|s)\)\.toFixed\(2\)/, f + " formats a slack by itself");
+  }
+  for (const f of ["runs.js", "runfiles.js", "uploader.js"]) assert.doesNotMatch(src(f), /1048576\)\.toFixed|" KB"/, f + " formats a size by itself");
+  for (const f of ["runbar.js", "runs.js", "toolsys.js", "palettemodel.js"]) assert.doesNotMatch(src(f), /toLocaleDateString|localeDate\(d/, f + " formats a date by itself");
+  assert.doesNotMatch(src("layout.js"), /\.toLocaleString\(\)/, "a bare toLocaleString() groups by the PC's locale");
+});
+
 check("Z2 verdict: one failure sentence and one set of check words on every page", () => {
   const src = (f) => readFileSync(resolve(MOD, f), "utf8");
   // Where a run failed: the stage by its flow name, the step in brackets.
@@ -1531,7 +1568,7 @@ check("tools: problems carry their fix; image and PDK drift are told apart", () 
   Object.assign(info.container, { ready: true });
   const img = toolsModule.attentionItems(info).find((x) => x.key === "image");
   assert.equal(img.fix.id, "btn-pull-image");
-  assert.match(img.detail, /~2\.9 GB/);
+  assert.match(img.detail, /~3\.1 GB/, "1000-based like docker and every other size in LanEx");
 });
 
 check("tools: the Local tools engine judges native tools, not the image", () => {
@@ -1609,7 +1646,9 @@ check("analytics: counts stay integers, units come from the metric", () => {
 check("analytics: OpenSTA's 1e30 'no path' sentinel and +inf are never spelled out", () => {
   // F3 (review R3): "no path", the words OpenSTA's 1e30 stands for, not "+1.00e+30 ns".
   assert.equal(AM.show("timing__setup_r2r__ws", 1e30).text, "no path");
-  assert.equal(AM.show("timing__setup_r2r__ws", "Infinity").text, "\u221e");
+  // Z2: one word for a slack with nothing to time, never "∞ ns".
+  assert.equal(AM.show("timing__setup_r2r__ws", "Infinity").text, "no path");
+  assert.equal(AM.show("timing__setup_r2r__ws", "Infinity").unit, "");
   assert.equal(AM.num(null), "\u2014", "absent stays an em-dash, never 0");
 });
 
@@ -2297,7 +2336,7 @@ check("run report card: one summary for the toast, the title and the notificatio
   const rs = { steps: [{ runtime_s: 60, changed: { timing__setup__ws: 0.31, design__die__bbox: "0.0 0.0 57.0 68.2" } }, { runtime_s: 1, changed: {} }] };
   const clean = RC.runSummary({ tag: "try-2", design: "spm", rx: { kind: "clean" }, vf: null, rs });
   assert.equal(clean.title, "spm · try-2 is clean");
-  assert.equal(clean.body, "setup +0.31 ns · 57 × 68.2 µm · 1 min 1 s", "the numbers, not just 'done'");
+  assert.equal(clean.body, "setup +0.310 ns · 57 × 68.2 µm · 1 min 1 s", "the numbers, not just 'done'");
   const halted = RC.runSummary({ tag: "t", rx: { kind: "halted", step: { id: "OpenROAD.GlobalPlacement" },
     card: { title: "Placement ran out of room", plain: "The cells need 207 % of the core area, so they can't all be placed. The die is fixed." } }, rs });
   assert.match(halted.title, /failed at OpenROAD\.GlobalPlacement/);
@@ -3296,7 +3335,7 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.equal(rows.Die, "96.6 × 107.3 µm");
     assert.equal(rows["Logic cells"], "324 · 64 flip-flops");
     assert.equal(rows.Utilisation, "63 %");
-    assert.equal(rows.Setup, "WNS +4.10 ns · TNS 0.00");
+    assert.equal(rows.Setup, "WNS +4.100 ns · TNS 0.000");
     assert.equal(rows["Reg→reg Fmax"], "343 ss · 684 tt · 1035 ff MHz");
     assert.equal(rows.Checks, "DRC 0 · LVS match · antenna 0");
     assert.equal(d.word, "CLEAN");
@@ -4081,7 +4120,7 @@ await checkAsync("toasts: the Undo toast stays outside the cap and clear(); the 
   const AMf = await import(toUrl(resolve(MOD, "analytics-model.js")));
   const MPf = await import(toUrl(resolve(MOD, "macro-place.js")));
   // The number a delta text stands for, in base units, given the unit it reads in.
-  const FACTOR = { W: 1, mW: 1e-3, "µW": 1e-6, nW: 1e-9, pW: 1e-12, V: 1, mV: 1e-3, ns: 1, "µm²": 1, "µm": 1, "": 1 };
+  const FACTOR = { W: 1, mW: 1e-3, "µW": 1e-6, nW: 1e-9, pW: 1e-12, V: 1, mV: 1e-3, ns: 1, ps: 1e-3, "µm²": 1, "µm": 1, "": 1 };
   const valueOf = (txt, unit) => Number(txt.replace("−", "-").replace(/,/g, "").replace(/[^\d.+-].*$/, "")) * FACTOR[unit];
   check("F3 compare: a power delta reads in its row's prefix (0.500 mW -> 2.000 mW is +1.500, not +1,500.0)", () => {
     const k = "power__total", vals = [0.0005, 0.002];

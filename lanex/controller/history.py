@@ -1109,7 +1109,7 @@ def design_summary(run_dir: str | Path, metrics: Optional[Dict[str, Any]] = None
     pw = g("power__total")
     if isinstance(pw, (int, float)):
         add("Total power", round(float(pw) * 1000, 4), "mW", "power__total")
-    add("Wirelength", g("route__wirelength"), "µm", "route__wirelength")
+    add("Routed wirelength", g("route__wirelength"), "µm", "route__wirelength")
 
     # --- Timing (worst slack across corners) ---
     def slack_row(label: str, key: str) -> None:

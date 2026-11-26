@@ -14,6 +14,7 @@ import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
 import { applyZoom, currentZoom, isAutoZoom } from "../zoom.js";
 import { getPref } from "../prefs.js";
+import { when as MFwhen } from "../metricfmt.js";
 import { refreshAction, conflictKind, lineDiff, isConfigFile } from "./filesync.js";
 import { addProjectFiles } from "../addfiles.js";
 import { initNav, noteRecent, declHover, refreshIndexStatus, quickOpen, pushHere } from "./nav.js";
@@ -1180,7 +1181,7 @@ async function restoreDraft(t) {
   let d = null;
   try { d = JSON.parse(localStorage.getItem(DRAFT_PREFIX + t.abs) || "null"); } catch (_e) { d = null; }
   if (!d || typeof d.text !== "string" || d.text === t.saved) { if (d) dropDraft(t.abs); return; }
-  const when = new Date(d.at || Date.now()).toLocaleString();
+  const when = MFwhen(d.at || Date.now());
   if (d.base === textHash(t.saved)) {
     // The file is exactly as it was when the edits were made: nothing to lose.
     t.text = d.text;

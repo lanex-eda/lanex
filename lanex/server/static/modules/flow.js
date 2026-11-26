@@ -28,6 +28,7 @@ import * as ctx from "./context.js";
 import { mountRunBar } from "./runbar.js";
 import * as FS from "./flowstages.js";
 import * as AM from "./analytics-model.js";
+import * as MF from "./metricfmt.js";
 import { LogView } from "./logview.js";
 import { fileActionsHtml, wireFileActions } from "./fileview.js";
 import { liveLines, liveRows, onLiveLog, droppedLines } from "./logs.js";
@@ -722,7 +723,8 @@ function keyNumber(st) {
       return st.status === "done" ? (nets.length ? nets.join(" / ") + " rails" : "power rails") : "";
     }
     case "placement": return n("design__instance__utilization") != null ? "core " + Math.round(n("design__instance__utilization") * 100) + " % full" : "";
-    case "cts": return n("clock__skew__worst_setup") != null ? "clock skew " + Math.abs(n("clock__skew__worst_setup") * 1000).toFixed(0) + " ps" : "";
+    // Skew in ps through the one formatter (metricfmt.skewText), the same number Analytics shows.
+    case "cts": return n("clock__skew__worst_setup") != null ? "clock skew " + MF.skewText(Math.abs(n("clock__skew__worst_setup"))).replace(/^\+/, "") + " ps" : "";
     case "routing": return n("route__wirelength") != null ? fmtWire(n("route__wirelength")) + " of wire" + (n("route__drc_errors") ? " · " + int(n("route__drc_errors")) + " route DRC" : "") : "";
     case "signoff": {
       if (st.status !== "done" && st.status !== "failed") return "";

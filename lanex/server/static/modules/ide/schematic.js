@@ -15,6 +15,7 @@
 import { api, fmt } from "../api.js";
 import { layoutGraph } from "./schlayout.js";
 import { rank } from "./fuzzy.js";
+import { num } from "../metricfmt.js";
 
 const esc = (s) => fmt.escape(String(s === undefined || s === null ? "" : s));
 export const CELL_LIMIT = 1000;
@@ -360,7 +361,7 @@ async function draw() {
   const ncell = g.stats.cells;
   if (!S.cone && ncell > CELL_LIMIT) {
     clearSvg();
-    paintMsg("<div class='sch-empty'><h4>" + ncell.toLocaleString() + " cells: too many to draw readably at once</h4>" +
+    paintMsg("<div class='sch-empty'><h4>" + num(ncell) + " cells: too many to draw readably at once</h4>" +
       "<p>Pick a signal in <b>Find a signal</b> to draw what drives it, back to the registers and inputs. Or switch to RTL or Simplified, which have fewer cells.</p></div>");
     foot("<span class='sch-stat'>" + esc(moduleLabel(cur.mod, S.netlist.modules[cur.mod])) + " · " + ncell + " cells</span>");
     document.getElementById("sch-find").focus();

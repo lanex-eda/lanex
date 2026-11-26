@@ -14,6 +14,7 @@
 // Stopped, Running, Incomplete) are verdict.js's.
 
 import { runVerdict, failedWhere, TIMING_MISSED } from "./verdict.js";
+import { mhz as mfMhz } from "./metricfmt.js";
 
 const W = (st) => runVerdict(st).word;
 export const POINT = {
@@ -133,8 +134,7 @@ export function sameFailure(ended) {
 export function clockText(ns) {
   const n = Number(ns);
   if (!(n > 0)) return String(ns);
-  const mhz = 1000 / n;
-  return n + " ns (" + (mhz >= 100 ? Math.round(mhz) : mhz.toPrecision(3)) + " MHz)";
+  return n + " ns (" + mfMhz(n) + ")";
 }
 
 // Strip of squares, one per point in value order: the mark says the state,

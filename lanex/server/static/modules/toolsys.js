@@ -17,6 +17,7 @@ import { toast } from "./toast.js";
 import { confirmDialog, customDialog } from "./dialog.js";
 import { icon } from "./icons.js";
 import { prefOn } from "./prefs.js";
+import { when } from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -35,12 +36,8 @@ export function whenText(t) {
   if (!t) return "never";
   const ms = typeof t === "number" ? (t < 1e12 ? t * 1000 : t) : Date.parse(t);
   if (!isFinite(ms)) return String(t);
-  const d = new Date(ms), now = new Date();
-  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (d.toDateString() === now.toDateString()) return "today " + hm;
-  const y = new Date(now); y.setDate(now.getDate() - 1);
-  if (d.toDateString() === y.toDateString()) return "yesterday " + hm;
-  return d.toLocaleDateString([], { day: "numeric", month: "short" });
+  // The one date shape (metricfmt.when), the same as Runs and the run picker.
+  return when(new Date(ms));
 }
 
 // ------------------------------------------------------------------ pieces

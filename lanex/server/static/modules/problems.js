@@ -14,6 +14,7 @@ import * as FS from "./flowstages.js";
 import * as ctx from "./context.js";
 import { state } from "./state.js";
 import { failedWhere, TIMING_MISSED } from "./verdict.js";
+import { slack } from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const _cache = new Map();          // tag -> { p: Promise, at }
@@ -161,7 +162,7 @@ export function fixChipHtml(f, { tag, title, primary = false } = {}) {
     "<b>" + esc(f.label || f.var) + "</b><span class='px-chip-v'>" + esc(withU(f.from)) + " → " + esc(withU(f.to)) + "</span></button>";
 }
 
-const ns = (v) => (typeof v === "number" ? (v < 0 ? "−" : "+") + Math.abs(v).toFixed(2) + " ns" : "");
+const ns = (v) => (typeof v === "number" ? slack(v) + " ns" : "");
 
 // The numbers that say how bad a problem is, in one line.
 export function problemLine(p) {

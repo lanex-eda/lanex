@@ -6,6 +6,7 @@ import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { openLayer, closeLayer } from "./overlay.js";
 import { mountClockField, freqText } from "./clockfield.js";
+import { mhz } from "./metricfmt.js";
 
 let _overlay = null;
 let _templates = [];
@@ -185,12 +186,6 @@ export function clockFor(tpl, pdk) {
   return tpl.clock_period != null ? tpl.clock_period : 10;
 }
 
-function mhz(ns) {
-  const n = parseFloat(ns);
-  if (!(n > 0)) return "";
-  const f = 1000 / n;
-  return (f >= 100 ? f.toFixed(0) : f.toFixed(1).replace(/\.0$/, "")) + " MHz";
-}
 
 // Verilog and SystemVerilog words a module can't be called (scaffold.py keeps
 // the same list).

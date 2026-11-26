@@ -10,18 +10,12 @@ import { fmt } from "./api.js";
 import { icon } from "./icons.js";
 import * as V from "./verify-model.js";
 import { fixChipHtml, problemLine } from "./problems.js";
+import { slack, dur } from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
-export function fmtDur(s) {
-  if (s == null || !Number.isFinite(s)) return "";
-  if (s < 10) return (Math.round(s * 10) / 10) + " s";
-  s = Math.round(s);
-  if (s < 60) return s + " s";
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + " min" + (s % 60 ? " " + (s % 60) + " s" : "");
-  return Math.floor(m / 60) + " h " + (m % 60) + " min";
-}
+// metricfmt.js dur(): one duration formatter for every page.
+export function fmtDur(s) { return dur(s); }
 
 // The verdict of a finished run, as Verify words it: {tone, title, short, sub}.
 export function verdictOf(vf, rx) {
@@ -60,7 +54,7 @@ export function runSummary({ tag, design, rx, vf, rs, name = (id) => id }) {
   if (rx.kind === "clean" || rx.kind === "checks-failed") {
     const parts = [];
     const ws = n(m, "timing__setup__ws");
-    if (ws != null) parts.push("setup " + (ws >= 0 ? "+" : "−") + Math.abs(ws).toFixed(2) + " ns");
+    if (ws != null) parts.push("setup " + slack(ws) + " ns");
     const d = bbox(m);
     if (d) parts.push(um(d[0]) + " × " + um(d[1]) + " µm");
     if (secs) parts.push(fmtDur(secs));
@@ -145,7 +139,7 @@ function failedHtml(c) {
 function kpi(label, a, b, o = {}) {
   if (a == null) return "";
   let text, unit = o.unit || "";
-  if (o.signed) text = (a >= 0 ? "+" : "−") + Math.abs(a).toFixed(2);
+  if (o.signed) text = slack(a);
   else if (o.power) [text, unit] = power(a);
   else if (o.wire) [text, unit] = a >= 1000 ? [(a / 1000).toFixed(a >= 10000 ? 1 : 2), "mm"] : [String(Math.round(a)), "µm"];
   else if (o.time) { text = fmtDur(a); unit = ""; }
@@ -158,7 +152,7 @@ function kpi(label, a, b, o = {}) {
     const good = same ? "same" : (d > 0) === (o.better > 0) ? "better" : "worse";
     let dt;
     if (same) dt = "same";
-    else if (o.signed) dt = (d > 0 ? "+" : "−") + Math.abs(d).toFixed(2) + " ns";
+    else if (o.signed) dt = slack(d) + " ns";
     else if (o.time) dt = (d > 0 ? "+" : "−") + fmtDur(Math.abs(d));
     else dt = (d > 0 ? "+" : "−") + Math.abs((d / (b || 1)) * 100).toFixed(1) + " %";
     delta = "<span class='fl-delta is-" + good + "'>" + esc(dt) + "</span>";

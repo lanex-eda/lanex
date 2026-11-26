@@ -26,6 +26,7 @@ import { wireExport } from "./signoff.js";
 import { toast } from "./toast.js";
 import * as AM from "./analytics-model.js";
 import * as V from "./verify-model.js";
+import { slack as mfSlack, bytes as mfBytes } from "./metricfmt.js";
 import { wireTips } from "./analytics-charts.js";
 import { problemsOf, onProblems, problemForCheck, fixListHtml } from "./problems.js";
 import { timingDiagHtml, drcDiagHtml } from "./verify-diag.js";
@@ -52,8 +53,7 @@ function n(v) { return AM.num(v); }
 
 function ns(v) {
   if (!V.isNum(v)) return AM.num(v);
-  if (Math.abs(v) >= 1e12) return "no path";
-  return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(3);
+  return mfSlack(v);
 }
 
 function mark(status) {

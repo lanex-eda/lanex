@@ -39,6 +39,7 @@ import { NET_COLORS, POWER_COLORS, CLOCK_COLOR, PATH_COLOR, cleanName, normalise
   placePoints, drawNets, drawPath, drawClock, flattenMarkers, stepMarker } from "./layoutoverlays.js";
 import { startCoach } from "./coach.js";
 import { getPref, setPref as setAppPref } from "./prefs.js";
+import * as MF from "./metricfmt.js";
 
 const BG = { dark: "#06080d", light: "#ffffff" };
 // The census uses the Cells tab's categories (one taxonomy: the server's
@@ -1018,8 +1019,8 @@ function renderCells(filter) {
   }).join("");
   const keepQ = host.querySelector("#lx-cell-q")?.value || "";
   host.innerHTML =
-    "<div class='lx-census'><div class='lx-census-n'><b>" + total.toLocaleString() + "</b> cells placed" +
-    (logic !== total ? "<span class='muted'> · " + logic.toLocaleString() + " doing logic</span>" : "") + "</div>" +
+    "<div class='lx-census'><div class='lx-census-n'><b>" + MF.num(total) + "</b> cells placed" +
+    (logic !== total ? "<span class='muted'> · " + MF.num(logic) + " doing logic</span>" : "") + "</div>" +
     "<div class='lx-census-bar'>" + bar + "</div></div>" +
     "<div class='lx-find'><input type='search' id='lx-cell-q' placeholder='Filter cells' value='" + esc(keepQ) + "' aria-label='Filter cells' spellcheck='false'/></div>" +
     (S.hl ? "<div class='lx-hl'><span>Highlighting <b>" + S.hl.total + "</b> × " + esc(shortCell(S.hl.cell)) + "</span><button class='btn btn-ghost btn-sm' data-hl-clear>Clear</button></div>" : "") +
@@ -1029,7 +1030,7 @@ function renderCells(filter) {
       const n = list.reduce((a, c) => a + c.count, 0);
       const hint = k === "other" ? "Cells this library doesn't sort, and macros." : CATEGORY_TIPS[k] || "";
       return "<details class='lx-kind'" + (q || k !== "physical" ? " open" : "") + "><summary><i style='background:" + KINDS[k].color + "'></i>" +
-        "<b>" + esc(label(k)) + "</b><span class='lx-n'>" + n.toLocaleString() + "</span></summary>" +
+        "<b>" + esc(label(k)) + "</b><span class='lx-n'>" + MF.num(n) + "</span></summary>" +
         (hint ? "<p class='lx-kind-hint'>" + esc(hint) + "</p>" : "") +
         list.map((c) => "<button class='lx-cell" + (S.hl && S.hl.cell === c.name ? " is-on" : "") + "' data-cell='" + esc(c.name) + "' title='" +
           esc(c.name + (words(c) ? " — " + words(c) : "") + ". " + c.w + " × " + c.h + " µm. Click to highlight every one.") + "'>" +
@@ -1229,7 +1230,7 @@ async function addNet(name, { zoom = false, color = null, preset = false, quiet 
     S.nets = S.nets.filter((n) => n !== entry);
   }
   renderFind();
-  if (g.found && g.truncated && !quiet) toast.show(name + " has " + g.total.toLocaleString() + " shapes; the first " + g.boxes.length.toLocaleString() + " are drawn.", "info");
+  if (g.found && g.truncated && !quiet) toast.show(name + " has " + MF.num(g.total) + " shapes; the first " + MF.num(g.boxes.length) + " are drawn.", "info");
   if (zoom && g.found) zoomToNet(name);
   paintKey();
   S.canvas && S.canvas.paintOverlay();
@@ -1349,7 +1350,7 @@ function renderChecks() {
     srcs.map((s, si) => {
       if (s.ok === false) return "";
       if (!s.total) return "<div class='lx-mk-src is-clean'><span class='vf-mark is-" + (s.disagree ? "warn" : "pass") + "'></span><b>" + esc(s.label) + "</b><span class='lx-n'>0</span></div>" + disagree(s);
-      const capped = s.truncated ? "<p class='lx-kind-hint lx-pad lx-disagree'>Showing the first " + (s.items || []).length.toLocaleString() + " of " + s.total.toLocaleString() +
+      const capped = s.truncated ? "<p class='lx-kind-hint lx-pad lx-disagree'>Showing the first " + MF.num((s.items || []).length) + " of " + MF.num(s.total) +
         " markers. The report file has them all; KLayout's marker browser opens it.</p>" : "";
       return "<div class='lx-mk-src'><label class='lx-check'><input type='checkbox' data-mk-src='" + si + "'" + (s.hidden ? "" : " checked") + "/>" +
         "<span class='vf-mark is-" + (s.disagree ? "warn" : "fail") + "'></span><b>" + esc(s.label) + "</b></label><span class='lx-n'>" + s.total + "</span></div>" + disagree(s) + capped +
@@ -1363,8 +1364,8 @@ function renderChecks() {
             items.slice(0, shown).map((it, ii) => "<button class='lx-res" + (it === S.activeMarker ? " is-on" : "") + (S.visited.has(it) ? " is-seen" : "") +
               "' data-mk='" + si + ":" + (s.items.indexOf(it)) + "'><span class='lx-res-t'>#" + (ii + 1) +
               "</span><span class='lx-res-s'>at " + it.bbox[0].toFixed(2) + ", " + it.bbox[1].toFixed(2) + " µm</span></button>").join("") +
-            (left > 0 ? "<button class='btn btn-ghost btn-sm lx-mk-more' data-mk-more='" + esc(k) + "'>Show " + Math.min(PAGE, left) + " more <span class='muted'>(" + left.toLocaleString() + " left)</span></button>" : "") +
-            (items.length < c.count ? "<p class='muted lx-pad'>" + (c.count - items.length).toLocaleString() + " more of this kind are past the first " + (s.cap || 4000).toLocaleString() + " read; they are in the report file.</p>" : "") +
+            (left > 0 ? "<button class='btn btn-ghost btn-sm lx-mk-more' data-mk-more='" + esc(k) + "'>Show " + Math.min(PAGE, left) + " more <span class='muted'>(" + MF.num(left) + " left)</span></button>" : "") +
+            (items.length < c.count ? "<p class='muted lx-pad'>" + MF.num(c.count - items.length) + " more of this kind are past the first " + MF.num(s.cap || 4000) + " read; they are in the report file.</p>" : "") +
             "</details>";
         }).join("") +
         "<p class='lx-pad'><a class='btn btn-ghost btn-sm' href='" + api.runFileUrl(S.tag, s.path) + "' download>" + esc(s.path.split("/").pop()) + "</a></p>";
@@ -1434,7 +1435,7 @@ function paintStepper() {
   const m = list[i];
   el.innerHTML = "<button class='lx-tb' data-step='-1' title='Previous marker (P)' aria-label='Previous marker'>" +
     "<svg viewBox='0 0 24 24' width='16' height='16' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M15 6l-6 6 6 6'/></svg></button>" +
-    "<span class='lx-stepper-t'><b>Marker " + (i + 1).toLocaleString() + " of " + list.length.toLocaleString() + "</b><span>" + esc(m.label) + " · <code>" + esc(m.cat) + "</code></span></span>" +
+    "<span class='lx-stepper-t'><b>Marker " + MF.num(i + 1) + " of " + MF.num(list.length) + "</b><span>" + esc(m.label) + " · <code>" + esc(m.cat) + "</code></span></span>" +
     "<button class='lx-tb' data-step='1' title='Next marker (N)' aria-label='Next marker'>" +
     "<svg viewBox='0 0 24 24' width='16' height='16' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M9 6l6 6-6 6'/></svg></button>" +
     "<button class='lx-tb lx-stepper-x' data-step='x' title='Stop stepping (Esc)' aria-label='Stop stepping through markers'>×</button>";
@@ -1904,7 +1905,7 @@ function renderFocus() {
 
 function slackWord(s) {
   if (s == null) return "";
-  return "<span class='lx-slack " + (s < 0 ? "is-neg" : "is-pos") + "'>" + (s >= 0 ? "+" : "") + s.toFixed(3) + " ns</span>";
+  return "<span class='lx-slack " + (s < 0 ? "is-neg" : "is-pos") + "'>" + MF.slack(s) + " ns</span>";
 }
 
 // Which corner and constraints the stage's path list was timed with: one

@@ -404,7 +404,7 @@ function renderOverview() {
   if (row.pdk || stages.pdk) meta.push(esc((row.pdk || stages.pdk) + (row.scl || stages.scl ? " / " + (row.scl || stages.scl) : "")));
   if (row.started_at) {
     const d = new Date(row.started_at);
-    if (!Number.isNaN(d.getTime())) meta.push(esc(localeDateTime(d, undefined, { dateStyle: "medium", timeStyle: "short" })));
+    if (!Number.isNaN(d.getTime())) meta.push(esc(F.when(d)));
   }
   if (Number.isFinite(row.wall_time_s)) meta.push(esc(fmtDur(row.wall_time_s)) + " of step time");
   // Verify's step totals (V.stepTotals): the same "34 of 76" Flow shows.
@@ -571,7 +571,7 @@ function renderTiming() {
     ["TNS", "tns", "Total negative slack: all failing slack added up. 0 when nothing fails."],
     [nC > 1 ? "Violations, " + nC + " corners summed" : "Violations", "_vio__count", "Failing endpoints." + (nC > 1 ? " Summed over " + nC + " corners: " + F.CORNER_SUM_NOTE +
       (sumS ? " Setup: " + F.num(sumS.worst) + " in the worst corner (" + sumS.corner + ")." : "") + (sumH ? " Hold: " + F.num(sumH.worst) + " in the worst corner (" + sumH.corner + ")." : "") : "")],
-    ["Reg-to-reg slack", "_r2r__ws", "Worst slack between two flip-flops (ignores I/O paths). ∞ means there are no such paths."],
+    ["Reg-to-reg slack", "_r2r__ws", "Worst slack between two flip-flops (ignores I/O paths). \"no path\" means there are no such paths."],
   ];
   const cell = (kind, suf) => {
     const key = suf.startsWith("_") ? "timing__" + kind + suf : "timing__" + kind + "__" + suf;
