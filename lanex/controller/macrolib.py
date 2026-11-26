@@ -1051,33 +1051,43 @@ def macro_grid_plan(geom: Dict[str, Any], tech: Dict[str, Any], vlayer: Optional
 
 def pdn_cfg_text(plans: List[Tuple[str, List[str], Dict[str, Any]]]) -> str:
     """A PDN_CFG that runs LibreLane's own grid, then one small grid per block
-    in *plans* (``(macro, [instances], plan)``)."""
+    in *plans* (``(macro, [instances], plan)``). OpenROAD sources it during
+    the run, so every name (instances, a macro's LEF layers) goes in as one
+    escaped Tcl word and a comment never spans a line."""
+    from .quoting import tcl_escape as w
+
+    def num(v: Any) -> str:
+        return w(v if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v))
+
+    def comment(v: Any) -> str:
+        return re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+", " ", str(v))
+
     lines = ["# Written by LanEx for the macros on the Cells & macros tab. Regenerated at",
              "# every run start; edit your own copy and set PDN_CFG to keep changes.",
              "# LibreLane's default power grid first:",
              "source $::env(SCRIPTS_DIR)/openroad/common/pdn_cfg.tcl", ""]
     for k, (macro, insts, p) in enumerate(plans):
         g = f"lanex_macro_{k}"
-        inst_list = " ".join(insts)
+        inst_list = " ".join(w(i) for i in insts)
         # The bridge grid takes no halo, as in IHP's template: with one, the
         # Metal5 straps' ground shapes came out unconnected (PSM-0038/0069 on a
         # real IHP run); the columns grid keeps wafer.space's halo.
-        lines += [f"# {macro}: {p['kind']} pattern",
+        lines += [f"# {comment(macro)}: {comment(p['kind'])} pattern",
                   "define_pdn_grid \\", "    -macro \\", f"    -instances \"{inst_list}\" \\",
                   f"    -name {g} \\"]
         lines += (["    -starts_with POWER", ""] if p["kind"] == "bridge" else
                   ["    -starts_with POWER \\", "    -halo \"$::env(PDN_HORIZONTAL_HALO) $::env(PDN_VERTICAL_HALO)\"", ""])
         if p["kind"] == "bridge":
-            lines += ["add_pdn_stripe \\", f"    -grid {g} \\", f"    -layer {p['strap_layer']} \\",
-                      f"    -width {p['width']} \\", f"    -pitch {p['pitch']} \\", f"    -offset {p['offset']} \\",
-                      f"    -spacing {p['spacing']} \\", "    -nets \"$::env(GND_NET) $::env(VDD_NET)\" \\",
+            lines += ["add_pdn_stripe \\", f"    -grid {g} \\", f"    -layer {w(p['strap_layer'])} \\",
+                      f"    -width {num(p['width'])} \\", f"    -pitch {num(p['pitch'])} \\", f"    -offset {num(p['offset'])} \\",
+                      f"    -spacing {num(p['spacing'])} \\", "    -nets \"$::env(GND_NET) $::env(VDD_NET)\" \\",
                       "    -starts_with POWER", ""]
         else:
-            lines += ["add_pdn_stripe \\", f"    -grid {g} \\", f"    -layer {p['strap_layer']} \\",
-                      f"    -width {p['width']} \\", f"    -offset {p['offset']} \\", f"    -spacing {p['spacing']} \\",
-                      f"    -pitch {p['pitch']} \\", "    -starts_with GROUND \\", f"    -number_of_straps {p['count']}", ""]
+            lines += ["add_pdn_stripe \\", f"    -grid {g} \\", f"    -layer {w(p['strap_layer'])} \\",
+                      f"    -width {num(p['width'])} \\", f"    -offset {num(p['offset'])} \\", f"    -spacing {num(p['spacing'])} \\",
+                      f"    -pitch {num(p['pitch'])} \\", "    -starts_with GROUND \\", f"    -number_of_straps {num(p['count'])}", ""]
         for a, b in p["connect"]:
-            lines += ["add_pdn_connect \\", f"    -grid {g} \\", f"    -layers \"{a} {b}\"", ""]
+            lines += ["add_pdn_connect \\", f"    -grid {g} \\", f"    -layers \"{w(a)} {w(b)}\"", ""]
     return "\n".join(lines)
 
 

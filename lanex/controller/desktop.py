@@ -218,8 +218,9 @@ def magic_scaled_rcfile(rcfile: Optional[str], scale: float, dest_dir: Path) -> 
     snippet = platform_env.tk_scale_tcl(scale)
     if not snippet:
         return None
+    from .quoting import tcl_word
     if rcfile:
-        load = f"source {{{rcfile}}}\n"
+        load = f"source {tcl_word(rcfile)}\n"
     else:
         load = (
             "set _lx_home [expr {[info exists ::env(HOME)] ? $::env(HOME) : [pwd]}]\n"
@@ -230,13 +231,14 @@ def magic_scaled_rcfile(rcfile: Optional[str], scale: float, dest_dir: Path) -> 
     text = snippet + load
     try:
         import hashlib
+
+        from . import safefs
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / f".lanex-magic-{hashlib.sha1(text.encode()).hexdigest()[:12]}.tcl"
-        if not dest.is_file():
-            tmp = dest.with_name(dest.name + f".{os.getpid()}.tmp")
-            tmp.write_text(text, encoding="utf-8")
-            os.replace(tmp, dest)
-        return str(dest)
+        # Always written (a rename over the name, never through a link): a
+        # file already there may have been planted in a shared project under
+        # this predictable name, and Magic would run it.
+        name = f".lanex-magic-{hashlib.sha1(text.encode()).hexdigest()[:12]}.tcl"
+        return str(safefs.write_text(safefs.confined_dir(dest_dir), name, text))
     except OSError:
         return None
 
@@ -735,30 +737,28 @@ def def_open_script(tool: str, def_path: Path, run_dir: Path, *, magicrc: Option
         )
         ext = ".py"
     elif tool == "magic":
+        from .quoting import tcl_word as w
         design = _def_design(def_path) or str(cfg.get("DESIGN_NAME") or "")
-
-        def w(s: str) -> str:
-            return "{" + str(s).replace("}", "") + "}"
-
+        # Every path and name is one escaped Tcl word: a file named
+        # "spm[exec touch x].def" opens as that file and runs nothing.
         lines = ["# Written by LanEx: open one stage's DEF in Magic, as LibreLane's",
                  "# scripts/magic/open.tcl does (tech LEF, cell LEFs, then the DEF)."]
         lines += ["lef read " + w(p) for p in lefs]
         lines.append("def read " + w(def_path))
         if design:
             lines.append("load " + w(design))
-        lines += ["select top cell", "catch {view}", "puts \"LanEx: opened " + def_path.name + "\""]
+        lines += ["select top cell", "catch {view}", "puts " + w("LanEx: opened " + def_path.name)]
         text = "\n".join(lines) + "\n"
         ext = ".tcl"
     else:
         return None
     try:
-        d = run_dir / ".lanex" / "viewers"
-        d.mkdir(parents=True, exist_ok=True)
-        p = d / ("open-" + tool + "-" + hashlib.sha1(text.encode()).hexdigest()[:12] + ext)
-        if not p.is_file():
-            tmp = p.with_name(p.name + ".%d.tmp" % os.getpid())
-            tmp.write_text(text, encoding="utf-8")
-            os.replace(tmp, p)
-        return p
+        from . import safefs
+        # A real folder in the run (a planted .lanex link is refused), and the
+        # script always written: a file already under this predictable name
+        # may come from whoever shared the project.
+        d = safefs.confined_dir(run_dir, ".lanex", "viewers")
+        name = "open-" + tool + "-" + hashlib.sha1(text.encode()).hexdigest()[:12] + ext
+        return safefs.write_text(d, name, text)
     except OSError:
         return None
