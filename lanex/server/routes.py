@@ -3737,7 +3737,9 @@ def _runs_live_dirs() -> List[str]:
 
 
 def _runs_design_arg(raw: Any) -> Optional[Path]:
-    """A design folder from a request: known to LanEx, or one with a runs/."""
+    """A design folder from a request, when LanEx knows it (opened on Setup,
+    or the active one). A folder that merely has a runs/ is not enough: these
+    routes write into the project (``.gui-runs.json``)."""
     if not isinstance(raw, str) or not raw:
         return None
     try:
@@ -3746,9 +3748,29 @@ def _runs_design_arg(raw: Any) -> Optional[Path]:
         return None
     if not p.is_dir():
         return None
-    if str(p) in _runs_known_designs() or (p / "runs").is_dir():
+    if str(p) in _runs_known_designs():
         return p
     return None
+
+
+def purge_old_trash(design_dirs: Optional[List[str]] = None, *, background: bool = True) -> None:
+    """Free the space of runs deleted more than 10 minutes ago, in every
+    known project (at server start; bulk calls purge their own project).
+    Never from a GET: opening a page must not delete anything."""
+    from ..controller import runsmeta
+
+    def work() -> None:
+        for d in (design_dirs if design_dirs is not None else _runs_known_designs()):
+            try:
+                runsmeta.purge_stale(d, background=False)
+            except Exception:
+                _log.debug("trash purge failed for %s", d, exc_info=True)
+
+    if background:
+        import threading
+        threading.Thread(target=work, name="lanex-trash-start", daemon=True).start()
+    else:
+        work()
 
 
 def h_runs_meta(handler: Any) -> None:
@@ -3771,7 +3793,6 @@ def h_runs_meta(handler: Any) -> None:
     if d is None:
         _respond(handler, runsmeta._empty_meta())
         return
-    runsmeta.purge_stale(d)
     _respond(handler, runsmeta.read_meta(d))
 
 
@@ -4815,6 +4836,8 @@ def start_job_service() -> None:
     if a:
         dirs.insert(0, a)
     jobs.scheduler.start_service(dirs)
+    # Runs deleted in an earlier session whose Undo window has passed.
+    purge_old_trash()
 
 
 wire_jobs()

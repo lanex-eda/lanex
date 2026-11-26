@@ -33,8 +33,11 @@ Deleting runs (``bulk("delete")``) moves their folders into
 ``runs/.gui-trash/<batch>/`` (a rename inside the same folder tree, instant
 even for a 90 MB run), so the page can offer Undo while its toast is up. The
 page then asks for ``purge``; batches older than :data:`TRASH_TTL_S` are
-purged on the next listing or bulk call, and at start-up. ``list_runs`` skips
-dot folders, so the trash never shows as a run.
+purged on the next bulk call and at start-up (never by a GET). ``list_runs``
+skips dot folders, so the trash never shows as a run. The trash is never a
+link, and only folders named like a batch are ever removed. A batch an Undo
+could not empty (a run of that name exists again) is marked ``.kept.json``
+and never purged: the answer says where it is.
 
 Also here: values of any metric or setting for a set of runs (the Runs
 table's free columns), what each run changed against the baseline (plain
@@ -47,6 +50,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import threading
 import time
 from datetime import datetime
@@ -233,19 +237,36 @@ def looks_like_run(d: Path) -> bool:
 
 
 def check_run_dir(run_dir: Any, *, known: Optional[Iterable[str]] = None) -> Path:
-    """The run folder, resolved, when it is one LanEx may change: a folder
-    directly under ``<design>/runs/`` that looks like a LibreLane run, of a
-    design LanEx knows (``known``: resolved design folders; None = any).
-    Raises ValueError with the reason otherwise."""
+    """The run folder when it is one LanEx may change: a folder directly
+    under ``<design>/runs/`` that looks like a LibreLane run, of a design
+    LanEx knows (``known``: resolved design folders; None = any). Raises
+    ValueError with the reason otherwise.
+
+    Returned as ``<resolved design>/runs/<name>``, the path the Runs list
+    gives it. ``runs/`` itself may be a link (to a bigger disk): the run is
+    then checked where it really is, and must sit directly in the folder
+    ``runs/`` points at. A run folder that is a link out of there is refused."""
     if not isinstance(run_dir, str) or not run_dir:
         raise ValueError("no run folder given")
-    p = Path(run_dir).expanduser().resolve()
-    if not p.is_dir():
-        raise ValueError("that run is gone")
-    if p.parent.name != "runs" or p.name.startswith("."):
+    try:
+        lex = Path(os.path.abspath(os.path.expanduser(run_dir)))
+    except (OSError, ValueError):
+        raise ValueError("no run folder given")
+    if lex.parent.name != "runs" or not lex.name or lex.name.startswith("."):
         raise ValueError("not a run folder (it must sit directly in a design's runs/ folder)")
-    if known is not None and str(p.parent.parent) not in set(known):
+    try:
+        design = lex.parent.parent.resolve()
+        runs_real = (design / "runs").resolve()
+        real = lex.resolve()
+    except (OSError, RuntimeError):
+        raise ValueError("that run is gone")
+    if not real.is_dir():
+        raise ValueError("that run is gone")
+    if real.parent != runs_real:
+        raise ValueError("not a run folder (it must sit directly in a design's runs/ folder)")
+    if known is not None and str(design) not in set(known):
         raise ValueError("that run belongs to a design LanEx hasn't opened")
+    p = design / "runs" / lex.name
     if not looks_like_run(p):
         raise ValueError("that folder is not a LibreLane run")
     return p
@@ -278,29 +299,110 @@ def _new_batch() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(3).hex()
 
 
+KEPT_MARKER = ".kept.json"
+
+
 def _trash_root(design_dir: Path) -> Path:
     return design_dir / "runs" / TRASH_DIR
 
 
+def _safe_trash(design_dir: Path, *, create: bool = False) -> Optional[Path]:
+    """``<design>/runs/.gui-trash`` when LanEx may write and delete in it, else
+    None. The trash is never a link (one pointing at the home folder made a
+    purge delete folders outside the project), and it sits directly in the
+    folder ``runs/`` really is (``runs/`` itself may be a link to another
+    disk). With *create*, a missing trash is made."""
+    runs = Path(design_dir) / "runs"
+    root = runs / TRASH_DIR
+    try:
+        if root.is_symlink():
+            return None
+        if not root.exists():
+            if not create or not runs.is_dir():
+                return None
+            root.mkdir(exist_ok=True)
+        st = os.lstat(root)
+        if not stat.S_ISDIR(st.st_mode):
+            return None
+        if root.resolve().parent != runs.resolve():
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return root
+
+
+def _batch_dir(root: Path, name: str) -> Optional[Path]:
+    """One batch folder of the trash: a name LanEx makes (``_BATCH_RE``) and
+    a real folder, never a link."""
+    if not _BATCH_RE.match(name or ""):
+        return None
+    b = root / name
+    try:
+        if not stat.S_ISDIR(os.lstat(b).st_mode):
+            return None
+    except OSError:
+        return None
+    return b
+
+
+def _is_kept(batch_dir: Path) -> bool:
+    """A batch an Undo could not empty (a run of that name exists again): it
+    is kept until the person moves it, never purged."""
+    return (batch_dir / KEPT_MARKER).is_file()
+
+
+def _holds_runs(batch_dir: Path) -> bool:
+    try:
+        return any(not e.name.startswith(".") for e in batch_dir.iterdir())
+    except OSError:
+        return False
+
+
+def _mark_kept(batch_dir: Path, kept: List[Dict[str, str]]) -> None:
+    """Note in the batch why it stays (``.kept.json``): purges skip it."""
+    try:
+        platform_env.atomic_write_text(batch_dir / KEPT_MARKER, json.dumps(
+            {"kept": kept, "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+             "why": "Undo could not put these runs back; LanEx never deletes them."}, indent=1) + "\n")
+    except OSError:
+        pass
+
+
+def _remove_batch(batch_dir: Path) -> None:
+    if _is_kept(batch_dir):
+        return
+    try:
+        if stat.S_ISLNK(os.lstat(batch_dir).st_mode):
+            return
+    except OSError:
+        return
+    shutil.rmtree(batch_dir, ignore_errors=True)
+
+
 def purge_stale(design_dir: str | Path, max_age_s: float = TRASH_TTL_S, *, background: bool = True) -> None:
-    """Free the space of deleted runs whose Undo window has passed."""
-    root = _trash_root(Path(design_dir))
-    if not root.is_dir():
+    """Free the space of deleted runs whose Undo window has passed. Only the
+    batch folders LanEx made in this project's own trash are removed (see
+    :func:`_safe_trash`); a batch an Undo could not empty is kept."""
+    root = _safe_trash(Path(design_dir))
+    if root is None:
         return
 
     def work() -> None:
         now = time.time()
         try:
-            batches = list(root.iterdir())
+            names = [e.name for e in root.iterdir()]
         except OSError:
             return
-        for b in batches:
+        for name in names:
+            b = _batch_dir(root, name)
+            if b is None or _is_kept(b):
+                continue
             try:
-                age = now - b.stat().st_mtime
+                age = now - os.lstat(b).st_mtime
             except OSError:
                 continue
             if age >= max_age_s:
-                shutil.rmtree(b, ignore_errors=True)
+                _remove_batch(b)
         try:
             if not any(root.iterdir()):
                 root.rmdir()
@@ -342,35 +444,52 @@ def bulk(action: str, run_dirs: List[Any], *, tags: Optional[List[Any]] = None,
             if known_list is None or str(p) in known_list:
                 designs.append(p)
         restored: List[str] = []
+        kept: List[Dict[str, str]] = []
         missing = True
         for d in designs:
-            src = _trash_root(d) / batch
-            if not src.is_dir():
+            root = _safe_trash(d)
+            src = _batch_dir(root, batch) if root is not None else None
+            if src is None:
                 continue
             missing = False
             if action == "purge":
-                shutil.rmtree(src, ignore_errors=True)
+                _remove_batch(src)          # a kept batch stays (see below)
                 continue
             for r in sorted(src.iterdir()):
                 if r.name.startswith("."):
                     continue
                 dest = d / "runs" / r.name
-                if dest.exists():
-                    failed.append({"run_dir": str(dest), "error": "a run with that name exists again"})
-                    continue
-                try:
-                    os.rename(r, dest)
-                    restored.append(str(dest))
-                except OSError as ex:
-                    failed.append({"run_dir": str(dest), "error": str(ex)})
-            shutil.rmtree(src, ignore_errors=True)
+                why = None
+                if dest.exists() or dest.is_symlink():
+                    why = f"a run named {r.name} exists again"
+                else:
+                    try:
+                        os.rename(r, dest)
+                        restored.append(str(dest))
+                        continue
+                    except OSError as ex:
+                        why = str(ex)
+                # Not put back: the folder stays where it is, whole, and the
+                # batch is marked so no purge ever removes it.
+                kept.append({"run": r.name, "path": str(r), "why": why})
+                failed.append({"run_dir": str(dest), "kept_at": str(r),
+                               "error": f"not put back ({why}). Nothing was lost: its folder is kept at {r}. "
+                                        f"Rename or delete the run now called {r.name}, then move that folder "
+                                        f"back into {d / 'runs'}."})
+            if _holds_runs(src):
+                _mark_kept(src, [k for k in kept if Path(k["path"]).parent == src])
+            else:
+                shutil.rmtree(src, ignore_errors=True)
         if missing:
             if action == "purge":
                 return {"ok": True, "done": []}, 200
             return {"ok": False, "error": "Too late: those runs are already gone."}, 410
         for d in designs:
             purge_stale(d)
-        return {"ok": not failed, "done": restored, "failed": failed}, 200
+        out: Dict[str, Any] = {"ok": not failed, "done": restored, "failed": failed}
+        if action == "undo":
+            out["kept"] = kept
+        return out, 200
 
     if action not in ("archive", "restore", "tag", "untag", "delete"):
         return {"ok": False, "error": f"unknown action {action!r}"}, 400
@@ -386,7 +505,7 @@ def bulk(action: str, run_dirs: List[Any], *, tags: Optional[List[Any]] = None,
         except ValueError as ex:
             failed.append({"run_dir": str(rd), "error": str(ex)})
             continue
-        if str(p) in live_set and action in ("delete", "archive"):
+        if (str(p) in live_set or str(p.resolve()) in live_set) and action in ("delete", "archive"):
             failed.append({"run_dir": str(p), "error": "still running: stop it first"})
             continue
         checked.append(p)
@@ -434,10 +553,15 @@ def bulk(action: str, run_dirs: List[Any], *, tags: Optional[List[Any]] = None,
     b = _new_batch()
     total = 0
     for p in checked:
+        root = _safe_trash(p.parent.parent, create=True)
+        if root is None:
+            failed.append({"run_dir": str(p), "error": f"{_trash_root(p.parent.parent)} is a link or not a folder, "
+                                                       "so LanEx won't move runs into it. Remove it, then try again."})
+            continue
         try:
             size = folder_bytes(p)
-            dest_root = _trash_root(p.parent.parent) / b
-            dest_root.mkdir(parents=True, exist_ok=True)
+            dest_root = root / b
+            dest_root.mkdir(exist_ok=True)
             os.rename(p, dest_root / p.name)
             total += size
             done.append(str(p))
