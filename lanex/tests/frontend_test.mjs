@@ -1108,6 +1108,24 @@ check("Z2 numbers: one formatter for slack, skew, sizes, durations, dates and cl
   assert.doesNotMatch(src("layout.js"), /\.toLocaleString\(\)/, "a bare toLocaleString() groups by the PC's locale");
 });
 
+const EM = await import(toUrl(resolve(MOD, "empty.js")));
+check("Z2 empty states: one block and one word table on every page", () => {
+  const np = EM.pageEmpty("noProject", { icon: "chart", body: { noProject: "Analytics shows it.", noRuns: "Run it." } });
+  assert.match(np, /<div class='empty'><span class='ico'>.*<h3>Open a project first<\/h3><p>Analytics shows it\.<\/p><button class='btn btn-primary' data-go='setup'>Go to Setup<\/button><\/div>/);
+  // No Run button to press in node: "No runs yet" falls back to Setup rather than a dead Run.
+  assert.match(EM.pageEmpty("noRuns", { body: "x" }), /<h3>No runs yet<\/h3>.*Go to Setup/);
+  assert.match(EM.pageEmpty("runGone"), /This run&#39;s folder is gone/);
+  assert.doesNotMatch(EM.pageEmpty("noProject", { inner: true }), /^<div/, "inner: the block's content only");
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["analytics.js", "verify.js", "layout.js", "runs.js", "compare.js", "flow.js", "cells.js", "ide/main.js"]) {
+    assert.match(src(f), /from "\.\.?\/empty\.js"/, f + " draws its empty state with empty.js");
+  }
+  // The results pages turn their run-bar actions off while there is no run.
+  for (const f of ["analytics.js", "verify.js", "layout.js"]) assert.match(src(f), /setRunBarActions\(/, f);
+  assert.doesNotMatch(src("ide/main.js"), /<h3>No project open|No project open\. Open/);
+  assert.doesNotMatch(src("flow.js"), /: "No run yet"\)/, "Flow's hero takes its words from the table");
+});
+
 check("Z2 verdict: one failure sentence and one set of check words on every page", () => {
   const src = (f) => readFileSync(resolve(MOD, f), "utf8");
   // Where a run failed: the stage by its flow name, the step in brackets.

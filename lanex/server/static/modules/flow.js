@@ -29,6 +29,7 @@ import { mountRunBar } from "./runbar.js";
 import * as FS from "./flowstages.js";
 import * as AM from "./analytics-model.js";
 import * as MF from "./metricfmt.js";
+import { EMPTY_WORDS } from "./empty.js";
 import { LogView } from "./logview.js";
 import { fileActionsHtml, wireFileActions } from "./fileview.js";
 import { liveLines, liveRows, onLiveLog, droppedLines } from "./logs.js";
@@ -422,12 +423,13 @@ function emptyHtml() {
   const has = (ctx.contextRuns() || []).length;
   return "<div class='an-verdict fl-hero is-idle'><div class='an-verdict-main'>" +
     "<div class='an-eyebrow'>Flow</div>" +
-    "<h2 class='an-title'>" + (state.designDir ? (has ? "Pick a run to see it here" : "No run yet") : "Open a project first") + "</h2>" +
+    // Flow keeps its hero (its identity); the words are the one empty table's (empty.js).
+    "<h2 class='an-title'>" + (state.designDir ? (has ? "Pick a run to see it here" : EMPTY_WORDS.noRuns.title) : EMPTY_WORDS.noProject.title) + "</h2>" +
     "<p class='an-lede'>A run turns the Verilog into a chip in seven stages. Each stage fills in below as it goes: " +
     "the time it took, its key number, and a picture of the chip at that point.</p></div>" +
     "<div class='an-verdict-act'>" + (state.designDir
       ? "<button class='btn btn-primary' data-fl='run'>" + icon("play", { size: 14 }) + " Run the flow</button>"
-      : "<button class='btn btn-primary' data-go='setup'>Go to Setup</button>") + "</div></div>";
+      : "<button class='btn btn-primary' data-go='setup'>" + EMPTY_WORDS.noProject.action.label + "</button>") + "</div></div>";
 }
 
 // The head while a Run click's start request is out, or after the server

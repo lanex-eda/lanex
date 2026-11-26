@@ -29,6 +29,7 @@ import * as C from "./analytics-charts.js";
 import { localeNum, localeDateTime } from "./intlcache.js";
 import { loadingStart, skel } from "./loading.js";
 import { verdictOfRun } from "./verdict.js";
+import { showEmpty, setRunBarActions } from "./empty.js";
 import * as SM from "./studymodel.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
@@ -156,14 +157,20 @@ export async function renderAnalyticsFull() {
   // The list could not be loaded at all (LanEx busy or asleep): leave the page
   // as it is; context.js retries and the page repaints when runs arrive.
   if (!runs.length && ctx.runsLoadFailed()) { loadDone(); return; }
+  const bar = document.querySelector("#sec-analytics .an-runbar");
   if (!runs.length || !ctx.contextRun()) {
     loadDone();
     body.classList.add("is-empty");
-    document.getElementById("an-empty").hidden = false;
+    // One empty state (empty.js): its words say whether a project is open.
+    showEmpty(document.getElementById("an-empty"), state.designDir ? "noRuns" : "noProject", { icon: "chart", body: {
+      noRuns: "Run the flow once and this page shows how it went: timing, area, power, routing and every metric LibreLane recorded.",
+      noProject: "Analytics shows how each run of the project you have open went: timing, area, power, routing and every metric LibreLane recorded." } });
+    setRunBarActions(bar, false);
     return;
   }
   body.classList.remove("is-empty");
   document.getElementById("an-empty").hidden = true;
+  setRunBarActions(bar, true);
   await selectRun(ctx.contextRun());
 }
 

@@ -15,6 +15,7 @@ import { setupFullscreen } from "../fullscreen.js";
 import { applyZoom, currentZoom, isAutoZoom } from "../zoom.js";
 import { getPref } from "../prefs.js";
 import { when as MFwhen } from "../metricfmt.js";
+import { emptyHtml, EMPTY_WORDS } from "../empty.js";
 import { refreshAction, conflictKind, lineDiff, isConfigFile } from "./filesync.js";
 import { addProjectFiles } from "../addfiles.js";
 import { initNav, noteRecent, declHover, refreshIndexStatus, quickOpen, pushHere } from "./nav.js";
@@ -254,7 +255,7 @@ function wireNavigation() {
     setPanel, note, appendLog, grow: () => growPanelFor(),
     scrollLogEnd: () => { const el = document.getElementById("ide-log"); if (el) el.scrollTop = el.scrollHeight; },
     showWave: (vcd, failTime, tb) => showWaveAt(vcd, failTime, tb),
-    setBusy: (on) => { byId("ide-sim", (b) => { b.disabled = !!on || !!state.simRunning; }); byId("ide-sim-pick", (b) => { b.disabled = !!on || !!state.simRunning; }); byId("ide-sim-stop", (b) => { b.hidden = !on && !state.simRunning; }); },
+    setBusy: (on) => { byId("ide-sim", (b) => { b.disabled = !!on || !!state.simRunning || !state.designDir; }); byId("ide-sim-pick", (b) => { b.disabled = !!on || !!state.simRunning || !state.designDir; }); byId("ide-sim-stop", (b) => { b.hidden = !on && !state.simRunning; }); },
     onBatchDone: (rows) => {
       state.lastBatch = { at: Date.now(), rows: rows.map((r) => ({ tb: r.tb, state: r.state })) };
       recordRtlStatus();
@@ -606,7 +607,7 @@ async function loadTree() {
   if (!tree) return;
   if (!state.designDir) {
     state.files = [];
-    tree.innerHTML = "<p class='muted'>No project open. Open or create one on the Setup tab.</p>";
+    tree.innerHTML = "<p class='muted'>Open a project first: its files appear here.</p>";
     renderStart();
     return;
   }
@@ -1216,13 +1217,17 @@ function autoOpen() {
 function renderStart() {
   const el = document.getElementById("ide-start");
   if (!el) return;
+  // Check syntax and Simulate act on a project: off while none is open.
+  const none = !state.designDir;
+  byId("ide-lint", (b) => { if (!state.linting) b.disabled = none; });
+  for (const id of ["ide-sim", "ide-sim-pick"]) byId(id, (b) => { if (!state.simRunning) b.disabled = none; });
   el.hidden = state.tabs.length > 0;
   byId("ide-cursor", (c) => { c.hidden = !state.tabs.length; });
   if (!el.hidden) {
     const top = state.topAbs && state.files.find((f) => f.abspath === state.topAbs);
     const hasTb = state.files.some((f) => f.role === "testbench");
     el.innerHTML = !state.designDir
-      ? "<h3>No project open</h3><p>Open or create a project on the Setup tab, and its files appear here.</p>"
+      ? emptyHtml({ icon: "code", title: EMPTY_WORDS.noProject.title, body: "The IDE edits, checks and simulates the Verilog of the project you have open. Open or create one on Setup and its files appear here.", action: EMPTY_WORDS.noProject.action })
       : "<h3>Nothing open</h3><p>Pick a file on the left, or start here. The usual loop: write the design, check its syntax, " +
         "simulate it with a testbench, and only then run the RTL-to-GDS flow, which takes minutes rather than seconds.</p>" +
         "<div class='ide-start-acts'>" +
@@ -1961,7 +1966,7 @@ function setSimBusy(busy) {
 function setLintBusy(busy) {
   state.linting = !!busy;
   const b = document.getElementById("ide-lint");
-  if (b) { b.disabled = !!busy; b.textContent = busy ? "Checking…" : "Check syntax"; }
+  if (b) { b.disabled = !!busy || !state.designDir; b.textContent = busy ? "Checking…" : "Check syntax"; }
   document.querySelector("#ide-diags [data-pb='lint']")?.toggleAttribute("disabled", !!busy);
 }
 

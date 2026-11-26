@@ -38,6 +38,7 @@ import { singleKeysOn } from "./prefs.js";
 import * as SM from "./studymodel.js";
 import * as SQ from "./studyqueue.js";
 import { runVerdict, failedWhere, checkVerdict } from "./verdict.js";
+import { pageEmpty, emptyInner } from "./empty.js";
 
 // The last step of a stage in the Classic flow (matches setup.js's --to).
 function lastStepOfStage(stageId) {
@@ -783,7 +784,7 @@ export async function renderRuns({ cached = false } = {}) {
   const foot = document.getElementById("rn-foot");
   if (runs === null) {
     wrap.hidden = true; empty.hidden = false; if (foot) foot.hidden = true;
-    empty.innerHTML = "<h3>Couldn't load your runs</h3><p>LanEx didn't answer in time. Trying again…</p>";
+    empty.innerHTML = emptyInner({ icon: "refresh", title: "Couldn't load your runs", body: "LanEx didn't answer in time. Trying again…" });
     setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000);
     return;
   }
@@ -798,10 +799,9 @@ export async function renderRuns({ cached = false } = {}) {
   syncSide();
   if (!runs.length) {
     wrap.hidden = true; empty.hidden = false; if (foot) foot.hidden = true;
-    empty.innerHTML = state.designDir || scope === "all"
-      ? "<h3>No runs yet</h3><p>Run the flow once and every run appears here, one row each, with its timing, area, power and checks.</p>" +
-        "<button class='btn btn-primary' data-go='setup'>Go to Setup</button>"
-      : "<h3>Open a project first</h3><p>Runs lists the runs of the project you have open.</p><button class='btn btn-primary' data-go='setup'>Go to Setup</button>";
+    empty.innerHTML = pageEmpty(state.designDir || scope === "all" ? "noRuns" : "noProject", { icon: "clock", body: {
+      noRuns: "Run the flow once and every run appears here, one row each, with its timing, area, power and checks.",
+      noProject: "Runs lists every run of the project you have open, with its timing, area, power and checks." }, inner: true });
     _visible = [];
     syncSelection();
     return;

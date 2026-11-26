@@ -17,6 +17,7 @@
 import { api } from "./api.js";
 import { state, safeStorage } from "./state.js";
 import { toast } from "./toast.js";
+import { emptyHtml as sharedEmpty } from "./empty.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 import * as M from "./cells-model.js";
@@ -1038,9 +1039,9 @@ function fallbackCopy(text, done) {
   t.remove();
 }
 
+// The one empty block (empty.js), with Cells' icon.
 function emptyHtml(title, body, go, label) {
-  return "<div class='empty'><span class='ico'>" + icon("layers", { size: 40 }) + "</span><h3>" + esc(title) + "</h3><p>" + esc(body) + "</p>" +
-    (go ? "<button class='btn btn-primary' data-go='" + go + "'>" + esc(label) + "</button>" : "") + "</div>";
+  return sharedEmpty({ icon: "layers", title, body, action: go ? { label, go } : null });
 }
 
 // "/" focuses the cell search while the tab is open.

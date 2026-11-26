@@ -40,6 +40,7 @@ import { NET_COLORS, POWER_COLORS, CLOCK_COLOR, PATH_COLOR, cleanName, normalise
 import { startCoach } from "./coach.js";
 import { getPref, setPref as setAppPref } from "./prefs.js";
 import * as MF from "./metricfmt.js";
+import { showEmpty, setRunBarActions } from "./empty.js";
 
 const BG = { dark: "#06080d", light: "#ffffff" };
 // The census uses the Cells tab's categories (one taxonomy: the server's
@@ -201,9 +202,13 @@ async function loadRuns() {
   if (!runs.length && ctx.runsLoadFailed()) return;
   const tag = ctx.contextRun();
   const empty = !runs.length || !tag;
-  $("lx-empty").hidden = !empty;
+  if (empty) showEmpty($("lx-empty"), state.designDir ? "noRuns" : "noProject", { icon: "grid", body: {
+    noRuns: "Run the flow once and your chip shows up here: the floorplan, the placed cells, the clock tree, the routed wires and the final GDS, layer by layer.",
+    noProject: "Layout shows the chip of the project you have open, layer by layer: the floorplan, the placed cells, the clock tree, the routed wires and the final GDS." } });
+  else $("lx-empty").hidden = true;
   $("lx-page").hidden = empty;
-  for (const id of ["lx-openin", "lx-save", "lx-cmd"]) { const el = $(id); if (el) el.closest(".lx-split").hidden = empty; }
+  // The run-bar actions (3D view, Open in, Save image, Command) act on a run: off while there is none.
+  setRunBarActions(document.querySelector("#sec-layout .an-runbar"), !empty);
   if (empty) {
     S.tag = ""; S.design = "";
     setRunFilesTag("");

@@ -31,6 +31,7 @@ import { wireTips } from "./analytics-charts.js";
 import { problemsOf, onProblems, problemForCheck, fixListHtml } from "./problems.js";
 import { timingDiagHtml, drcDiagHtml } from "./verify-diag.js";
 import "./fixsheet.js";
+import { showEmpty, setRunBarActions } from "./empty.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -165,13 +166,18 @@ async function render() {
   // as it is; context.js retries and the page repaints when runs arrive.
   if (!runs.length && ctx.runsLoadFailed()) return;
   const empty = document.getElementById("vf-empty");
+  const bar = document.querySelector("#sec-verify .an-runbar");
   if (!runs.length || !ctx.contextRun()) {
     body.classList.add("is-empty");
-    empty.hidden = false;
+    showEmpty(empty, state.designDir ? "noRuns" : "noProject", { icon: "check", body: {
+      noRuns: "Run the flow once and this page shows whether the layout passes sign-off: timing in every corner, design rules, LVS, antenna and power, each judged the way LibreLane judges it.",
+      noProject: "Verify shows whether a run's layout passes sign-off, for the project you have open: timing in every corner, design rules, LVS, antenna and power." } });
+    setRunBarActions(bar, false);
     return;
   }
   body.classList.remove("is-empty");
   empty.hidden = true;
+  setRunBarActions(bar, true);
   if (ctx.contextRun() !== _tag) _open.clear();
   await selectRun(ctx.contextRun());
 }

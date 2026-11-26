@@ -22,6 +22,7 @@ import { createFloorplanCanvas } from "./floorplan-canvas.js";
 import * as P from "./macro-place.js";
 import { uploadFile, fmtBytes } from "./uploader.js";
 import { forgetPreflight } from "./preflight.js";
+import { emptyHtml, EMPTY_WORDS } from "./empty.js";
 
 const esc = M.esc;
 let C = null;        // context from cells.js
@@ -39,7 +40,7 @@ export async function renderMacros(ctx) {
   const host = document.getElementById("cl-macros-body");
   if (!host) return;
   if (!state.designDir) {
-    host.innerHTML = "<div class='an-none'>Open a project first. Macros belong to a project: they are listed in its folder and used by its runs.</div>";
+    host.innerHTML = emptyHtml({ icon: "cube", title: EMPTY_WORDS.noProject.title, body: "Macros belong to a project: they are listed in its folder and used by its runs.", action: EMPTY_WORDS.noProject.action });
     setMacroTile(0, 0);
     return;
   }

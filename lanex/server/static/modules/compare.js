@@ -20,6 +20,7 @@ import { verdictOfRun } from "./verdict.js";
 import { openLayer, closeLayer, isLayerOpen } from "./overlay.js";
 import { toast } from "./toast.js";
 import * as MF from "./metricfmt.js";
+import { pageEmpty } from "./empty.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 // Up to twelve runs: every point of a typical sweep. At 1366 px twelve
@@ -49,7 +50,9 @@ export async function renderCompare() {
   try { _runs = await gatherRunsScoped("all"); } catch (_e) { _runs = state.runs || []; }
   _runs = _runs.filter((r) => r.run_dir);
   if (!_runs.length) {
-    root.innerHTML = "<div class='empty'><h3>No runs to compare</h3><p>Finish at least two runs, then come back.</p></div>";
+    root.innerHTML = pageEmpty(state.designDir ? "noRuns" : "noProject", { icon: "diff", body: {
+      noRuns: "Finish at least two runs, then put them side by side here: every number, setting and layout.",
+      noProject: "Compare puts runs side by side, from any design you have opened. Open a project and run it first." } });
     return;
   }
   await Promise.all([...new Set(_runs.map((r) => normDir(r._design)))].map((d) => ensureProjectMeta(d)));
