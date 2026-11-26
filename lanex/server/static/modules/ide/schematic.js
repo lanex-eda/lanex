@@ -116,8 +116,9 @@ export function netlistToGraph(json, modName, { cone = null } = {}) {
     const labelW = Math.max(title.length, sub.length) * CH;
     const portW = Math.max(0, ...ins.map((p) => p.length), 0) * 6 + Math.max(0, ...outs.map((p) => p.length)) * 6;
     const w = shape === "op" ? Math.max(42, title.length * 9 + 22) : shape === "mux" ? 42 : Math.max(64, labelW + 20, portW + 28);
-    const h = Math.max(shape === "op" ? 34 : 40, n * 18 + (shape === "inst" ? 30 : 14));
-    nodes.push({ id, kind: "cell", w, h, ins, outs });
+    const head = shape === "inst" ? 34 : shape === "box" || shape === "ff" ? 18 : 0;
+    const h = Math.max(shape === "op" ? 34 : 40, n * 18 + head + 8);
+    nodes.push({ id, kind: "cell", w, h, ins, outs, padTop: head });
     const width = Math.max(1, ...outs.map((p) => (conns[p] || []).length));
     meta.set(id, { kind: "cell", shape, name: cname.replace(/^\\/, ""), hidden: !!c.hide_name, type: c.type, title, sub,
       src: c.attributes && c.attributes.src, width, module: shape === "inst" && json.modules[c.type] ? c.type : null, ins, outs });
@@ -379,12 +380,12 @@ async function draw() {
   paintMsg("");
   document.getElementById("sch-msg").hidden = true;
   render();
-  fit();
   const cut = g.stats.cut ? " · " + g.stats.cut + " more drivers not drawn" : "";
   foot("<span class='sch-stat'>" + esc(moduleLabel(cur.mod, S.netlist.modules[cur.mod])) + " · " + ncell + (ncell === 1 ? " cell" : " cells") +
-    " · read in " + (S.builtMs / 1000).toFixed(1) + " s, laid out in " + lay.ms + " ms" + cut + "</span>" +
+    (S.builtMs ? " · read in " + (S.builtMs / 1000).toFixed(1) + " s" : " · read before, unchanged") + ", laid out in " + lay.ms + " ms" + cut + "</span>" +
     (S.cone ? "<button class='btn btn-ghost btn-sm' data-sch='whole'>Whole module</button>" : "") +
     "<span class='ide-spacer'></span><button class='btn btn-ghost btn-sm' data-sch='copy' title='" + esc(S.command) + "'>Copy Yosys command</button>");
+  fit(true);
 }
 
 function layoutAsync(graph, useWorker) {
@@ -612,16 +613,19 @@ function stageSize() {
   return { w: st.clientWidth || 800, h: st.clientHeight || 400 };
 }
 
-export function fit() {
+// Show the whole module, never bigger than reading size. On a first draw
+// (`readable`) a module too big to read whole starts at its inputs instead.
+export function fit(readable = false) {
   if (!S.layout) return;
   const { w, h } = stageSize();
-  const s = Math.min(2, Math.max(0.05, Math.min((w - 40) / S.layout.width, (h - 40) / S.layout.height)));
-  // a huge module would fit as dust: start readable at its inputs instead
-  S.view.s = Math.max(s, S.layout.width * s < w * 0.25 ? s : Math.min(s, 1));
-  if (S.view.s < 0.35 && S.graph.nodes.length > 60) S.view.s = 0.55;
-  S.view.tx = S.view.s === s ? (w - S.layout.width * s) / 2 : 20;
-  S.view.ty = S.view.s === s ? (h - S.layout.height * s) / 2 : 20;
+  const s = Math.max(0.02, Math.min(1.25, (w - 40) / S.layout.width, (h - 40) / S.layout.height));
+  S.view = { s, tx: (w - S.layout.width * s) / 2, ty: (h - S.layout.height * s) / 2 };
   applyView();
+  // Too small to read whole: say how to get in (the overview stays honest).
+  const stat = document.querySelector("#sch-foot .sch-stat");
+  if (readable === true && stat && s < 0.3) {
+    stat.textContent += " · too small to read whole: wheel to zoom in, or Find a signal to draw only what drives it";
+  }
 }
 
 function zoomBy(f, cx, cy) {

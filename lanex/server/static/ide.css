@@ -635,7 +635,7 @@ body.theme-light .rf-chip.is-write { color: var(--accent); }
 body.theme-light .sr-k { color: var(--accent); }
 .sr-v { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; }
 .sr-v > .inp { flex: 1 1 260px; max-width: 520px; min-height: 30px; padding: 4px 9px; font-family: var(--mono); font-size: 12.5px; }
-.sr-v select { min-height: 30px; padding: 4px 30px 4px 8px; font-size: 13px; }
+.sr-v select { width: auto; min-width: 180px; max-width: 260px; min-height: 30px; padding: 4px 30px 4px 8px; font-size: 13px; }
 .sr-params { display: flex; flex-wrap: wrap; gap: 8px; }
 .sr-param { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); overflow: hidden; }
 .sr-param span { padding: 0 8px; font-family: var(--mono); font-size: 12px; color: var(--text-muted); border-right: 1px solid var(--border); background: var(--surface-2); line-height: 28px; }

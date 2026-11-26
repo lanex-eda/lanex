@@ -28,11 +28,13 @@ const SWEEPS = 8;
 
 export function portOffsets(n) {
   // Ports spread over the node's side, PORT_GAP apart, centred.
+  // A node with a header (a submodule's name) keeps its ports below it.
   const ins = n.ins || [], outs = n.outs || [];
+  const pad = n.padTop || 0;
   const off = {};
   const side = (list, h) => {
     const span = (list.length - 1) * PORT_GAP;
-    const top = (h - span) / 2;
+    const top = pad + (h - pad - span) / 2;
     list.forEach((p, i) => { off[p] = top + i * PORT_GAP; });
   };
   side(ins, n.h);

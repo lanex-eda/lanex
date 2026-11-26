@@ -225,7 +225,9 @@ class FileIndex:
                 lo = mid + 1
             else:
                 hi = mid
-        for i in (lo - 1, lo):
+        # the token under the cursor, else the word that ends right at it
+        # (the cursor after "held" in "held;" sits on the ";" token)
+        for i in (lo - 1, lo - 2, lo):
             if 0 <= i < len(toks):
                 k, t, o = toks[i]
                 if k in ("id", "dir", "sys") and o <= off <= o + len(t):

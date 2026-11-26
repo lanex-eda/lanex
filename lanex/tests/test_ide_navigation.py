@@ -161,6 +161,14 @@ def test_references_skip_comments_and_count_outside_uses(proj: Path):
     assert {(o["rel"], o["tag"]) for o in r["results"]} >= {("src/acc_top.v", "connection in u_add"), ("src/adder.v", "declared")}
 
 
+def test_a_cursor_just_after_a_name_still_names_it(proj: Path):
+    """F12 selects the name it jumps to, so the cursor ends right after it:
+    "held|;" must still be held, not the semicolon."""
+    idx = hdlindex.get(proj, wait=5)
+    line, col = _at(idx, "src/acc_top.v", "held;", 4)
+    assert hdlindex.references(idx, "src/acc_top.v", line, col)["name"] == "held"
+
+
 def test_unsaved_tabs_are_what_the_answers_read(proj: Path):
     idx = hdlindex.get(proj, wait=5)
     edited = TOP.replace("reg  [W-1:0] held;", "reg  [W-1:0] held;\n    reg  [W-1:0] extra;")
