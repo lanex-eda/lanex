@@ -3498,13 +3498,31 @@ def h_warnings_waive(handler: Any) -> None:
     note, by, expect_count, id?}, mtime}`` (``mtime`` from the page's last read,
     so two windows can't overwrite each other)."""
     from ..controller import runwarnings
-    _waiver_write(handler, lambda d, b: runwarnings.save_waiver(d, b.get("entry") or {}, mtime=b.get("mtime")))
+    _waiver_write(handler, lambda d, b: runwarnings.save_waiver(
+        d, b.get("entry") or {}, mtime=b.get("mtime"), run_dir=_resolve_run_dir(b.get("tag")) if b.get("tag") else None))
 
 
 def h_warnings_unwaive(handler: Any) -> None:
     """Remove a waiver: POST ``{id, mtime}``."""
     from ..controller import runwarnings
     _waiver_write(handler, lambda d, b: runwarnings.remove_waiver(d, str(b.get("id") or ""), mtime=b.get("mtime")))
+
+
+def h_verify_summary(handler: Any) -> None:
+    """The sign-off report's data without writing files (``?tag=&base=``):
+    the share card draws its numbers from it, so card and report agree."""
+    from ..controller import signoff
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else None
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        _respond(handler, signoff.build(run_dir, design_dir=_get_active_design_dir(),
+                                        base_dir=_base_run_dir(handler), hashes=False))
+    except Exception as ex:
+        _log.exception("sign-off summary failed")
+        _respond(handler, f"Couldn't read this run's results: {ex}", 500)
 
 
 def h_verify_report(handler: Any) -> None:
@@ -5213,6 +5231,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/run-export", h_run_export),
     ("/api/verify/rerun", h_verify_rerun),
     ("/api/verify/report", h_verify_report),
+    ("/api/verify/summary", h_verify_summary),
     ("/api/verify", h_verify),
     ("/api/compare", h_compare),
     ("/api/cell-usage", h_cell_usage),
@@ -5406,7 +5425,7 @@ _GET_ROUTES = {
     "/api/reports/drc", "/api/reports/lvs", "/api/fs/roots", "/api/fs/list", "/api/walk-sources",
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
     "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
-    "/api/timing/paths", "/api/timing/path", "/api/warnings",
+    "/api/timing/paths", "/api/timing/path", "/api/warnings", "/api/verify/summary",
 }
 # A route in none of the sets keeps the old answer-anything behaviour, so a
 # route added elsewhere never breaks at run time; the test names it instead.

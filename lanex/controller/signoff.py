@@ -120,6 +120,17 @@ def _sha256(p: Path, limit: Optional[int] = None) -> Optional[str]:
     return h.hexdigest()
 
 
+def _when(iso: Any) -> str:
+    """``2026-11-26T11:56:22+05:30`` -> ``26 Nov 2026, 11:56 (UTC+05:30)``."""
+    try:
+        d = _dt.datetime.fromisoformat(str(iso))
+    except (TypeError, ValueError):
+        return str(iso or "")
+    off = d.strftime("%z")
+    zone = f" (UTC{off[:3]}:{off[3:]})" if off else ""
+    return d.strftime("%d %b %Y, %H:%M").lstrip("0") + zone
+
+
 def _rel(run_dir: Path, p: Path) -> str:
     try:
         return p.relative_to(run_dir).as_posix()
@@ -240,10 +251,12 @@ def _path_summary(run_dir: Path, kind: str, base_dir: Optional[Path]) -> Optiona
 
 
 def build(run_dir: str | Path, *, design_dir: Optional[str | Path] = None, base_dir: Optional[str | Path] = None,
-          verdict: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+          verdict: Optional[Dict[str, Any]] = None, hashes: bool = True) -> Dict[str, Any]:
     """The report data. *verdict* is Verify's own words for this run
     (``{tone, title, sub}`` from verify-model.js), so the file says exactly
-    what the screen says; without it the server's run verdict label is used."""
+    what the screen says; without it the server's run verdict label is used.
+    ``hashes=False`` skips the SHA-256 of the files (the share card needs the
+    numbers only)."""
     run_dir = Path(run_dir).resolve()
     base = Path(base_dir).resolve() if base_dir else None
     rep = verify.verify_report(run_dir)
@@ -265,7 +278,7 @@ def build(run_dir: str | Path, *, design_dir: Optional[str | Path] = None, base_
     gds = sorted((run_dir / "final" / "gds").glob("*.gds")) if (run_dir / "final" / "gds").is_dir() else []
     gds_info = None
     if gds:
-        gds_info = {"path": _rel(run_dir, gds[0]), "size": gds[0].stat().st_size, "sha256": _sha256(gds[0])}
+        gds_info = {"path": _rel(run_dir, gds[0]), "size": gds[0].stat().st_size, "sha256": _sha256(gds[0]) if hashes else None}
     cmd = gui.get("cli_command") or {}
     if isinstance(cmd, dict):
         cmd = cmd.get(cmd.get("recommended") or "container") or cmd.get("local") or ""
@@ -339,7 +352,7 @@ def build(run_dir: str | Path, *, design_dir: Optional[str | Path] = None, base_
                               "note": g["waivers"][0]["note"], "by": g["waivers"][0]["by"], "date": g["waivers"][0]["date"]}
                              if g.get("waivers") else None)}
                  for g in w["groups"]]
-    file_rows = [{"path": rel, "size": p.stat().st_size, "sha256": _sha256(p)} for rel, p in sorted(files.items())]
+    file_rows = [{"path": rel, "size": p.stat().st_size, "sha256": _sha256(p) if hashes else None} for rel, p in sorted(files.items())]
     try:
         from .. import _version
         lanex_v = _version.get_version()
@@ -426,14 +439,14 @@ def render_md(r: Dict[str, Any]) -> str:
     ov = ", ".join(f"{k}={val}" for k, val in (idn.get("overrides") or {}).items()) or "none"
     rows = [
         ["Design", f"{idn['design']}"],
-        ["Run", f"{idn['run']}" + (f" · finished {idn['finished']}" if idn.get("finished") else "") + (f" · {idn['steps']} steps" if idn.get("steps") else "")],
+        ["Run", f"{idn['run']}" + (f" · finished {_when(idn['finished'])}" if idn.get("finished") else "") + (f" · {idn['steps']} steps" if idn.get("steps") else "")],
         ["PDK", f"{idn['pdk'] or '—'}" + (f" · open_pdks {idn['pdk_commit'][:12]}" if idn.get("pdk_commit") else "") + (f" · library {idn['scl']}" if idn.get("scl") else "")],
         ["Flow", f"LibreLane {idn['librelane'] or '?'}, {idn['flow']} flow"],
         ["Engine", (idn.get("engine") or "—") + (f" `{idn['image']}`" if idn.get("image") else "")],
         ["Configuration", (f"`{idn['config_file']}`" if idn.get("config_file") else "—") + (f", SHA-256 `{idn['config_sha256']}`" if idn.get("config_sha256") else "") + f" · overrides: {ov}"],
         ["Command", f"`{idn['command']}`" if idn.get("command") else "—"],
         ["Layout", (f"`{idn['gds']['path']}`, {fmt_n(idn['gds']['size'])} bytes, SHA-256 `{idn['gds']['sha256']}`") if idn.get("gds") else "no final GDS"],
-        ["Written by", f"LanEx {idn['lanex']} on {r['generated_at']}"],
+        ["Written by", f"LanEx {idn['lanex']} on {_when(r['generated_at'])}"],
     ]
     L += _table(["", ""], rows) + [""]
     L += ["## Checks", ""]
@@ -524,9 +537,9 @@ def render_md(r: Dict[str, Any]) -> str:
 
 # ---------------------------------------------------------------- HTML
 _CSS = """
-:root{--bg:#06080d;--bg2:#0a0e16;--surface:#0e1420;--surface2:#131b2a;--border:#1f2a3b;--border2:#2c3c55;
---text:#e6edf7;--muted:#8a9bb3;--accent:#4f8cff;--pass:#3ecf8e;--warn:#f0b429;--fail:#ff5d5d;
---poly:#d4544c;--li:#9a63d8;--m1:#4f8cff;--m2:#3ecf8e;--m3:#f0b429;--m4:#ff8a3d;--m5:#e05cb0}
+:root{--bg:#06080d;--bg2:#04060a;--surface:#0e131c;--surface2:#131b28;--border:#1f2a3b;--border2:#33445e;
+--text:#c2cee0;--strong:#f2f7ff;--muted:#7e8ea7;--accent:#4da3ff;--pass:#36d399;--warn:#f2c14e;--fail:#ff6b70;
+--poly:#d6446f;--li:#8ea6c4;--m1:#4da3ff;--m2:#e879c9;--m3:#36d399;--m4:#f2c14e;--m5:#ff7a45}
 *{box-sizing:border-box}html{background:var(--bg)}
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Barlow,"Segoe UI",system-ui,sans-serif;
 background-image:linear-gradient(rgba(31,42,59,.28) 1px,transparent 1px),linear-gradient(90deg,rgba(31,42,59,.28) 1px,transparent 1px);background-size:24px 24px}
@@ -550,8 +563,12 @@ code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px}
 .idt code{word-break:break-all}.bad{color:var(--fail)}.wn{color:var(--warn)}.ok{color:var(--pass)}.mut{color:var(--muted)}
 .fold td{color:var(--muted);font-style:italic}.chip{display:inline-block;padding:1px 7px;border:1px solid var(--border2);border-radius:4px;font-size:11px;font-family:"JetBrains Mono",monospace}
 ul{margin:6px 0;padding-left:20px}.foot{margin-top:40px;color:var(--muted);font-size:13px}
-.chipimg{float:right;margin:0 0 12px 18px;width:220px;border:1px solid var(--border2);border-radius:6px;box-shadow:0 0 24px rgba(79,140,255,.18)}
-@media print{:root{--bg:#fff;--bg2:#f2f4f8;--surface:#fff;--surface2:#fff;--border:#d5dbe5;--border2:#b9c3d3;--text:#111;--muted:#5a6677}
+.top{display:grid;grid-template-columns:minmax(0,1fr) 200px;gap:18px;align-items:start;margin-bottom:18px}
+.top.no-chip{grid-template-columns:minmax(0,1fr)}
+.chipimg{display:block;width:200px;height:auto;border:1px solid var(--border2);border-radius:6px;box-shadow:0 0 24px rgba(77,163,255,.18)}
+h1,h2,h3,.verdict b,b{color:var(--strong)}
+@media (max-width:720px){.top{grid-template-columns:1fr}.chipimg{width:160px}}
+@media print{:root{--bg:#fff;--bg2:#f2f4f8;--surface:#fff;--surface2:#fff;--border:#d5dbe5;--border2:#b9c3d3;--text:#111;--strong:#000;--muted:#5a6677;--pass:#16794b;--warn:#8a5a00;--fail:#b3261e}
 body{background:#fff;background-image:none;font-size:11pt}.verdict{box-shadow:none}tr{break-inside:avoid}h2{break-after:avoid}.chipimg{box-shadow:none}}
 """
 
@@ -596,20 +613,21 @@ def render_html(r: Dict[str, Any], *, fonts_dir: Optional[Path] = None, chip_png
                     f"<title>{_e(title)}</title><style>{_fonts_css(fonts_dir)}{_CSS}</style></head><body><div class='wrap'>"]
     H.append(f"<div class='eyebrow'>LanEx sign-off summary · {_e(idn['pdk'] or '')}</div><h1>{_e(idn['design'] or 'design')} · run {_e(idn['run'])}</h1><div class='hair'></div>")
     H.append(f"<div class='disc'><b>Not a foundry sign-off.</b> {_e(r['not_signoff'].split('. ', 1)[1])}</div>")
-    if chip_png:
-        H.append("<img class='chipimg' alt='The final layout' src='data:image/png;base64," + base64.b64encode(chip_png).decode("ascii") + "'>")
-    H.append(f"<div class='verdict {tone}'><span class='via'></span><div><b>{_e(v['title'])}</b><p>{_e(v.get('sub') or '')}</p></div></div>")
+    verdict = f"<div class='verdict {tone}'><span class='via'></span><div><b>{_e(v['title'])}</b><p>{_e(v.get('sub') or '')}</p></div></div>"
+    chip = ("<img class='chipimg' alt='The final layout of " + _e(idn["design"] or "the design") + "' src='data:image/png;base64,"
+            + base64.b64encode(chip_png).decode("ascii") + "'>") if chip_png else ""
+    H.append(f"<div class='top{'' if chip else ' no-chip'}'>{verdict}{chip}</div>")
     ov = ", ".join(f"{k}={val}" for k, val in (idn.get("overrides") or {}).items()) or "none"
     idrows = [
         ("Design", _e(idn["design"])),
-        ("Run", _e(idn["run"]) + (f" · finished {_e(idn['finished'])}" if idn.get("finished") else "") + (f" · {_e(idn['steps'])} steps" if idn.get("steps") else "")),
+        ("Run", _e(idn["run"]) + (f" · finished {_e(_when(idn['finished']))}" if idn.get("finished") else "") + (f" · {_e(idn['steps'])} steps" if idn.get("steps") else "")),
         ("PDK", _e(idn["pdk"] or "—") + (f" · open_pdks <code>{_e(idn['pdk_commit'][:12])}</code>" if idn.get("pdk_commit") else "") + (f" · library {_e(idn['scl'])}" if idn.get("scl") else "")),
         ("Flow", f"LibreLane {_e(idn['librelane'] or '?')}, {_e(idn['flow'])} flow"),
         ("Engine", _e(idn.get("engine") or "—") + (f" <code>{_e(idn['image'])}</code>" if idn.get("image") else "")),
         ("Configuration", (f"<code>{_e(idn['config_file'])}</code>" if idn.get("config_file") else "—") + (f", SHA-256 <code>{_e(idn['config_sha256'])}</code>" if idn.get("config_sha256") else "") + f" · overrides: {_e(ov)}"),
         ("Command", f"<code>{_e(idn['command'])}</code>" if idn.get("command") else "—"),
         ("Layout", (f"<code>{_e(idn['gds']['path'])}</code>, {fmt_n(idn['gds']['size'])} bytes, SHA-256 <code>{_e(idn['gds']['sha256'])}</code>") if idn.get("gds") else "no final GDS"),
-        ("Written by", f"LanEx {_e(idn['lanex'])} on {_e(r['generated_at'])}"),
+        ("Written by", f"LanEx {_e(idn['lanex'])} on {_e(_when(r['generated_at']))}"),
     ]
     H.append("<table class='idt'><tbody>" + "".join(f"<tr><td>{k}</td><td>{val}</td></tr>" for k, val in idrows) + "</tbody></table>")
     sc = {"pass": "ok", "fail": "bad", "warn": "wn"}
@@ -696,7 +714,7 @@ def render_html(r: Dict[str, Any], *, fonts_dir: Optional[Path] = None, chip_png
         [("File", False), ("Bytes", True), ("SHA-256", False)],
         [[(f"<code>{_e(f['path'])}</code>", ""), (fmt_n(f["size"]), "n"), (f"<span class='src'>{_e(f['sha256'])}</span>", "")] for f in r["files"]]))
     H.append("<h2>What this report does not cover</h2><ul>" + "".join(f"<li>{_e(x)}</li>" for x in r["not_covered"]) + "</ul>")
-    H.append(f"<p class='foot'>Written by LanEx {_e(idn['lanex'])} on {_e(r['generated_at'])} from the run folder’s own files. "
+    H.append(f"<p class='foot'>Written by LanEx {_e(idn['lanex'])} on {_e(_when(r['generated_at']))} from the run folder’s own files. "
              "LanEx is not affiliated with or endorsed by LibreLane.</p></div></body></html>")
     return "\n".join(H)
 

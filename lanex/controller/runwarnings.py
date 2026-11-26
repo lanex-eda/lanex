@@ -437,9 +437,12 @@ def _check_mtime(cur: Dict[str, Any], mtime: Optional[int]) -> None:
                                                " Fix the file first; LanEx won't overwrite it."))
 
 
-def save_waiver(design_dir: str | Path, entry: Dict[str, Any], *, mtime: Optional[int] = None) -> Dict[str, Any]:
+def save_waiver(design_dir: str | Path, entry: Dict[str, Any], *, mtime: Optional[int] = None,
+                run_dir: Optional[str | Path] = None) -> Dict[str, Any]:
     """Add a waiver, or replace the one with the same ``id``. Returns the new
-    :func:`load_waivers`. Raises :class:`WaiverError` with words for the user."""
+    :func:`load_waivers`. Raises :class:`WaiverError` with words for the user.
+    ``expect_count: "auto"`` with *run_dir*: the number of that run's messages
+    this waiver matches ("ask again if the count changes")."""
     if not design_dir or not Path(design_dir).is_dir():
         raise WaiverError("Open the project first: waivers are saved in the project folder.")
     cur = load_waivers(design_dir)
@@ -460,6 +463,9 @@ def save_waiver(design_dir: str | Path, entry: Dict[str, Any], *, mtime: Optiona
          "match": match, "step": step, "reason": reason, "note": note, "by": str(entry.get("by") or "").strip()[:80],
          "date": str(entry.get("date") or _dt.date.today().isoformat()),
          "expect_count": int(exp) if isinstance(exp, int) or (isinstance(exp, str) and exp.isdigit()) else None}
+    if exp == "auto":
+        w["expect_count"] = (sum(1 for r in collect(run_dir) if waiver_matches(w, r))
+                             if run_dir and Path(run_dir).is_dir() else None)
     entries = list(cur["entries"])
     if w["id"] and any(e["id"] == w["id"] for e in entries):
         entries = [w if e["id"] == w["id"] else e for e in entries]

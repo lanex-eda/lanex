@@ -1093,5 +1093,5 @@ def path_detail(run_dir: str | Path, *, kind: str = "setup", corner: Optional[st
             except OSError:
                 base = None
     p.update(ok=True, i=i, corner=corner, analysis=kind, source=_rel_in(run_dir, report), line=line,
-             others=others, base=base)
+             others=others, base=base, text=text[:300_000])
     return p
