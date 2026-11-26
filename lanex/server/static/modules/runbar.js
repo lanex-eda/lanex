@@ -19,6 +19,7 @@ import * as ctx from "./context.js";
 import { fmtDur } from "./reportcard.js";
 import { verdictOfRun, runVerdict } from "./verdict.js";
 import { openLayer, closeLayer } from "./overlay.js";
+import * as MF from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(String(s ?? ""));
 let _seq = 0;
@@ -250,7 +251,8 @@ function optionHtml(id, it, i) {
   const facts = [v.word];
   if (r.wall_time_s != null && v.cls !== "run") facts.push(dur(r.wall_time_s));
   const ws = r.key_metrics && r.key_metrics.timing__setup__ws;
-  if (typeof ws === "number" && Number.isFinite(ws) && Math.abs(ws) < 1e20) facts.push("setup " + (ws >= 0 ? "+" : "") + ws.toFixed(2) + " ns");
+  // Through the one formatter (metricfmt.js), as Runs and Compare show it.
+  if (typeof ws === "number" && Number.isFinite(ws) && Math.abs(ws) < 1e20) facts.push("setup " + MF.show("timing__setup__ws", ws, { compact: true }).text + " ns");
   const tags = (it.newest ? "<span class='rb-tag is-new'>newest</span>" : "") +
     (it.base ? "<span class='rb-tag'>compared with</span>" : "") +
     (S_projBase(r) ? "<span class='rb-tag is-base'>baseline</span>" : "") +

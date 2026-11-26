@@ -753,7 +753,8 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
       (redo.length ? "<button class='btn btn-ghost btn-sm' data-redo='failed'" + busyT + ">" + icon("play", { size: 13 }) + " " +
         (live.filter((p) => redo.includes(p.tag)).every((p) => p.failed) ? "Rerun " + redo.length + " failed" : "Run " + redo.length + " again") + "</button>" : "") +
       (one ? "<button class='btn btn-ghost btn-sm' data-add" + busyT + ">" + icon("plus", { size: 13 }) + " Add values</button>" : "") +
-      "<button class='btn btn-ghost btn-sm' data-csv>" + icon("download", { size: 13 }) + " Export CSV</button>" +
+      "<button class='btn btn-ghost btn-sm' data-csv title='One row per point, for Excel or LibreOffice'>" + icon("download", { size: 13 }) + " CSV</button>" +
+      "<button class='btn btn-ghost btn-sm' data-json title='The study as recorded, every point with its state, values and numbers'>" + icon("download", { size: 13 }) + " JSON</button>" +
     "</div></div>" + plots + "</div>" +
     resultsHtml(pts, sw, { scale, areaId, failCode });
   const ptOf = (tag) => pts.find((p) => p.tag === tag);
@@ -765,6 +766,7 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
   });
   el.querySelector("[data-sel-sweep]")?.addEventListener("click", (e) => { e.stopPropagation(); selectRuns(runs); });
   el.querySelector("[data-csv]").addEventListener("click", (e) => { e.stopPropagation(); exportSweepCsv(sw, pts, failCode); });
+  el.querySelector("[data-json]").addEventListener("click", (e) => { e.stopPropagation(); exportSweepJson(sw, pts); });
   el.querySelectorAll("[data-redo]").forEach((b) => b.addEventListener("click", (e) => {
     e.stopPropagation();
     continueSweep(sw, { rerun: b.dataset.redo === "left" ? left : redo });
@@ -1000,6 +1002,20 @@ function resultsHtml(pts, sw, { scale, areaId, failCode }) {
 
 // The sweep's results as a CSV: the swept values, how each point ended and
 // every key number, exact (as LibreLane wrote it), in sweep order.
+// The study as JSON: its plan (axes, mode, goal, how it ended) and every
+// point with its values, state words, run and LibreLane's raw numbers.
+function exportSweepJson(sw, pts) {
+  const doc = {
+    format: "lanex-study/1", exported_at: new Date().toISOString(), design: state.designDir || "",
+    study: { id: sw.id, created_at: sw.created_at, axes: sw.axes, mode: sw.mode, goal: sw.goal || null, count: sw.count, ended: sw.ended || null, reruns: sw.reruns || {} },
+    points: byValue(pts, sw.axes || []).map((p) => ({
+      values: p.v || null, run: p.r ? p.tag : null, state: p.key, words: p.word || "", detail: p.detail || "", superseded_by: p.superseded || null,
+      run_dir: p.r ? p.r.run_dir : null, metrics: p.r ? p.r.key_metrics || {} : {}, wall_time_s: p.r ? p.r.wall_time_s : null,
+    })),
+  };
+  import("./csvutil.js").then((m) => m.downloadText("study-" + (sw.id || "results") + ".json", JSON.stringify(doc, null, 1)));
+}
+
 function exportSweepCsv(sw, pts, failCode) {
   const axes = sw.axes || [];
   const head = [...axes.map((a) => a.var), "run", "result", "reason", ...METRICS.map((m) => m.key ? m.key + " (" + (F.unitOf(m.key) === "ratio" ? "fraction" : F.unitOf(m.key)) + ")" : "runtime (s)")];
@@ -1142,7 +1158,8 @@ async function useConfig(p, sw) {
   });
   const change = rows.filter((r) => !r.same);
   if (!change.length) {
-    toast.show("The config already has " + p.tag + "'s settings (" + rows.map((r) => r.k + " = " + asText(r.to)).join(", ") + ").", "info", 9000);
+    toast.show("The config already has " + p.tag + "'s settings (" + rows.map((r) => r.k + " = " + asText(r.to)).join(", ") + ").", "info", 12000,
+      p.r ? { label: "Run it once to check", run: () => checkRun(p) } : null);
     return;
   }
   const v = await customDialog({
@@ -1190,13 +1207,62 @@ async function useConfig(p, sw) {
   const msg = "Saved in " + cfg + ": " + said.join("; ") + "." +
     (stuck.length ? " A pdk:: section of the config still sets " + stuck.join(", ") + " for this PDK: change it there." : "") +
     (shadow.length ? " Setup still has the one-off " + shadow.join(", ") + ", which wins over the config: clear it there." : "");
-  toast.show(msg, stuck.length || shadow.length ? "warn" : "success", 14000, undos.length ? { label: "Undo", run: async () => {
+  const acts = [];
+  if (undos.length) acts.push({ label: "Undo", run: async () => {
     try {
       for (const u of undos.slice().reverse()) await api.configUndo({ backup: u.backup, after: u.after });
       toast.show("The config is back as it was.", "success");
       document.dispatchEvent(new CustomEvent("g:config_changed", { detail: { keys: change.map((r) => r.k), from: "sweep-undo" } }));
     } catch (ex) { toast.show("Undo: " + (ex.message || ex), "warn", 9000); }
-  } } : null);
+  } });
+  // The winner must reproduce (ORFS AutoTuner's best config famously did
+  // not): one plain run from the saved config, its numbers held against the
+  // point's when it ends.
+  if (p.r && !stuck.length && !shadow.length) acts.push({ label: "Run it once to check", run: () => checkRun(p) });
+  toast.show(msg, stuck.length || shadow.length ? "warn" : "success", 14000, acts.length ? acts : null);
+}
+
+// A plain run of the config as saved, through the queue; when it ends, its
+// numbers against the point it should reproduce: "Same numbers as
+// sweep-clk-8" or what differs, with Compare one press away.
+const CHECK_KEYS = [["timing__setup__ws", "setup slack"], ["timing__hold__ws", "hold slack"], ["design__die__area", "die"],
+  ["design__instance__area__stdcell", "std-cell area"], ["power__total", "power"]];
+export async function checkRun(p) {
+  let job;
+  try {
+    const { collectRunPayload } = await import("./setup.js");
+    const base = collectRunPayload();
+    const d = new Date(), pad2 = (x) => String(x).padStart(2, "0");
+    const tag = "check-" + String(p.tag).slice(0, 40) + "-" + pad2(d.getHours()) + pad2(d.getMinutes());
+    const res = await api.queueAdd({ design_dir: state.designDir, spec: { ...base, tag, frm: null, to: null, only: null, skip: [] }, kind: "run", label: "Check of " + p.tag });
+    if (res && res.ok === false) throw new Error(res.reason || "the config check refused it");
+    job = (res && res.jobs && res.jobs[0]) || null;
+    toast.show("Running " + tag + " from the saved config, to check it gives " + p.tag + "'s numbers.", "info", 6000);
+  } catch (ex) { toast.show("The check run didn't start: " + (ex.message || ex), "error", 0); return; }
+  if (!job) return;
+  const design = state.designDir;
+  const onQ = async (e) => {
+    const ev = e.detail || {};
+    const j = ev.type === "queue:job" ? ev.job : (ev.jobs || []).find((x) => x.id === job.id);
+    if (!j || j.id !== job.id || !/^(done|failed|stopped|skipped)$/.test(j.state || "")) return;
+    document.removeEventListener("g:queue", onQ);
+    if (j.state !== "done") { toast.show("The check run " + (j.tag || job.tag || "") + " didn't finish (" + j.state + "): nothing to compare.", "warn", 9000); return; }
+    let runs = [];
+    try { runs = await api.runs(design); } catch (_e) { runs = []; }
+    const r = runs.find((x) => x.tag === j.tag);
+    if (!r) return;
+    const a = (p.r && p.r.key_metrics) || {}, b = r.key_metrics || {};
+    const diffs = [];
+    for (const [k, words] of CHECK_KEYS) {
+      if (typeof a[k] !== "number" || typeof b[k] !== "number") continue;
+      const dl = F.delta(k, b[k], a[k], null);
+      if (dl && !dl.same) diffs.push(words + " " + F.showText(k, a[k]) + " → " + F.showText(k, b[k]));
+    }
+    const cmp = { label: "Compare them", run: async () => { r._design = design; p.r._design = p.r._design || design; (await import("./runs.js")).compareRuns([p.r, r]); } };
+    if (!diffs.length) toast.show("Same numbers as " + p.tag + ": " + r.tag + " reproduces it (setup slack " + F.showText("timing__setup__ws", b.timing__setup__ws) + ").", "success", 12000, cmp);
+    else toast.show("Different from " + p.tag + ": " + diffs.join("; ") + ". Something else changed since it ran (Compare shows what).", "warn", 0, cmp);
+  };
+  document.addEventListener("g:queue", onQ);
 }
 
 export const _test = { parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, typedValue, stillWins, stageLabel: FS.stageLabel };
