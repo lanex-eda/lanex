@@ -162,8 +162,11 @@ def build_sim_command(
         img = image or container_run.image_ref()
         name = container_name or ("ll-sim-" + uuid.uuid4().hex[:12])
         abs_design = str(Path(design_dir).resolve())
-        return [engine, "run", "--rm", "--name", name, "-v", f"{abs_design}:/work",
-                "-w", "/work", img, "bash", "-lc", shell]
+        # As the person, not root: the waveform and the compiled bench land in
+        # the project folder (container_tools.user_flags).
+        from .container_tools import user_flags
+        return ([engine, "run", "--rm", "--name", name] + user_flags(engine)
+                + ["-v", f"{abs_design}:/work", "-w", "/work", img, "bash", "-lc", shell])
     return ["bash", "-lc", shell]
 
 

@@ -62,6 +62,12 @@ shopt -s extglob 2>/dev/null || true
 #   LANEX_MANIFEST=<path> build manifest (image digest, PDK pins) to install
 #                     components against. Default: made from the installed
 #                     LanEx (its pinned image digest, PDK catalog and pins).
+#   LANEX_NO_SUDO=1   install LanEx into your home folder only: no sudo, no
+#                     system packages, no container engine (also chosen by
+#                     itself when sudo needs a password and there is no
+#                     terminal to type it). An administrator installs
+#                     docker.io or Podman later; `lanex doctor` says what is
+#                     missing.
 #   LANEX_NO_UI=1     plain output even in an interactive terminal
 #   LANEX_ASCII=1     interactive installer without Unicode glyphs
 #   LANEX_NO_ANIM=1   skip the intro animation
@@ -133,6 +139,17 @@ setup_privileges() {
    Fix:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash"
         fi
         SUDO=""     # genuinely root (container, WSL root user): fine.
+    elif [ "${LANEX_NO_SUDO:-0}" = "1" ] || { command -v sudo >/dev/null 2>&1 \
+            && ! sudo -n true 2>/dev/null && ! { : </dev/tty; } 2>/dev/null; }; then
+        # No sudo wanted, or sudo needs a password and nobody can type it (no
+        # terminal): never hang on a hidden prompt. Like Homebrew's prefix,
+        # everything goes into the home folder; system packages and the
+        # container engine are an administrator's job.
+        NO_SUDO=1
+        SUDO=""
+        PKG="none"
+        note "Installing LanEx into your home folder only (no sudo): system packages and the"
+        note "container engine are skipped. LanEx itself, its Python tools and the app run as you."
     elif command -v sudo >/dev/null 2>&1; then
         SUDO="sudo"
     else
@@ -343,6 +360,10 @@ gtkwave_is_legacy() {  # the legacy cask's Perl launcher is first on PATH
 }
 
 system_deps() {
+    if [ "${NO_SUDO:-0}" = "1" ]; then
+        note "Skipping system packages (no sudo). LanEx needs Python 3.10+ with venv, which most systems have."
+        return 0
+    fi
     case "$PKG" in
         apt)    apt_stage ;;
         dnf)    dnf_stage ;;
@@ -3019,8 +3040,9 @@ main() {
         [ "$CH_PROFILE" = "custom" ] && die "A custom profile needs its choices: --choices <file>."
     fi
 
-    # A person at a terminal and nothing decided yet: the interactive installer.
-    if [ -z "$profile" ] && [ -z "$choices" ] && ui_capable; then
+    # A person at a terminal and nothing decided yet: the interactive installer
+    # (it asks for the sudo password once; LANEX_NO_SUDO=1 takes the plain path).
+    if [ -z "$profile" ] && [ -z "$choices" ] && [ "${LANEX_NO_SUDO:-0}" != "1" ] && ui_capable; then
         ui_run
         return $?
     fi
@@ -3034,7 +3056,12 @@ main() {
     install_lanex
     expose_on_path
     verify_install
-    if [ -n "$CH_PROFILE" ]; then
+    if [ "${NO_SUDO:-0}" = "1" ]; then
+        # The engine, image and PDKs need an engine an administrator installs.
+        note "Next: ask an administrator to install docker.io (or Podman) and add you to the"
+        note "docker group, then run:  lanex doctor   (it says what is still missing)."
+        note "Without an engine, LanEx's Local tools mode uses tools already on your PATH."
+    elif [ -n "$CH_PROFILE" ]; then
         [ "$CH_PROFILE" = "minimal" ] || stage_components
     else
         prepull_image
