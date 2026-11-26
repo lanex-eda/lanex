@@ -1614,7 +1614,7 @@ function paintKey() {
   const hc = el.querySelector("canvas.lx-heat-hist");
   if (hc) {
     const m = heatMap();
-    if (m) paintHistogram(hc, histogram(m.v, 48, 0, scaleTop(m)), rampName(), light);
+    if (m) paintHistogram(hc, histogram(m.v, 48, 0, scaleTop(m)), rampName(), light, { lo: 0, hi: scaleTop(m), unit: m.unit || "", what: "tiles" });
   }
 }
 
@@ -1863,7 +1863,9 @@ function ovlSectionHtml() {
     "<p class='lx-key-p'>" + esc(meta.unit) + (m.xs && m.xs.length > 1 ? ", " + fmtNum(m.xs[1] - m.xs[0], 2) + " µm tiles" : "") + ".</p>" +
     (layers.length ? "<label class='lx-key-sel'><span>Layer</span><select id='lx-heat-layer'><option value=''>All layers</option>" +
       layers.map((l) => "<option value='" + esc(l) + "'" + (l === S.ovlLayer ? " selected" : "") + ">" + esc(l) + "</option>").join("") + "</select></label>" : "") +
-    "<div class='lx-key-scale'><canvas class='lx-heat-hist' width='480' height='36' aria-hidden='true'></canvas>" +
+    // The histogram says what it counts and in which unit; a bar's hover gives its range and count.
+    "<div class='lx-key-scale'><span class='lx-hist-cap'>Tiles by value" + (m.unit ? " (" + esc(m.unit) + ")" : "") + " · point at a bar for its count</span>" +
+    "<canvas class='lx-heat-hist' width='480' height='36' aria-hidden='true'></canvas>" +
     "<div class='lx-ramp' style='background:" + rampGradient(rampName(), light) + "'></div>" +
     "<div class='lx-ramp-t'><span>0</span><span>" + fmtNum(top / 2) + "</span><span>" + fmtNum(top) + " " + esc(m.unit || "") + "</span></div></div>" +
     (m.unit === "%" ? "<p class='lx-key-over'><i class='lx-hatch' style='background-color:" + rampCss(rampName(), 1, light) + "'></i>" + esc(overWords) + "</p>" : "") +
@@ -2006,26 +2008,23 @@ async function paintClockChart() {
   if (!arr.length) { el.innerHTML = "<p class='muted'>No arrival times (the stage has no constraints).</p>"; return; }
   if (typeof window.echarts === "undefined") await import("./loading.js").then((m) => m.loadECharts()).catch(() => null);
   if (typeof window.echarts === "undefined" || !el.isConnected) { el.innerHTML = "<p class='muted'>The chart needs ECharts.</p>"; return; }
-  const { chartTheme, chartInk } = await import("./theme-echarts.js");
+  // The one histogram (barchart.js histogramOption, Verify's slack chart): a
+  // value axis with its unit, hover per bin, in the clock tree's colour.
+  const { followTheme } = await import("./theme-echarts.js");
+  const { histogramOption } = await import("./barchart.js");
   const lo = Math.min(...arr), hi = Math.max(...arr);
   const n = Math.max(1, Math.min(24, Math.round(Math.sqrt(arr.length) * 2)));
   const w = Math.max((hi - lo) / n, 0.001);
   const counts = new Array(n).fill(0);
   for (const a of arr) counts[Math.min(n - 1, Math.floor((a - lo) / w))] += 1;
-  const k = chartInk();
-  const chart = window.echarts.getInstanceByDom(el) || window.echarts.init(el, null, { renderer: "canvas" });
-  chart.setOption({
-    ...chartTheme(),
-    animation: false,
-    grid: { left: 36, right: 10, top: 10, bottom: 34 },
-    tooltip: { ...chartTheme().tooltip, trigger: "axis", axisPointer: { type: "shadow" },
-      formatter: (ps) => { const i = ps[0].dataIndex; return (lo + i * w).toFixed(3) + "–" + (lo + (i + 1) * w).toFixed(3) + " ns: <b>" + counts[i] + "</b> flip-flops"; } },
-    xAxis: { type: "category", data: counts.map((_c, i) => (lo + (i + 0.5) * w).toFixed(3)), name: "clock arrival (ns)", nameLocation: "middle", nameGap: 22,
-      axisLabel: { color: k.text, fontSize: 10.5, interval: Math.max(0, Math.floor(n / 4) - 1) }, axisTick: { show: false } },
-    yAxis: { type: "value", minInterval: 1, name: "flip-flops", nameTextStyle: { color: k.text, fontSize: 10.5 }, axisLabel: { color: k.text, fontSize: 10.5 },
-      splitLine: { lineStyle: { color: k.grid } } },
-    series: [{ type: "bar", data: counts, barCategoryGap: "12%", itemStyle: { color: CLOCK_COLOR } }],
-  }, true);
+  const edges = Array.from({ length: n + 1 }, (_c, i) => lo + i * w);
+  const opt = histogramOption({ edges, counts, unit: "ns", what: "flip-flops", xname: "clock arrival", color: CLOCK_COLOR });
+  if (!opt) return;
+  opt.animation = false;
+  opt.grid = { left: 4, right: 12, top: 26, bottom: 24, containLabel: true };
+  let chart = window.echarts.getInstanceByDom(el);
+  if (!chart) { chart = window.echarts.init(el, null, { renderer: "canvas" }); followTheme(chart, () => paintClockChart()); }
+  chart.setOption(opt, true);
   chart.resize();
 }
 

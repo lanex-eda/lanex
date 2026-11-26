@@ -34,7 +34,9 @@ function mix(a, b, t) {
 // Bins on a real value axis (ticks at round numbers, no rotated labels). The
 // bins closest to failing are the strongest blue, fading as slack grows; bins
 // holding violators are red. The worst value is marked and named.
-export function histogramOption({ edges, counts, bins, unit = "ns", what = "paths" }) {
+// `xname`: what the x axis measures ("slack", "clock arrival"); `color`: one
+// colour for every bar (a measure with no pass/fail side), else the slack ramp.
+export function histogramOption({ edges, counts, bins, unit = "ns", what = "paths", xname = "slack", color = "" }) {
   counts = (counts || []).map((c) => (finite(c) ? num(c) : 0));
   if (!counts.length) return null;
   if (!edges || edges.length !== counts.length + 1) {
@@ -50,12 +52,12 @@ export function histogramOption({ edges, counts, bins, unit = "ns", what = "path
   const n = counts.length;
   const xMin = edges[0], xMax = edges[n];
   const strongest = k.accent, faint = mix(k.accent, k.surface, 0.62);
-  const colorAt = (i) => (edges[i] < 0 ? k.fail : mix(strongest, faint, n > 1 ? i / (n - 1) : 0));
+  const colorAt = (i) => (color ? color : edges[i] < 0 ? k.fail : mix(strongest, faint, n > 1 ? i / (n - 1) : 0));
   const data = counts.map((c, i) => [edges[i], edges[i + 1], c, i]);
   const range = (i) => fmtValue(edges[i]) + " to " + fmtValue(edges[i + 1], unit);
   // The worst value is already named above the chart; the one line drawn here
   // is zero slack, when violators exist.
-  const marks = xMin < 0 && xMax > 0
+  const marks = !color && xMin < 0 && xMax > 0
     ? [{ xAxis: 0, lineStyle: { color: k.fail }, label: { formatter: "0 " + unit + " · fails to the left", position: "insideEndTop" } }]
     : [];
   return {
@@ -69,7 +71,7 @@ export function histogramOption({ edges, counts, bins, unit = "ns", what = "path
     },
     xAxis: {
       type: "value", min: xMin, max: xMax, splitNumber: 6,
-      name: "slack (" + unit + ")", nameLocation: "middle", nameGap: 26,
+      name: xname + " (" + unit + ")", nameLocation: "middle", nameGap: 26,
       nameTextStyle: { color: k.text, fontSize: 11 },
       axisLine: { show: true, lineStyle: { color: k.grid } }, axisTick: { show: false },
       axisLabel: { ...theme.valueAxis.axisLabel, formatter: (v) => fmtValue(v), hideOverlap: true, showMaxLabel: false },

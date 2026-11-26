@@ -1127,6 +1127,19 @@ check("Z2 menus: every menu, card and drawer is on the overlay stack", () => {
   // A search box with text keeps its Esc (it clears first).
   assert.match(src("overlay.js"), /input\[type=search\]"\) && tg\.value\) return/);
 });
+check("Z2 charts: every ECharts chart follows a theme switch; the clock histogram is the one histogram", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["timing.js", "compare.js", "sweeps.js", "analytics.js", "layout.js"]) {
+    const s = src(f);
+    const inits = (s.match(/echarts\.init\(/g) || []).length;
+    assert.ok(inits > 0, f);
+    assert.equal((s.match(/followTheme\(/g) || []).length >= inits, true, f + ": every echarts.init redraws on a theme switch");
+  }
+  assert.match(src("theme-echarts.js"), /addEventListener\("g:theme_changed"/);
+  assert.match(src("theme.js"), /dispatchEvent\(new CustomEvent\("g:theme_changed"/);
+  assert.match(src("layout.js"), /histogramOption\(\{ edges, counts, unit: "ns", what: "flip-flops", xname: "clock arrival"/);
+  assert.match(src("layoutkey.js"), /cv\.title = cv\._histWords/, "the heat-map histogram has a hover per bar");
+});
 const MRw = await import(toUrl(resolve(MOD, "metricrows.js")));
 check("Z2 every metric: Analytics and Compare draw one row and one filter", () => {
   const src = (f) => readFileSync(resolve(MOD, f), "utf8");

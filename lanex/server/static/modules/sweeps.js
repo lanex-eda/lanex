@@ -1040,6 +1040,8 @@ async function drawCharts(el, sw, pts, scale) {
   host.setAttribute("aria-label", cap.textContent);
   const chart = window.echarts.init(host, null, { renderer: "canvas" });
   chart.setOption(opt);
+  // Drawn with this theme's tokens: a theme switch draws the summary's charts again.
+  import("./theme-echarts.js").then((m) => m.followTheme(chart, () => { if (host.isConnected) drawCharts(el, sw, pts, scale); }));
   // A point on the chart opens its run (the same as its row in the table).
   chart.on("click", (e) => { const p = e.data && e.data.p; const row = p && el.querySelector("tr[data-open='" + CSS.escape(p.tag) + "']"); if (row) row.click(); });
   _sumCharts.get(el).push(chart);

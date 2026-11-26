@@ -171,8 +171,31 @@ export function paintSwatches(root, byId, light = false) {
 
 // The heat map's histogram: one bar per bucket in the ramp's colour, height
 // by the square root of the count (one hot tile still shows).
-export function paintHistogram(cv, counts, ramp = "lanex", light = false) {
+// `range` ({ lo, hi, unit, what }): what a bin holds, for the hover ("40 to
+// 42.5 %: 12 tiles") and the canvas's accessible name.
+export function paintHistogram(cv, counts, ramp = "lanex", light = false, range = null) {
   if (!cv || !counts || !counts.length) return;
+  if (range) {
+    const { lo = 0, hi = 1, unit = "", what = "tiles" } = range;
+    const w = (hi - lo) / counts.length;
+    const f = (x) => (Math.abs(x) >= 100 ? Math.round(x) : Math.round(x * 10) / 10);
+    const words = (i) => f(lo + i * w) + " to " + f(lo + (i + 1) * w) + (unit ? " " + unit : "") + ": " + counts[i] + " " + what;
+    cv._histWords = words;
+    cv.setAttribute("role", "img");
+    cv.removeAttribute("aria-hidden");
+    cv.setAttribute("aria-label", "How many " + what + " have each value, " + f(lo) + " to " + f(hi) + (unit ? " " + unit : "") + "; the most in one bar: " + Math.max(...counts));
+    if (!cv._histWired) {
+      cv._histWired = true;
+      cv.addEventListener("pointermove", (e) => {
+        const r = cv.getBoundingClientRect();
+        const n = (cv._histCounts || []).length;
+        if (!n || !r.width) return;
+        const i = Math.min(n - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * n)));
+        cv.title = cv._histWords ? cv._histWords(i) : "";
+      });
+    }
+  }
+  cv._histCounts = counts;
   const ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);

@@ -1051,6 +1051,8 @@ async function drawHistoryBy(by, t, runs, xOf) {
   if (!opt) { host.innerHTML = notReached("No run has both a value of " + _histX + " and of " + label + "."); return; }
   _histChart = window.echarts.init(host, null, { renderer: "canvas" });
   _histChart.setOption(opt);
+  // A theme switch draws it again with the new tokens.
+  import("./theme-echarts.js").then((m) => m.followTheme(_histChart, () => { if (host.isConnected) drawHistoryBy(by, t, runs, xOf); }));
   _histChart.on("click", (e) => { const p = e.data && e.data.p; if (p && p.tag) ctx.setRun(p.tag); });
 }
 

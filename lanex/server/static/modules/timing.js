@@ -19,6 +19,7 @@ import { api, fmt } from "./api.js";
 import { icon } from "./icons.js";
 import { toast } from "./toast.js";
 import { histogramOption } from "./barchart.js";
+import { followTheme } from "./theme-echarts.js";
 import { renderFileText } from "./fileview.js";
 import { cornerGridHtml, cornerWords, wireGridKeys } from "./cornergrid.js";
 import { slack as mfSlack } from "./metricfmt.js";
@@ -332,7 +333,8 @@ async function drawHist() {
   const ml = opt.series && opt.series[0] && opt.series[0].markLine;
   if (ml) ml.label = { show: false };
   let chart = window.echarts.getInstanceByDom(node);
-  if (!chart) chart = window.echarts.init(node);
+  // Drawn with this theme's tokens: a theme switch draws it again.
+  if (!chart) { chart = window.echarts.init(node); followTheme(chart, () => drawHist()); }
   chart.setOption(opt, true);
   chart.off("click");
   chart.on("click", (p) => {

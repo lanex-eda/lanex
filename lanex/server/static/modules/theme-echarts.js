@@ -45,6 +45,28 @@ export function chartInk() {
   };
 }
 
+// A chart takes its colours from the tokens when it is drawn, so a theme
+// switch (theme.js "g:theme_changed") redraws every chart on screen:
+//   const stop = followTheme(chart, () => chart.setOption(buildOption(), true));
+// A disposed chart drops out by itself.
+const _follow = new Set();
+export function followTheme(chart, redraw) {
+  const e = { chart, redraw };
+  _follow.add(e);
+  return () => _follow.delete(e);
+}
+export function redrawCharts() {
+  for (const e of [..._follow]) {
+    if (!e.chart || (e.chart.isDisposed && e.chart.isDisposed())) { _follow.delete(e); continue; }
+    try { e.redraw(); } catch (err) { console.error("chart theme", err); }
+  }
+}
+if (typeof document !== "undefined" && !document._chartThemeWired) {
+  document._chartThemeWired = true;
+  // After the new theme's tokens apply (theme.js switches the body class first).
+  document.addEventListener("g:theme_changed", () => requestAnimationFrame(redrawCharts));
+}
+
 export function chartTheme() {
   const k = chartInk();
   const axisLabel = { color: k.text, fontSize: 11.5, fontFamily: k.sans };

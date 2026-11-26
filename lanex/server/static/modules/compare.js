@@ -563,9 +563,11 @@ function disposeCharts() {
   _charts = [];
 }
 
+let _chartTheme = false;     // this render's theme follower is registered
 async function renderCompareCharts(host, data, cols) {
   if (!host) return;
   disposeCharts();
+  _chartTheme = false;
   if (typeof window.echarts === "undefined") await import("./loading.js").then((m) => m.loadECharts()).catch(() => null);
   if (!host.isConnected) return;
   if (typeof window.echarts === "undefined") { host.innerHTML = "<p class='muted'>Charts need ECharts.</p>"; return; }
@@ -601,6 +603,8 @@ async function renderCompareCharts(host, data, cols) {
     el.setAttribute("aria-label", name + " comparison across selected runs, matching the values in the comparison tables above.");
     chart.setOption(opt);
     _charts.push(chart);
+    // A theme switch redraws every chart of this render with the new tokens.
+    if (!_chartTheme) { _chartTheme = true; import("./theme-echarts.js").then((m) => m.followTheme(chart, () => renderCompareCharts(host, data, cols))); }
   }
   if (typeof ResizeObserver === "undefined") return;
   if (!_chartRO) {

@@ -544,6 +544,8 @@ body.theme-light .lx-dfor { color: var(--accent); }
 /* (disabled items: shell.css .menu-item:disabled) */
 .lx-menu .menu-note { margin: 4px 0 0; padding: 8px 10px 4px; border-top: 1px solid var(--border); font-size: 12px; line-height: 1.45; color: var(--text-muted); }
 
+.lx-hist-cap { display: block; margin: 0 0 3px; font-size: 11px; color: var(--text-muted); }
+.lx-heat-hist { cursor: crosshair; }
 /* the key: in the corner card under the badge */
 .lx-corner .lx-key, .lx-badge .lx-key-fold, .lx-badge .lx-badge-act { pointer-events: auto; }
 .lx-view:not(.is-3d) .lx-corner:has(.lx-key:not([hidden])) { width: 286px; }
