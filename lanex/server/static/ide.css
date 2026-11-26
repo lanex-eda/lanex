@@ -620,6 +620,9 @@ body.theme-light .rf-chip.is-write { color: var(--accent); }
 
 /* Simulation: run settings, Run all and its results table */
 .sr-set { flex: 0 0 auto; border-bottom: 1px solid var(--border); }
+.sr-set[open] { max-height: 55%; overflow: auto; }
+.ide-pane[data-pane="sim"] .ide-log { min-height: 72px; }
+.sr-param input.inp { font-size: 12.5px; }
 .sr-set > summary { display: flex; align-items: baseline; gap: 12px; padding: 7px 14px; cursor: pointer; font-size: 13px; color: var(--text); list-style: none; }
 .sr-set > summary::-webkit-details-marker { display: none; }
 .sr-set > summary::before { content: ""; align-self: center; width: 0; height: 0; border: 4px solid transparent; border-left: 6px solid var(--text-muted); margin-right: -4px; transition: transform var(--dur-1) ease; }

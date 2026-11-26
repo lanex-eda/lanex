@@ -324,7 +324,7 @@ export function initSimRun(c) {
     try { set.open = localStorage.getItem("ll.ideRunSet") === "1"; } catch (_e) { /* closed */ }
     set.addEventListener("toggle", () => {
       try { localStorage.setItem("ll.ideRunSet", set.open ? "1" : "0"); } catch (_e) { /* not kept */ }
-      if (set.open) paintSettings();
+      if (set.open) { paintSettings(); if (ctx.grow) ctx.grow(); }
     });
     set.addEventListener("input", onSettingsInput);
     set.addEventListener("change", onSettingsInput);
