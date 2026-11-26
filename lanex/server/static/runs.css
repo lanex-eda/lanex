@@ -559,8 +559,8 @@ body.theme-light .sw-best-k { color: var(--accent); }
 /* A study's results sit in a Runs row: the head sticks under Runs' own (36 px). */
 .sw-res-wrap:not(.rn-se) > .sw-res thead th { position: sticky; top: 36px; z-index: 1; background: var(--bg-2); }
 @container (max-width: 1320px) { .sw-res .sw-c-tag { display: none; } }
-@container (max-width: 1160px) { .sw-res .sw-c-runtime, .sw-res .sw-c-a2 { display: none; } }
-@container (max-width: 990px) { .sw-res .sw-c-hold, .sw-res .sw-c-power { display: none; } }
+@container (max-width: 1160px) { .sw-res .sw-c-runtime, .sw-res .sw-c-a2, .sw-res .sw-c-hold { display: none; } }
+@container (max-width: 990px) { .sw-res .sw-c-power { display: none; } }
 @container (max-width: 820px) { .sw-res .sw-c-util { display: none; } }
 .sw-res .rn-v { font-size: 13.5px; }
 .sw-res-row { cursor: pointer; }
