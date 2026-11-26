@@ -4,8 +4,11 @@
 //
 //   jobsOf(group)               Map(planned run tag -> its job)
 //   onStudyJobs(fn)             fn(group) when a job of a study changes
-//   stopAfterRunning(group)     waiting points leave the queue (Skipped), running ones finish
-//   stopNow(group)              the same, and the running points stop too
+//   stopAfterRunning(group)     waiting points are Skipped (kept in the queue), running ones finish
+//   stopNow(group)              the sweep's own Stop: waiting points Skipped, running ones stop
+// Both go through the sweep (POST /api/dse/cancel), so its end is recorded as
+// stopped by you; taking the points out of the queue made the sweep read
+// them as finished points with no folder, and stop as "failed fast".
 //   queueAvailable()            the queue answered at least once
 //
 // A sweep's points are queue jobs with `kind` "point" and `group` = the sweep
@@ -55,14 +58,15 @@ export async function refreshQueue() {
 
 // W&B's Pause: the waiting points are skipped, the running ones finish.
 export async function stopAfterRunning(group) {
-  return api.queueRemove({ group });
+  return api.dseCancel(stopBody(group, true));
 }
 // Stop now: the waiting points are skipped and the running ones stop.
 export async function stopNow(group) {
-  await stopAfterRunning(group);
-  const running = [...jobsOf(group).values()].filter((j) => /running|starting|paused|stopping/.test(j.state || ""));
-  for (const j of running) await api.queueStop({ id: j.id });
-  return running.length;
+  const res = await api.dseCancel(stopBody(group, false));
+  return ((res && res.stopped) || []).length;
+}
+export function stopBody(group, afterRunning) {
+  return { sweep_id: String(group || ""), after_running: !!afterRunning };
 }
 
-export const _test = { note, jobsOf, tagOf };
+export const _test = { note, jobsOf, tagOf, stopBody };

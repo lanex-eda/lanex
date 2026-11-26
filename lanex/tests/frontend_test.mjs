@@ -955,6 +955,50 @@ check("sweeps: points in planned order, a missing point and why the sweep ended 
   assert.equal(re.find((p) => p.tag === "c8").superseded, "c8-2");
 });
 
+check("sweeps: the clock study's SDC guard sees any period the SDC sets itself", () => {
+  const S = SW.sdcClockSource;
+  // LibreLane's own base.sdc, and the same through a variable or an expr: the sweep works.
+  assert.equal(S("create_clock {*}$port_args -name $clock_port -period $::env(CLOCK_PERIOD)\n").sets, false);
+  assert.equal(S("set p $::env(CLOCK_PERIOD)\ncreate_clock [get_ports clk] -period $p\n").sets, false);
+  assert.equal(S("create_clock -name clk -period [expr $::env(CLOCK_PERIOD) * 1.0] [get_ports clk]").sets, false);
+  assert.equal(S("set a $::env(CLOCK_PERIOD)\nset b $a\ncreate_clock -period ${b} clk").sets, false);
+  // A number, a variable the SDC sets, a variable from somewhere else: the SDC's own clock.
+  assert.deepEqual([S("create_clock -period 10 [get_ports clk]").sets, S("create_clock -period 10 [get_ports clk]").value], [true, "10"]);
+  const v = S("# CLOCK_PERIOD is not used here\nset clk_period 12.5\ncreate_clock [get_ports clk] -period $clk_period");
+  assert.equal(v.sets, true);
+  assert.equal(v.value, "$clk_period");
+  assert.equal(S("create_clock -period $period [get_ports clk]").sets, true);
+  assert.equal(S("create_clock -period [expr 2 * 5] clk").sets, true);
+  // A mention of CLOCK_PERIOD in a comment no longer hides a literal period.
+  assert.equal(S("# uses $::env(CLOCK_PERIOD) elsewhere\ncreate_clock -period 8 clk").sets, true);
+  // A continued line.
+  assert.equal(S("create_clock [get_ports clk] \\\n  -period 7").sets, true);
+  assert.equal(S("").sets, false);
+});
+
+check("sweeps: a restarted study's queued points are planned, not left (no Run the N left for them)", () => {
+  const vOf = (r) => ({ state: r.st });
+  const sw = { id: "s", active: false, axes: [{ var: "CLOCK_PERIOD", values: ["10", "9", "8"] }], tags: ["c10", "c9", "c8"],
+    points: [{ CLOCK_PERIOD: "10" }, { CLOCK_PERIOD: "9" }, { CLOCK_PERIOD: "8" }], count: 3 };
+  const runs = [{ tag: "c10", st: "passed", started_at: "1" }];
+  const jobs = new Map([["c9", { id: "j9", state: "queued", spec: { tag: "c9" } }]]);
+  const pts = SW.sweepPoints(sw, runs, vOf, jobs);
+  assert.deepEqual(SW.pointsWaiting(pts).map((p) => p.tag), ["c9"]);
+  assert.deepEqual(SW.pointsLeft(pts).map((p) => p.tag), ["c8"]);
+  assert.match(SW.endReason(sw, pts), /1 point still waits in the queue/);
+  // Once nothing waits, the one that never ran is left to run.
+  const none = SW.sweepPoints(sw, runs, vOf, new Map());
+  assert.deepEqual(SW.pointsLeft(none).map((p) => p.tag), ["c9", "c8"]);
+});
+
+await checkAsync("studies: Stop after the running points and Stop now go through the sweep's own stop", async () => {
+  const SQm = await import(toUrl(resolve(MOD, "studyqueue.js")));
+  assert.deepEqual(SQm._test.stopBody("20261126-120000", true), { sweep_id: "20261126-120000", after_running: true });
+  assert.deepEqual(SQm._test.stopBody("s", false), { sweep_id: "s", after_running: false });
+  const src = readFileSync(resolve(MOD, "studyqueue.js"), "utf8");
+  assert.ok(!/queueRemove\(/.test(src), "a study's stop never takes its points out of the queue");
+});
+
 check("sweeps: Use this configuration writes typed values and warns only when a section still wins", () => {
   // A point's values are text; the config gets numbers, booleans and lists.
   assert.equal(SW.typedValue("6", "number"), 6);
@@ -3748,6 +3792,75 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.match(readFileSync(resolve(MOD, "cells-macros.js"), "utf8"), /createFloorplanCanvas\(/);
   });
 }
+
+check("runs: no-clock runs count as Warnings, summed violation counts say so, voltages share one unit", () => {
+  const RT = RUNS._test;
+  assert.equal(RT.resultBucket({ state: "incomplete", no_clock: true }), "warning");
+  assert.equal(RT.resultBucket({ state: "incomplete" }), "stopped");
+  assert.equal(RT.resultBucket({ state: "stopped" }), "stopped");
+  assert.equal(RT.resultBucket({ state: "warning" }), "warning");
+  assert.equal(RT.resultBucket({ state: "passed" }), "passed");
+  assert.ok(!/timed no path/.test(RT.UNTIMED_TIP) && /no flip-flop had a clock/.test(RT.UNTIMED_TIP));
+  assert.ok(RT.extraCol("m:timing__setup_vio__count").tip.includes(MF.CORNER_SUM_NOTE));
+  assert.ok(!RT.extraCol("m:timing__setup_vio__count__corner:nom_tt_025C_1v80").tip.includes(MF.CORNER_SUM_NOTE));
+  assert.ok(!RT.extraCol("m:design__die__area").tip.includes(MF.CORNER_SUM_NOTE));
+  // A voltage column: without a scale yet it says V; the cells use the column's scale.
+  const vc = RT.extraCol("m:design_powergrid__voltage__worst");
+  if (MF.unitOf(MF.parseKey("design_powergrid__voltage__worst").base) === "V") {
+    assert.equal(vc.unit, "V");
+    const src = readFileSync(resolve(MOD, "runs.js"), "utf8");
+    assert.match(src, /if \(c\.key && scaled\(c\.key\)\) _scales\.set/);
+  }
+});
+
+await checkAsync("toasts: the Undo toast stays outside the cap and clear(); the trash is purged only on timeout or close", async () => {
+  class El {
+    constructor() { this.children = []; this.parent = null; this.cls = new Set(); this.on = {}; this.attrs = {}; this.dataset = {}; }
+    set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+    get className() { return [...this.cls].join(" "); }
+    get classList() { const c = this.cls; return { add: (x) => c.add(x), remove: (x) => c.delete(x), contains: (x) => c.has(x) }; }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    append(...xs) { for (const x of xs) this.appendChild(x); }
+    appendChild(x) { x.parent = this; this.children.push(x); return x; }
+    remove() { if (this.parent) { this.parent.children = this.parent.children.filter((c) => c !== this); this.parent = null; } }
+    replaceChildren() { this.children = []; }
+    addEventListener(k, fn) { (this.on[k] = this.on[k] || []).push(fn); }
+    click() { for (const fn of this.on.click || []) fn(); }
+    get firstElementChild() { return this.children[0] || null; }
+    get lastElementChild() { return this.children[this.children.length - 1] || null; }
+    set textContent(v) { this._t = v; }
+    set innerHTML(v) { this._h = v; }
+  }
+  const oldDoc = globalThis.document, oldRaf = globalThis.requestAnimationFrame;
+  globalThis.document = { createElement: () => new El(), body: new El() };
+  globalThis.requestAnimationFrame = (fn) => fn();
+  try {
+    const { toast } = await import(toUrl(resolve(MOD, "toast.js")));
+    toast.container = null;
+    const closed = [];
+    toast.show("Deleted 3 runs.", "success", 60000, [{ label: "Undo", run: () => {} }], { keep: true, onClose: (why) => closed.push(why) });
+    const undoEl = toast.container.children[0];
+    for (let i = 0; i < 6; i++) toast.show("note " + i, "info", 60000);
+    assert.ok(toast.container.children.includes(undoEl), "four newer toasts don't push the Undo out");
+    assert.equal(toast.container.children.filter((c) => !c.classList.contains("toast-keep")).length, 4);
+    toast.clear();
+    assert.deepEqual(toast.container.children, [undoEl], "clear() keeps the Undo");
+    assert.deepEqual(closed, []);
+    // Undo pressed: closed as "action" (runs.js then never purges).
+    undoEl.children.find((c) => c.cls.has("toast-act")).click();
+    assert.deepEqual(closed, ["action"]);
+    const RUNSm = await import(toUrl(resolve(MOD, "runs.js")));
+    let purged = 0;
+    const act = { run: () => {} };
+    assert.equal(RUNSm.undoClosed("action", { done: () => false, act, onGone: () => purged++ }), false);
+    assert.equal(RUNSm.undoClosed("close", { done: () => true, act, onGone: () => purged++ }), false);
+    assert.equal(RUNSm.undoClosed("timeout", { done: () => false, act, onGone: () => purged++ }), true);
+    assert.equal(purged, 1);
+  } finally {
+    globalThis.document = oldDoc;
+    globalThis.requestAnimationFrame = oldRaf;
+  }
+});
 
 // ---- the shell: connection-lost state, palette reach, #flow (lane Z1) -----------
 {

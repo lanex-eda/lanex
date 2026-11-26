@@ -235,7 +235,6 @@ export const api = {
   viewerStatus: (id) => _fetch("/api/layout/viewer-status?id=" + encodeURIComponent(id)),
   runFileUrl: (tag, path) =>
     "/api/run-file?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path),
-  deleteRun: (tag, force) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag, force: !!force }) }),
   runNote: (tag) => _fetch("/api/run-note?tag=" + encodeURIComponent(tag)),
   // The Runs page (lane 2): the project's baseline and saved views, bulk
   // actions, free columns, changed-vs-baseline, the names for Columns, export.
@@ -284,6 +283,17 @@ export const api = {
     "&tag=" + encodeURIComponent(tag || "") + (from != null ? "&from=" + from : "") + (to != null ? "&to=" + to : ""), { timeout: 120000 }),
   runLogUrl: (designDir, tag) => "/api/run/log?download=1&design_dir=" + encodeURIComponent(designDir || "") +
     "&tag=" + encodeURIComponent(tag || ""),
+  // The whole log as plain text, streamed from disk (no JSON around tens of MB).
+  runLogText: async (designDir, tag) => {
+    const r = await fetch(base + "/api/run/log?raw=1&design_dir=" + encodeURIComponent(designDir || "") +
+      "&tag=" + encodeURIComponent(tag || ""), { headers: { "X-Requested-With": "XMLHttpRequest" } });
+    if (!r.ok) {
+      let msg = "the server answered " + r.status;
+      try { const b = await r.json(); msg = (b && b.error) || msg; } catch (_e) { /* not JSON */ }
+      throw new Error(msg);
+    }
+    return r.text();
+  },
   reportsDrc: (path) => _fetch("/api/reports/drc?path=" + encodeURIComponent(path)),
   reportsLvs: (path) => _fetch("/api/reports/lvs?path=" + encodeURIComponent(path)),
   getPdkRoot: () => _fetch("/api/settings/pdk-root"),
@@ -435,7 +445,8 @@ export const api = {
   // What a sweep would do, without starting it: values checked, each setting's
   // value in this design, the one-off settings that ride along.
   dsePlan: (payload) => _fetch("/api/dse/plan", { method: "POST", body: JSON.stringify(payload || {}) }),
-  dseCancel: () => _fetch("/api/dse/cancel", { method: "POST", body: "{}" }),
+  // {sweep_id?, after_running?}: Stop now (default) or after the running points.
+  dseCancel: (sel) => _fetch("/api/dse/cancel", { method: "POST", body: JSON.stringify(sel || {}) }),
   dseStatus: () => _fetch("/api/dse/status"),
   dseSweeps: () => _fetch("/api/dse/sweeps"),
 

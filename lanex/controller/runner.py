@@ -352,7 +352,12 @@ class FlowRunner:
         self.step_started_at: Optional[float] = None
         self._lock = threading.RLock()
         self._seq = 0
-        self._events: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=10000)
+        # This runner's own events, for drain() (tests and in-process
+        # callers). Pages read the shared bus. A queue job's runner keeps none:
+        # one runner per job, and 10,000 kept events each (about 4 MB a run)
+        # stayed in memory after every job (review R1-1).
+        self._keep_events = job_id is None
+        self._events: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=self.EVENTS_KEPT)
         self._cancel = threading.Event()
         self._resume = threading.Event()
         self._resume.set()  # not paused
@@ -760,6 +765,10 @@ class FlowRunner:
     # LOG_BATCH_LINES lines, or before any other event, whichever comes first.
     LOG_BATCH_S = 0.15
     LOG_BATCH_LINES = 200
+    # The batching thread ends after this long with nothing to send (and at
+    # the run's end); the next line starts a new one.
+    LOG_FLUSH_IDLE_S = 3.0
+    EVENTS_KEPT = 2000
     _LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
 
     def _emit(self, kind: EventType, payload: Optional[Dict[str, Any]] = None) -> None:
@@ -779,6 +788,10 @@ class FlowRunner:
                 return
             self._flush_logs()
             self._emit_now(kind, payload)
+            if kind == EventType.FLOW_DONE:
+                # The run is over: the batching thread ends now (it holds the
+                # runner, and with it the run's buffers, while it lives).
+                self._log_cv.notify_all()
 
     def _flush_logs(self) -> None:
         """Send the buffered log lines as one ``log`` event (call with the lock)."""
@@ -792,25 +805,37 @@ class FlowRunner:
         self._emit_now(EventType.LOG, body)
 
     def _start_log_flusher(self) -> None:
-        if self._log_flusher is not None and self._log_flusher.is_alive():
+        """Start the batching thread unless one is on (call with the lock).
+        The thread clears ``_log_flusher`` under the same lock as it ends, so
+        a line that comes as it ends starts a new one."""
+        if self._log_flusher is not None:
             return
         self._log_flusher = threading.Thread(target=self._log_flush_loop, daemon=True,
                                              name="librelane.gui.FlowRunner.logflush")
         self._log_flusher.start()
 
     def _log_flush_loop(self) -> None:
-        """Flush a batch LOG_BATCH_S after its first line. Sleeps on the
-        condition while nothing is buffered (no idle wake-ups)."""
+        """Flush a batch LOG_BATCH_S after its first line. Ends when nothing
+        came for LOG_FLUSH_IDLE_S, or right away once the run is over and
+        nothing is buffered: a finished run keeps no thread (review R1-1)."""
         with self._emit_lock:
-            while True:
-                if not self._log_buf:
-                    self._log_cv.wait()
-                    continue
-                left = self._log_t0 + self.LOG_BATCH_S - time.monotonic()
-                if left > 0:
-                    self._log_cv.wait(left)
-                    continue
-                self._flush_logs()
+            try:
+                while True:
+                    if not self._log_buf:
+                        if not self._running and not self._awaiting_next:
+                            return
+                        self._log_cv.wait(self.LOG_FLUSH_IDLE_S)
+                        if not self._log_buf:
+                            return
+                        continue
+                    left = self._log_t0 + self.LOG_BATCH_S - time.monotonic()
+                    if left > 0:
+                        self._log_cv.wait(left)
+                        continue
+                    self._flush_logs()
+            finally:
+                if self._log_flusher is threading.current_thread():
+                    self._log_flusher = None
 
     def _emit_now(self, kind: EventType, payload: Optional[Dict[str, Any]] = None) -> None:
         seq = self._next_seq()
@@ -819,14 +844,15 @@ class FlowRunner:
         if self.job_id:
             body = {**body, "job_id": self.job_id, "design_dir": self.design_dir, "origin": self.origin}
         evt = {"type": kind.value, "seq": seq, "ts": time.time(), "tag": tag, **body}
-        try:
-            self._events.put_nowait(evt)
-        except queue.Full:
+        if self._keep_events:
             try:
-                self._events.get_nowait()
                 self._events.put_nowait(evt)
-            except queue.Empty:
-                pass
+            except queue.Full:
+                try:
+                    self._events.get_nowait()
+                    self._events.put_nowait(evt)
+                except queue.Empty:
+                    pass
         bus.emit(kind.value, {**body, "seq": seq, "ts": evt["ts"], "tag": tag})
         if kind == EventType.FLOW_DONE:
             self._persist_outcome(body)
