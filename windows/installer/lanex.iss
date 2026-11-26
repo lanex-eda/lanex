@@ -1121,6 +1121,7 @@ function LogTail(Count: Integer): String;
 var
   Lines: TArrayOfString;
   I, First: Integer;
+  L: String;
 begin
   Result := '';
   if not LoadStringsFromFile(LogFile, Lines) then
@@ -1128,11 +1129,19 @@ begin
   First := GetArrayLength(Lines) - Count;
   if First < 0 then
     First := 0;
-  // The machine-readable lines (the preflight JSON, progress events) say
-  // nothing to a person reading an error; the log file keeps them.
+  // The machine-readable lines (the preflight JSON, progress events, the
+  // readiness report, one JSON line of several KB) say nothing to a person
+  // reading an error, and a long one pushed the dialog's Retry button off a
+  // 768-pixel screen; the log file keeps them. Long lines are cut.
   for I := First to GetArrayLength(Lines) - 1 do
-    if (Pos('preflight: {', Lines[I]) <> 1) and (Pos('@@LANEX:', Lines[I]) <> 1) then
-      Result := Result + StripNulls(Lines[I]) + #13#10;
+  begin
+    L := StripNulls(Lines[I]);
+    if (Pos('preflight: {', L) = 1) or (Pos('@@LANEX:', L) = 1) or (Pos('{', TrimLeft(L)) = 1) then
+      Continue;
+    if Length(L) > 160 then
+      L := Copy(L, 1, 157) + '...';
+    Result := Result + L + #13#10;
+  end;
 end;
 
 // Where a person reports a failure Setup cannot fix by itself. The template

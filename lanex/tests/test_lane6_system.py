@@ -409,3 +409,55 @@ def test_new_routes_have_methods():
     assert m["/api/system/wsl-memory"] == ("GET", "POST") and m["/api/system/network"] == ("GET", "POST")
     prefixes = [p for p, _ in routes.ROUTES]
     assert len(prefixes) == len(set(prefixes))
+
+
+# ---------------------------------------------------------------- Setup's verify step
+
+def test_gtkwave_readiness_probe_runs_without_a_display(monkeypatch):
+    """A cold WSL start kept `gtkwave --version` (it starts GTK) waiting past
+    the probe's 30 s on a VM, failing Setup on a GTKWave that was installed."""
+    from lanex.controller import platform_env, provisioning
+
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen[argv[0]] = kw.get("env")
+
+        class P:
+            returncode, stdout, stderr = 0, "", ""
+        return P()
+
+    monkeypatch.setattr(provisioning.sys, "platform", "linux")
+    monkeypatch.setattr(platform_env, "usable_which", lambda n: f"/usr/bin/{n}")
+    monkeypatch.setattr(provisioning.subprocess, "run", fake_run)
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert provisioning._binary_probe("gtkwave")["ready"]
+    env = seen["/usr/bin/gtkwave"]
+    assert env is not None and "DISPLAY" not in env and "WAYLAND_DISPLAY" not in env
+    assert env.get("PATH") == os.environ.get("PATH")
+    provisioning._binary_probe("iverilog", ("-V",))
+    assert seen["/usr/bin/iverilog"] is None          # command-line tools: unchanged
+
+
+def test_setup_failure_dialog_leaves_out_json_and_cuts_long_lines():
+    iss = (Path(__file__).resolve().parents[2] / "windows" / "installer" / "lanex.iss").read_text(encoding="utf-8")
+    body = iss[iss.index("function LogTail(Count: Integer): String;"):]
+    body = body[:body.index("\nend;") + 5]
+    assert "(Pos('{', TrimLeft(L)) = 1)" in body and "Continue;" in body
+    assert "if Length(L) > 160 then" in body
+
+
+def test_doctor_finds_gds3d_where_setup_puts_it(monkeypatch):
+    """Setup builds GDS3D into ~/.local/bin/gds3d, off a plain shell's PATH; the
+    doctor said "Not installed: GDS3D" on a VM where Setup had just checked it."""
+    from lanex.controller import platform_env
+
+    monkeypatch.setattr(platform_env, "usable_which", lambda n, path=None: f"/usr/bin/{n}")
+    monkeypatch.setattr(platform_env, "resolve_user_bin",
+                        lambda n, alts=None, path=None: "/home/lanex/.local/bin/gds3d" if n == "gds3d" else None)
+    r = doctor.check_tools({})
+    assert r["status"] == "ok" and r["data"]["gds3d"] is True
+    monkeypatch.setattr(platform_env, "resolve_user_bin", lambda n, alts=None, path=None: None)
+    r = doctor.check_tools({})
+    assert r["status"] == "info" and "GDS3D" in r["summary"]

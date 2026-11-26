@@ -596,11 +596,18 @@ def check_pdks(ctx: Dict[str, Any]) -> Dict[str, Any]:
 def check_tools(ctx: Dict[str, Any]) -> Dict[str, Any]:
     t = TITLES["tools"]
     have = {}
-    for name in ("verilator", "iverilog", "gtkwave", "dot"):
-        have[name] = bool(shutil.which(name))
     try:
         from . import platform_env
-        have["gds3d"] = bool(shutil.which("GDS3D") or (platform_env.home() / "tools" / "gds3d").exists())
+        which = platform_env.usable_which      # never a Windows .exe on WSL's PATH
+    except Exception:
+        which = shutil.which
+    for name in ("verilator", "iverilog", "gtkwave", "dot"):
+        have[name] = bool(which(name))
+    try:
+        from . import platform_env
+        # The same lookup Setup's readiness check and the Tools tab use: GDS3D
+        # is ~/.local/bin/gds3d, often not on a plain shell's PATH.
+        have["gds3d"] = bool(platform_env.resolve_user_bin("gds3d", ["GDS3D"]))
     except Exception:
         have["gds3d"] = False
     missing = [k for k, v in have.items() if not v]
