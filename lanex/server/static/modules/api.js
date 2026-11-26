@@ -402,7 +402,8 @@ export const api = {
   // What a sweep would do, without starting it: values checked, each setting's
   // value in this design, the one-off settings that ride along.
   dsePlan: (payload) => _fetch("/api/dse/plan", { method: "POST", body: JSON.stringify(payload || {}) }),
-  dseCancel: () => _fetch("/api/dse/cancel", { method: "POST", body: "{}" }),
+  // {sweep_id?, after_running?}: Stop now (default) or after the running points.
+  dseCancel: (sel) => _fetch("/api/dse/cancel", { method: "POST", body: JSON.stringify(sel || {}) }),
   dseStatus: () => _fetch("/api/dse/status"),
   dseSweeps: () => _fetch("/api/dse/sweeps"),
 

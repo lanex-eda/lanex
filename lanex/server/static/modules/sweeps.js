@@ -704,13 +704,22 @@ export function sweepPoints(sw, runs, verdictOf, jobs = null) {
 const metTiming = (p) => p.r && p.finished && num(p.r, "timing__setup__ws") != null && num(p.r, "timing__setup__ws") >= 0 &&
   !(num(p.r, "timing__hold__ws") != null && num(p.r, "timing__hold__ws") < 0);
 
+// Planned points with no run yet that still wait (or run) in the job queue:
+// planned, not left. A study restarted with points queued offered "Run the N
+// left" for them and queued each a second time.
+const inQueue = (p) => p.key === "queued" || p.key === "running";
+export function pointsLeft(pts) { return pts.filter((p) => p.missing && !inQueue(p)); }
+export function pointsWaiting(pts) { return pts.filter((p) => p.missing && inQueue(p)); }
+
 // Why a sweep has fewer runs than it planned, in plain words ("" when it
 // ran them all or is still running).
 export function endReason(sw, pts) {
   if (sw.active) return "";
   const live = pts.filter((p) => !p.missing && !p.superseded);
   const ran = live.length;
-  const left = pts.filter((p) => p.missing).length;
+  const waiting = pointsWaiting(pts).length;
+  if (waiting) return waiting + " point" + (waiting === 1 ? " still waits" : "s still wait") + " in the queue: " + (waiting === 1 ? "it runs" : "they run") + " by " + (waiting === 1 ? "itself" : "themselves") + " (the queue may be paused).";
+  const left = pointsLeft(pts).length;
   const e = sw.ended || {};
   if (!left) {
     // Every point has a run, but LanEx stopped while one of them ran.
@@ -787,7 +796,7 @@ export function paintSweepSummary(el, sw, runs, { verdictOf, failCode, openRun, 
     : "";
   const why = endReason(sw, pts);
   const redo = live.filter((p) => !p.ok && !p.finished && p.state !== "running").map((p) => p.tag);
-  const left = pts.filter((p) => p.missing).map((p) => p.tag);
+  const left = pointsLeft(pts).map((p) => p.tag);
   const busy = !!(state.status && state.status.running) || !!sw.active;
   const busyT = busy ? " disabled title='A run or sweep is going'" : "";
   // Compare takes up to twelve: past that, the reference (the best by the
@@ -1334,4 +1343,4 @@ export async function checkRun(p) {
   document.addEventListener("g:queue", onQ);
 }
 
-export const _test = { planPoints, parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, typedValue, stillWins, stageLabel: FS.stageLabel };
+export const _test = { planPoints, parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, pointsLeft, pointsWaiting, typedValue, stillWins, stageLabel: FS.stageLabel };

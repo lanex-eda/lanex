@@ -110,13 +110,42 @@ def plan(platform: Optional[str] = None, *, wsl: Optional[bool] = None, pid: Opt
     return {"how": "", "argvs": [], "note": "This system can't be held awake from here."}
 
 
+# One entry per holder command: {argv, proc, fails, retry_at}. A holder that
+# died is started again on its own, after a pause that doubles each time it
+# dies at once (5 s, 10 s, ... 5 min): one broken holder used to restart every
+# holder every second.
+_holders: List[Dict[str, Any]] = []
+RETRY_FIRST_S = 5.0
+RETRY_MAX_S = 300.0
+QUICK_DEATH_S = 10.0
+
+
+def _spawn(argv: List[str]) -> Optional[subprocess.Popen]:
+    try:
+        return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        _log.debug("could not start %s", argv[0], exc_info=True)
+        return None
+
+
+def _sync_procs() -> None:
+    _procs[:] = [h["proc"] for h in _holders if h.get("proc") is not None]
+
+
+def _alive(h: Dict[str, Any]) -> bool:
+    p = h.get("proc")
+    return p is not None and p.poll() is None
+
+
 def _release_locked() -> None:
-    for p in _procs:
+    procs = [h["proc"] for h in _holders if h.get("proc") is not None] or list(_procs)
+    for p in procs:
         try:
             p.terminate()
         except Exception:
             pass
-    for p in _procs:
+    for p in procs:
         try:
             p.wait(timeout=2)
         except Exception:
@@ -124,38 +153,51 @@ def _release_locked() -> None:
                 p.kill()
             except Exception:
                 pass
+    _holders.clear()
     _procs.clear()
+
+
+def _mend_locked(now: float) -> None:
+    """Start again each holder that died, on its own, once its pause is over."""
+    for h in _holders:
+        if _alive(h) or now < h.get("retry_at", 0.0):
+            continue
+        if h.get("proc") is not None:
+            # It died: a quick death counts against it (the power manager
+            # refuses), one after a long hold does not.
+            quick = now - h.get("started", now) < QUICK_DEATH_S
+            h["fails"] = h.get("fails", 0) + 1 if quick else 0
+        h["proc"] = _spawn(h["argv"])
+        h["started"] = now
+        h["retry_at"] = now + min(RETRY_MAX_S, RETRY_FIRST_S * (2 ** max(0, h.get("fails", 0))))
+    _sync_procs()
 
 
 def update(want: bool, reason: str = "", jobs: int = 0) -> Dict[str, Any]:
     """Take or release the hold. Cheap to call every second: it acts only
-    on a change (or when a holder process died)."""
+    on a change, or to start again a holder process that died (that one
+    only, with a growing pause)."""
     want = bool(want) and enabled()
     with _lock:
         if want:
-            alive = [p for p in _procs if p.poll() is None]
-            if not _state["hold"] or (_state.get("held_here") and len(alive) != len(_procs)):
+            now = time.monotonic()
+            if not _state["hold"]:
                 _release_locked()
                 pl = plan(why=("LanEx: " + reason) if reason else "LanEx: a chip flow is running")
-                started = 0
                 for argv in pl["argvs"]:
-                    try:
-                        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                             stderr=subprocess.DEVNULL, start_new_session=True)
-                        _procs.append(p)
-                        started += 1
-                    except Exception:
-                        _log.debug("could not start %s", argv[0], exc_info=True)
+                    _holders.append({"argv": list(argv), "proc": _spawn(argv), "fails": 0, "started": now,
+                                     "retry_at": now + RETRY_FIRST_S})
+                _sync_procs()
                 note = pl["note"]
                 if pl["argvs"]:
                     time.sleep(0.15)
-                    alive = [p for p in _procs if p.poll() is None]
-                    if not alive:
+                    if not any(_alive(h) for h in _holders):
                         note = "This PC can't be held awake from here (the power manager refused)."
-                _state.update({"how": pl["how"], "held_here": bool([p for p in _procs if p.poll() is None]),
-                               "note": note})
-                if not _state["hold"]:
-                    _state["since"] = _iso()
+                _state.update({"how": pl["how"], "held_here": any(_alive(h) for h in _holders), "note": note})
+                _state["since"] = _iso()
+            elif _holders and not all(_alive(h) for h in _holders):
+                _mend_locked(now)
+                _state["held_here"] = any(_alive(h) for h in _holders)
             _state.update({"hold": True, "reason": reason, "jobs": int(jobs)})
         else:
             if _state["hold"]:

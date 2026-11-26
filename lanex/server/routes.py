@@ -4649,7 +4649,11 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                                      kind="point", group=sweep_id)
         except ValueError as ex:
             return {"ok": False, "kind": "error", "reason": str(ex)}
-        fin = jobs.scheduler.wait_job(job["id"]) or {}
+        fin = jobs.scheduler.wait_job(job["id"])
+        if fin is None:
+            # It left the queue before it ran (removed from the queue page):
+            # a skipped point, never a finished one with no folder.
+            return {"ok": False, "kind": "skipped", "reason": "taken out of the queue", "skipped": True}
         st = fin.get("state")
         if st == "skipped":
             return {"ok": False, "kind": "skipped", "reason": fin.get("reason") or "not run", "skipped": True}
@@ -5052,16 +5056,45 @@ def h_dse_plan(handler: Any) -> None:
 
 
 def h_dse_cancel(handler: Any) -> None:
-    """Stop the sweep: its waiting points leave the queue, its running ones stop."""
+    """Stop a study (sweep). ``{sweep_id?, after_running?}``.
+
+    Stop now (the default): the sweep's own cancel, so its end is recorded as
+    stopped; its waiting points are kept in the queue as skipped and its
+    running ones stop. ``after_running``: the waiting points are skipped and
+    the running ones finish; the end is recorded as stopped too. A study with
+    no sweep thread (its points still queued after a restart) is stopped in
+    the queue alone. Neither is ever read as the study failing."""
     from ..controller import dse, jobs
-    sid = dse.job.sweep_id
-    dse.job.cancel()
-    if sid:
-        jobs.scheduler.remove(group=sid, reason="Not run: the sweep was stopped")
-        for j in jobs.scheduler.jobs_snapshot_live():
-            if j.get("group") == sid:
-                jobs.scheduler.stop(j["id"])
-    _respond(handler, {"ok": True})
+    body = getattr(handler, "_body", {}) or {}
+    sid = str(body.get("sweep_id") or "") or dse.job.sweep_id
+    after = bool(body.get("after_running"))
+    mine = bool(sid) and dse.job.active and dse.job.sweep_id == sid
+    if not sid:
+        _respond(handler, {"ok": True, "skipped": [], "stopped": []})
+        return
+    was_skipped = {j["id"] for j in jobs.scheduler.group_jobs(sid) if j.get("state") == "skipped"}
+    if after:
+        if mine:
+            dse.job.stop_after_running()
+        why = "Not run: you stopped the study after the points that were running"
+    else:
+        if mine or not body.get("sweep_id"):
+            dse.job.cancel()
+        why = "Not run: you stopped the study"
+    jobs.scheduler.skip_group(sid, why)       # the sweep's own stop already did, when it runs
+    group = jobs.scheduler.group_jobs(sid)
+    skipped = [j["id"] for j in group if j.get("state") == "skipped" and j["id"] not in was_skipped]
+    stopped: List[str] = []
+    if not after:
+        for j in group:
+            if j.get("state") in jobs.LIVE or (j.get("state") == "queued" and j.get("resume_pending")):
+                stopped += jobs.scheduler.stop(j["id"])
+    if not mine and (skipped or stopped):
+        # No sweep thread records this study's end (its points were still
+        # queued after a restart): note it here, as you stopping it.
+        for dd in {j["design_dir"] for j in group}:
+            dse.record_end(dd, sid, {"reason": "stopped", "detail": why})
+    _respond(handler, {"ok": True, "skipped": skipped, "stopped": stopped})
 
 
 def h_dse_status(handler: Any) -> None:

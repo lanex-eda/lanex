@@ -955,6 +955,29 @@ check("sweeps: points in planned order, a missing point and why the sweep ended 
   assert.equal(re.find((p) => p.tag === "c8").superseded, "c8-2");
 });
 
+check("sweeps: a restarted study's queued points are planned, not left (no Run the N left for them)", () => {
+  const vOf = (r) => ({ state: r.st });
+  const sw = { id: "s", active: false, axes: [{ var: "CLOCK_PERIOD", values: ["10", "9", "8"] }], tags: ["c10", "c9", "c8"],
+    points: [{ CLOCK_PERIOD: "10" }, { CLOCK_PERIOD: "9" }, { CLOCK_PERIOD: "8" }], count: 3 };
+  const runs = [{ tag: "c10", st: "passed", started_at: "1" }];
+  const jobs = new Map([["c9", { id: "j9", state: "queued", spec: { tag: "c9" } }]]);
+  const pts = SW.sweepPoints(sw, runs, vOf, jobs);
+  assert.deepEqual(SW.pointsWaiting(pts).map((p) => p.tag), ["c9"]);
+  assert.deepEqual(SW.pointsLeft(pts).map((p) => p.tag), ["c8"]);
+  assert.match(SW.endReason(sw, pts), /1 point still waits in the queue/);
+  // Once nothing waits, the one that never ran is left to run.
+  const none = SW.sweepPoints(sw, runs, vOf, new Map());
+  assert.deepEqual(SW.pointsLeft(none).map((p) => p.tag), ["c9", "c8"]);
+});
+
+await checkAsync("studies: Stop after the running points and Stop now go through the sweep's own stop", async () => {
+  const SQm = await import(toUrl(resolve(MOD, "studyqueue.js")));
+  assert.deepEqual(SQm._test.stopBody("20261126-120000", true), { sweep_id: "20261126-120000", after_running: true });
+  assert.deepEqual(SQm._test.stopBody("s", false), { sweep_id: "s", after_running: false });
+  const src = readFileSync(resolve(MOD, "studyqueue.js"), "utf8");
+  assert.ok(!/queueRemove\(/.test(src), "a study's stop never takes its points out of the queue");
+});
+
 check("sweeps: Use this configuration writes typed values and warns only when a section still wins", () => {
   // A point's values are text; the config gets numbers, booleans and lists.
   assert.equal(SW.typedValue("6", "number"), 6);

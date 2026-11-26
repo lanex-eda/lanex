@@ -1215,8 +1215,9 @@ class Scheduler:
 
     def _finalize(self, j: Dict[str, Any]) -> None:
         """After a run ends: read how it really went from its folder, record
-        the peak memory, call the end hooks. Off the lock (reads files)."""
-        j.pop("_finalize", None)
+        the peak memory, call the end hooks. Off the lock (reads files).
+        ``_finalize`` stays set until all of it is written: ``wait_job``
+        returns only then (a sweep then stamps the same gui-run.json)."""
         rd = j.get("run_dir")
         if rd and self._outcome_reader and j["state"] in ("done", "failed"):
             try:
@@ -1236,8 +1237,10 @@ class Scheduler:
             _PEAKS.pop(design_key(j["design_dir"]), None)
         self._runners.pop(j["id"], None)
         with self._lock:
+            j.pop("_finalize", None)
             self._save(j["design_dir"])
             self._changed(j)
+            self._cv.notify_all()
         self._fire_end(j)
 
     def _fire_end(self, j: Dict[str, Any]) -> None:
