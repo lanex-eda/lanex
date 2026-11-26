@@ -36,7 +36,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import history, runwarnings, timing, verify
+from . import history, runwarnings, safefs, timing, verify
 
 REPORT_DIR = "lanex-report"
 NOT_SIGNOFF = ("Not a foundry sign-off. LanEx repeats what LibreLane's own checks found on this run. "
@@ -60,7 +60,8 @@ def _isnum(v: Any) -> bool:
 
 
 def fmt_n(v: Any) -> str:
-    """Counts with thousands separators, other numbers to 3 significant decimals."""
+    """Counts with thousands separators, other numbers to 3 significant decimals.
+    Anything else comes back as its text, unescaped: the renderers escape it."""
     if not _isnum(v):
         return "—" if v is None else str(v)
     if float(v).is_integer() and abs(v) < 1e15:
@@ -320,9 +321,22 @@ def build(run_dir: str | Path, *, design_dir: Optional[str | Path] = None, base_
             paths[kind] = ps
             p = run_dir / ps["source"]["rel"] if ps["source"].get("tag") == run_dir.name else None
             use(p)
+    # LibreLane's setup and hold violation counts add up every corner's: say
+    # so, with the worst corner's own count, so 102 on a 65-endpoint design
+    # reads as what it is.
+    for kind in ("setup", "hold"):
+        per = [c.get(f"{kind}_vio") for c in corners if _isnum(c.get(f"{kind}_vio"))]
+        row = next((x for x in checks if x["id"] == kind), None)
+        if row and len(per) > 1 and " violating" in row["value"] and not row["value"].startswith("0 "):
+            row["value"] = row["value"].replace(
+                " violating", f" violating (summed over {len(per)} corners; {fmt_n(max(per))} in the worst)", 1)
     power = _power_by_corner(run)
     for pw in power[:1]:
         use(run_dir / pw["source"])
+    # power__total is the last corner LibreLane timed: the last of STA_CORNERS.
+    sta_corners = run.cfg.get("STA_CORNERS")
+    power_corner = (str(sta_corners[-1]) if isinstance(sta_corners, list) and sta_corners
+                    else power[-1]["corner"] if power else None)
     d = rep.get("details") or {}
     for key in ("magic_drc", "klayout_drc", "route_drc", "xor", "antenna", "ir"):
         x = d.get(key) or {}
@@ -391,9 +405,10 @@ def build(run_dir: str | Path, *, design_dir: Optional[str | Path] = None, base_
         "physical": physical,
         "area": _area(m),
         "power": {"corners": power, "metric_total": m.get("power__total"),
+                  "metric_corner": power_corner,
                   "note": "Estimated by OpenSTA with default switching activity (no simulation data). "
-                          "LibreLane's metric power__total holds the last corner it timed"
-                          + (f" ({power[-1]['corner']})." if power else ".")},
+                          "LibreLane's metric power__total holds the last corner it timed (the last of STA_CORNERS"
+                          + (f", {power_corner})." if power_corner else ").")},
         "warnings": {"summary": runwarnings.summary_line(w), "total": w["total"], "groups": warn_rows,
                      "base": w.get("base_tag"), "waiver_error": w["waivers"].get("error")},
         "tools": _tool_versions(run_dir),
@@ -403,8 +418,38 @@ def build(run_dir: str | Path, *, design_dir: Optional[str | Path] = None, base_
 
 
 # ---------------------------------------------------------------- Markdown
+# Every value from the run folder goes through _mt (text) or _mc (a code
+# span): one line, no HTML, no link or code span of its own. A newline in a
+# design name can't start a line of its own, and "<img onerror>" in a metric
+# stays text in any Markdown viewer that renders HTML.
+_CTRL_RX = re.compile(r"[\x00-\x1f\x7f-\x9f  ]+")
+_MD_ESC = str.maketrans({"\\": "\\\\", "&": "&amp;", "<": "&lt;", ">": "&gt;", "[": "\\[", "]": "\\]", "`": "\\`"})
+
+
+def _clean(s: Any) -> str:
+    """One line: control characters (newline, carriage return, escape) become a space."""
+    return _CTRL_RX.sub(" ", "" if s is None else str(s))
+
+
+def _mt(s: Any) -> str:
+    return _clean(s).translate(_MD_ESC)
+
+
+def _mc(s: Any) -> str:
+    t = _clean(s)
+    if not t:
+        return ""
+    run = max((len(m) for m in re.findall(r"`+", t)), default=0)
+    pad = " " if run else ""
+    return "`" * (run + 1) + pad + t + pad + "`" * (run + 1)
+
+
+def _mn(v: Any) -> str:
+    return _mt(fmt_n(v))
+
+
 def _md_cell(s: Any) -> str:
-    return str("" if s is None else s).replace("|", "\\|").replace("\n", " ")
+    return _clean(s).replace("|", "\\|")
 
 
 def _table(head: List[str], rows: List[List[Any]]) -> List[str]:
@@ -421,51 +466,63 @@ def _mw(v: Any) -> str:
     return f"{v * 1000:.3f} mW" if _isnum(v) else "—"
 
 
-def _terms(ts: List[Dict[str, Any]]) -> str:
+def _f(v: Any, nd: int = 3) -> str:
+    """A number to *nd* decimals; anything else as its text (unescaped)."""
+    return f"{v:.{nd}f}" if _isnum(v) else fmt_n(v)
+
+
+def _terms(ts: Any) -> str:
     out = []
-    for i, t in enumerate(ts):
-        v = t["v"]
-        sign = "" if i == 0 else (" + " if v >= 0 else " − ")
-        out.append(f"{sign}{abs(v):.3f} {t['word']}" if i else f"{v:.3f} {t['word']}")
+    for i, t in enumerate(ts if isinstance(ts, list) else []):
+        v = t.get("v") if isinstance(t, dict) else None
+        if not _isnum(v):
+            continue
+        sign = "" if not out else (" + " if v >= 0 else " − ")
+        out.append(f"{sign}{abs(v):.3f} {t.get('word')}" if out else f"{v:.3f} {t.get('word')}")
     return "".join(out)
+
+
+def _sub(d: Any, k: str) -> Any:
+    return d.get(k) if isinstance(d, dict) else None
 
 
 def render_md(r: Dict[str, Any]) -> str:
     idn = r["identity"]
-    L: List[str] = [f"# Sign-off summary: {idn['design'] or 'design'}, run {idn['run']}", ""]
-    L += ["> **Not a foundry sign-off.** " + r["not_signoff"].split(". ", 1)[1], ""]
+    L: List[str] = [f"# Sign-off summary: {_mt(idn['design'] or 'design')}, run {_mt(idn['run'])}", ""]
+    L += ["> **Not a foundry sign-off.** " + _mt(str(r["not_signoff"]).split(". ", 1)[-1]), ""]
     v = r["verdict"]
-    L += [f"**Result: {v['title']}.** {v['sub']}".rstrip(), ""]
-    ov = ", ".join(f"{k}={val}" for k, val in (idn.get("overrides") or {}).items()) or "none"
+    L += [f"**Result: {_mt(v['title'])}.** {_mt(v['sub'])}".rstrip(), ""]
+    ov = ", ".join(_mc(f"{k}={val}") for k, val in (idn.get("overrides") or {}).items()) or "none"
+    gds = idn.get("gds") if isinstance(idn.get("gds"), dict) else None
     rows = [
-        ["Design", f"{idn['design']}"],
-        ["Run", f"{idn['run']}" + (f" · finished {_when(idn['finished'])}" if idn.get("finished") else "") + (f" · {idn['steps']} steps" if idn.get("steps") else "")],
-        ["PDK", f"{idn['pdk'] or '—'}" + (f" · open_pdks {idn['pdk_commit'][:12]}" if idn.get("pdk_commit") else "") + (f" · library {idn['scl']}" if idn.get("scl") else "")],
-        ["Flow", f"LibreLane {idn['librelane'] or '?'}, {idn['flow']} flow"],
-        ["Engine", (idn.get("engine") or "—") + (f" `{idn['image']}`" if idn.get("image") else "")],
-        ["Configuration", (f"`{idn['config_file']}`" if idn.get("config_file") else "—") + (f", SHA-256 `{idn['config_sha256']}`" if idn.get("config_sha256") else "") + f" · overrides: {ov}"],
-        ["Command", f"`{idn['command']}`" if idn.get("command") else "—"],
-        ["Layout", (f"`{idn['gds']['path']}`, {fmt_n(idn['gds']['size'])} bytes, SHA-256 `{idn['gds']['sha256']}`") if idn.get("gds") else "no final GDS"],
-        ["Written by", f"LanEx {idn['lanex']} on {_when(r['generated_at'])}"],
+        ["Design", _mt(idn['design'])],
+        ["Run", _mt(idn['run']) + (f" · finished {_mt(_when(idn['finished']))}" if idn.get("finished") else "") + (f" · {_mt(idn['steps'])} steps" if idn.get("steps") else "")],
+        ["PDK", _mt(idn['pdk'] or '—') + (f" · open_pdks {_mt(str(idn['pdk_commit'])[:12])}" if idn.get("pdk_commit") else "") + (f" · library {_mt(idn['scl'])}" if idn.get("scl") else "")],
+        ["Flow", f"LibreLane {_mt(idn['librelane'] or '?')}, {_mt(idn['flow'])} flow"],
+        ["Engine", _mt(idn.get("engine") or "—") + (f" {_mc(idn['image'])}" if idn.get("image") else "")],
+        ["Configuration", (_mc(idn['config_file']) if idn.get("config_file") else "—") + (f", SHA-256 {_mc(idn['config_sha256'])}" if idn.get("config_sha256") else "") + f" · overrides: {ov}"],
+        ["Command", _mc(idn['command']) if idn.get("command") else "—"],
+        ["Layout", (f"{_mc(gds.get('path'))}, {_mn(gds.get('size'))} bytes, SHA-256 {_mc(gds.get('sha256'))}") if gds else "no final GDS"],
+        ["Written by", f"LanEx {_mt(idn['lanex'])} on {_mt(_when(r['generated_at']))}"],
     ]
     L += _table(["", ""], rows) + [""]
     L += ["## Checks", ""]
     L += _table(["Check", "Result", "Value", "Limit", "LibreLane", "Source"],
-                [[c["name"], MARK.get(c["status"], "") + " " + c["result"], c["value"], c["limit"],
-                  c["gate"] + (f" ({c['gate_note']})" if c["gate_note"] else ""), f"`{c['source']}`" if c["source"] else ""]
+                [[_mt(c["name"]), MARK.get(str(c["status"]), "") + " " + _mt(c["result"]), _mt(c["value"]), _mt(c["limit"]),
+                  _mt(c["gate"]) + (f" ({_mt(c['gate_note'])})" if c["gate_note"] else ""), _mc(c['source']) if c["source"] else ""]
                  for c in r["checks"]]) + [""]
     t = r["timing"]
     L += ["## Timing", "", "### Clock", ""]
     if t.get("no_clock"):
         L += ["**Timing was never checked: no clock reached the registers.** OpenSTA found no timed path in any corner, "
               "so \"0 violations\" means nothing was checked.", ""]
-    L += [(f"Period {t['clock_period']} ns ({t['mhz']} MHz)" if t.get("clock_period") else "No clock period in the config.")
+    L += [(f"Period {_mt(t['clock_period'])} ns ({_mt(t['mhz'])} MHz)" if t.get("clock_period") else "No clock period in the config.")
           + (f" · uncertainty {abs(t['uncertainty']):.3f} ns" if _isnum(t.get("uncertainty")) else ""), ""]
     if t["corners"]:
         L += ["", "### Corners", ""]
         L += _table(["Corner", "Setup WNS ns", "Setup TNS ns", "Setup viol.", "Hold WNS ns", "Hold TNS ns", "Hold viol.", "reg→reg Fmax", "Fails the run on"],
-                    [[c["corner"], fmt_ns(c["setup_ws"]), fmt_ns(c["setup_tns"]), fmt_n(c["setup_vio"]),
-                      fmt_ns(c["hold_ws"]), fmt_ns(c["hold_tns"]), fmt_n(c["hold_vio"]),
+                    [[_mc(c["corner"]), fmt_ns(c["setup_ws"]), fmt_ns(c["setup_tns"]), _mn(c["setup_vio"]),
+                      fmt_ns(c["hold_ws"]), fmt_ns(c["hold_tns"]), _mn(c["hold_vio"]),
                       (f"{c['fmax']:.1f} MHz" if _isnum(c.get("fmax")) else "—"),
                       " · ".join(x for x in (("setup" if c["setup_gate"] else ""), ("hold" if c["hold_gate"] else "")) if x) or "warns only"]
                      for c in t["corners"]]) + [""]
@@ -474,33 +531,35 @@ def render_md(r: Dict[str, Any]) -> str:
         p = t.get(f"worst_{kind}")
         if not p:
             continue
-        L += [f"### Worst {kind} path · {p['corner']}", "",
-              f"`{p['start']}` ({p['start_desc']}) → `{p['end']}` · slack **{fmt_ns(p['slack'])} ns** "
-              f"({'MET' if p['met'] else 'VIOLATED'}) · one of {p['endpoints']} endpoints in this corner", "",
-              f"- {'Needed by' if kind == 'setup' else 'Must arrive after'} {p['required']:.3f} ns = {_terms(p['required_terms'])}",
-              f"- Arrives at {p['arrival']:.3f} ns = {_terms(p['arrival_terms'])}", ""]
+        met = p["met"] is True
+        L += [f"### Worst {kind} path · {_mc(p['corner'])}", "",
+              f"{_mc(p['start'])} ({_mt(p['start_desc'])}) → {_mc(p['end'])} · slack **{fmt_ns(p['slack'])} ns** "
+              f"({'MET' if met else 'VIOLATED'}) · one of {_mn(p['endpoints'])} endpoints in this corner", "",
+              f"- {'Needed by' if kind == 'setup' else 'Must arrive after'} {_mt(_f(p['required']))} ns = {_mt(_terms(p['required_terms']))}",
+              f"- Arrives at {_mt(_f(p['arrival']))} ns = {_mt(_terms(p['arrival_terms']))}", ""]
         L += _table(["Pin", "Cell", "Edge", "Fanout", "Cap fF", "Slew ns", "Incr ns", "Arrival ns"],
-                    [[x["what"], x.get("cell", ""), x.get("edge", ""), fmt_n(x.get("fanout")) if x.get("fanout") is not None else "",
+                    [[_mc(x["what"]), _mc(x.get("cell", "")), _mt(x.get("edge", "")), _mn(x.get("fanout")) if x.get("fanout") is not None else "",
                       (f"{x['cap_ff']:.2f}" if _isnum(x.get("cap_ff")) else ""), (f"{x['slew']:.3f}" if _isnum(x.get("slew")) else ""),
                       (f"{x['incr']:.3f}" if _isnum(x.get("incr")) else ""), (f"{x['time']:.3f}" if _isnum(x.get("time")) else "")]
                      for x in p["rows"]])
-        L += ["", f"Source: `{p['source']['rel']}` line {p['line']}.", ""]
+        L += ["", f"Source: {_mc(_sub(p['source'], 'rel'))} line {_mt(p['line'])}.", ""]
     ph = r["physical"]
+    lc = ph.get("lvs_counts") if isinstance(ph.get("lvs_counts"), dict) else None
     L += ["## Physical verification", "",
-          f"- Design rules (DRC): Magic {fmt_n(ph['magic_drc'])} · KLayout {fmt_n(ph['klayout_drc'])}"
-          + (f" ({ph['klayout_rules']} rules in the deck)" if ph.get("klayout_rules") else "") + f" · router {fmt_n(ph['route_drc'])}",
-          f"- Layout vs netlist (LVS): {ph['lvs'] or '—'}"
-          + (f" · devices {fmt_n(ph['lvs_counts']['layout'].get('devices'))} / {fmt_n(ph['lvs_counts']['netlist'].get('devices'))}"
-             f" · nets {fmt_n(ph['lvs_counts']['layout'].get('nets'))} / {fmt_n(ph['lvs_counts']['netlist'].get('nets'))} (layout / netlist)"
-             if ph.get("lvs_counts") else ""),
-          f"- XOR: {fmt_n(ph['xor'])} differences" + (f" on {ph['xor_layers']} layers" if ph.get("xor_layers") else ""),
-          f"- Antenna: {fmt_n(ph['antenna_nets'])} nets · {fmt_n(ph['antenna_pins'])} pins" + (f" · {fmt_n(ph['diodes'])} diodes" if ph.get("diodes") is not None else ""),
-          f"- Power grid: {fmt_n(ph['pdn'])} unconnected" + ("".join(f" · worst IR drop on {x['net']} {x['pct']} % of supply" for x in ph["ir"][:2]) if ph.get("ir") else ""),
+          f"- Design rules (DRC): Magic {_mn(ph['magic_drc'])} · KLayout {_mn(ph['klayout_drc'])}"
+          + (f" ({_mt(ph['klayout_rules'])} rules in the deck)" if ph.get("klayout_rules") else "") + f" · router {_mn(ph['route_drc'])}",
+          f"- Layout vs netlist (LVS): {_mt(ph['lvs'] or '—')}"
+          + (f" · devices {_mn(_sub(lc['layout'], 'devices'))} / {_mn(_sub(lc['netlist'], 'devices'))}"
+             f" · nets {_mn(_sub(lc['layout'], 'nets'))} / {_mn(_sub(lc['netlist'], 'nets'))} (layout / netlist)"
+             if lc else ""),
+          f"- XOR: {_mn(ph['xor'])} differences" + (f" on {_mt(ph['xor_layers'])} layers" if ph.get("xor_layers") else ""),
+          f"- Antenna: {_mn(ph['antenna_nets'])} nets · {_mn(ph['antenna_pins'])} pins" + (f" · {_mn(ph['diodes'])} diodes" if ph.get("diodes") is not None else ""),
+          f"- Power grid: {_mn(ph['pdn'])} unconnected" + ("".join(f" · worst IR drop on {_mt(_sub(x, 'net'))} {_mt(_sub(x, 'pct'))} % of supply" for x in ph["ir"][:2]) if ph.get("ir") else ""),
           ""]
     a = r["area"]
     bits = []
     if a.get("die_w"):
-        bits.append(f"die {a['die_w']} × {a['die_h']} µm" + (f" ({a['die_area'] / 1e6:.4f} mm²)" if _isnum(a.get("die_area")) else ""))
+        bits.append(f"die {_mt(a['die_w'])} × {_mt(a.get('die_h'))} µm" + (f" ({a['die_area'] / 1e6:.4f} mm²)" if _isnum(a.get("die_area")) else ""))
     if _isnum(a.get("core_area")):
         bits.append(f"core {fmt_n(a['core_area'])} µm²")
     if _isnum(a.get("util")):
@@ -514,24 +573,29 @@ def render_md(r: Dict[str, Any]) -> str:
     L += ["## Power (estimate)", ""]
     if pw["corners"]:
         L += _table(["Corner", "Internal", "Switching", "Leakage", "Total"],
-                    [[x["corner"], _mw(x["internal"]), _mw(x["switching"]), _mw(x["leakage"]), _mw(x["total"])] for x in pw["corners"]]) + [""]
-    L += [pw["note"], ""]
+                    [[_mc(x["corner"]), _mw(x["internal"]), _mw(x["switching"]), _mw(x["leakage"]), _mw(x["total"])] for x in pw["corners"]]) + [""]
+    L += [_mt(pw["note"]), ""]
     wr = r["warnings"]
-    L += ["## Warnings", "", wr["summary"], ""]
+    L += ["## Warnings", "", _mt(wr["summary"]), ""]
     if wr.get("waiver_error"):
-        L += [f"> {wr['waiver_error']}", ""]
+        L += [f"> {_mt(wr['waiver_error'])}", ""]
     if wr["groups"]:
+        def _wv(g: Dict[str, Any]) -> str:
+            w = g.get("waiver") if isinstance(g.get("waiver"), dict) else None
+            if not (g.get("waived") and w):
+                return ""
+            return (f"waived: {_mt(w.get('reason'))}, \"{_mt(w.get('note'))}\" "
+                    f"({_mt(w.get('by') or 'unnamed')}, {_mt(w.get('date'))})")
         L += _table(["Code", "Tool", "Count", "LanEx's reading", "What it is", "Waiver"],
-                    [[g["code"] + (" (new)" if g.get("new") else ""), g["tool"], fmt_n(g["count"]), g.get("worry") or "",
-                      g["title"], (f"waived: {g['waiver']['reason']}, \"{g['waiver']['note']}\" ({g['waiver']['by'] or 'unnamed'}, {g['waiver']['date']})"
-                                   if g.get("waived") and g.get("waiver") else "")]
+                    [[_mt(g["code"]) + (" (new)" if g.get("new") else ""), _mt(g["tool"]), _mn(g["count"]), _mt(g.get("worry") or ""),
+                      _mt(g["title"]), _wv(g)]
                      for g in wr["groups"]]) + [""]
     if r["tools"]:
-        L += ["## Tools", "", " · ".join(f"{x['tool']} {x['version']}" for x in r["tools"])
+        L += ["## Tools", "", " · ".join(f"{_mt(x['tool'])} {_mt(x['version'])}" for x in r["tools"])
               + " (from this run's logs; OpenROAD and OpenSTA are named by the image above)", ""]
     L += ["## Files this report read", ""]
-    L += _table(["File", "Bytes", "SHA-256"], [[f"`{f['path']}`", fmt_n(f["size"]), f"`{f['sha256']}`"] for f in r["files"]]) + [""]
-    L += ["## What this report does not cover", ""] + [f"- {x}" for x in r["not_covered"]] + [""]
+    L += _table(["File", "Bytes", "SHA-256"], [[_mc(f['path']), _mn(f["size"]), _mc(f['sha256'])] for f in r["files"]]) + [""]
+    L += ["## What this report does not cover", ""] + [f"- {_mt(x)}" for x in r["not_covered"]] + [""]
     return "\n".join(L)
 
 
@@ -593,10 +657,16 @@ def _e(s: Any) -> str:
     return _html.escape("" if s is None else str(s))
 
 
+def _hn(v: Any) -> str:
+    """fmt_n for HTML: a value that isn't a number is text, escaped."""
+    return _e(fmt_n(v))
+
+
 def _htable(head: List[Tuple[str, bool]], rows: List[List[Tuple[Any, str]]], cls: str = "") -> str:
+    """Cells are HTML the caller built with _e/_hn around every value."""
     h = "".join(f"<th class='{'n' if num else ''}'>{_e(t)}</th>" for t, num in head)
-    body = "".join("<tr>" + "".join(f"<td class='{c}'>{v}</td>" for v, c in r) + "</tr>" for r in rows)
-    return f"<table class='{cls}'><thead><tr>{h}</tr></thead><tbody>{body}</tbody></table>"
+    body = "".join("<tr>" + "".join(f"<td class='{_e(c)}'>{v}</td>" for v, c in r) + "</tr>" for r in rows)
+    return f"<table class='{_e(cls)}'><thead><tr>{h}</tr></thead><tbody>{body}</tbody></table>"
 
 
 def _slack_cls(v: Any) -> str:
@@ -604,36 +674,40 @@ def _slack_cls(v: Any) -> str:
 
 
 def render_html(r: Dict[str, Any], *, fonts_dir: Optional[Path] = None, chip_png: Optional[bytes] = None) -> str:
+    """The report as one self-contained page. Every value from the run folder
+    is escaped where it is put in (_e, _hn); the page has no script, and the
+    server sends any HTML from a run folder sandboxed (no script, no origin)."""
     idn = r["identity"]
     v = r["verdict"]
-    tone = {"pass": "t-pass", "fail": "t-fail"}.get(v.get("tone"), "t-warn")
-    title = f"Sign-off summary: {idn['design'] or 'design'}, run {idn['run']}"
+    tone = {"pass": "t-pass", "fail": "t-fail"}.get(str(v.get("tone")), "t-warn")
+    title = f"Sign-off summary: {_clean(idn['design'] or 'design')}, run {_clean(idn['run'])}"
     H: List[str] = ["<!doctype html><html lang='en'><head><meta charset='utf-8'>",
                     "<meta name='viewport' content='width=device-width,initial-scale=1'>",
                     f"<title>{_e(title)}</title><style>{_fonts_css(fonts_dir)}{_CSS}</style></head><body><div class='wrap'>"]
     H.append(f"<div class='eyebrow'>LanEx sign-off summary · {_e(idn['pdk'] or '')}</div><h1>{_e(idn['design'] or 'design')} · run {_e(idn['run'])}</h1><div class='hair'></div>")
-    H.append(f"<div class='disc'><b>Not a foundry sign-off.</b> {_e(r['not_signoff'].split('. ', 1)[1])}</div>")
+    H.append(f"<div class='disc'><b>Not a foundry sign-off.</b> {_e(str(r['not_signoff']).split('. ', 1)[-1])}</div>")
     verdict = f"<div class='verdict {tone}'><span class='via'></span><div><b>{_e(v['title'])}</b><p>{_e(v.get('sub') or '')}</p></div></div>"
     chip = ("<img class='chipimg' alt='The final layout of " + _e(idn["design"] or "the design") + "' src='data:image/png;base64,"
             + base64.b64encode(chip_png).decode("ascii") + "'>") if chip_png else ""
     H.append(f"<div class='top{'' if chip else ' no-chip'}'>{verdict}{chip}</div>")
     ov = ", ".join(f"{k}={val}" for k, val in (idn.get("overrides") or {}).items()) or "none"
+    gds = idn.get("gds") if isinstance(idn.get("gds"), dict) else None
     idrows = [
         ("Design", _e(idn["design"])),
         ("Run", _e(idn["run"]) + (f" · finished {_e(_when(idn['finished']))}" if idn.get("finished") else "") + (f" · {_e(idn['steps'])} steps" if idn.get("steps") else "")),
-        ("PDK", _e(idn["pdk"] or "—") + (f" · open_pdks <code>{_e(idn['pdk_commit'][:12])}</code>" if idn.get("pdk_commit") else "") + (f" · library {_e(idn['scl'])}" if idn.get("scl") else "")),
+        ("PDK", _e(idn["pdk"] or "—") + (f" · open_pdks <code>{_e(str(idn['pdk_commit'])[:12])}</code>" if idn.get("pdk_commit") else "") + (f" · library {_e(idn['scl'])}" if idn.get("scl") else "")),
         ("Flow", f"LibreLane {_e(idn['librelane'] or '?')}, {_e(idn['flow'])} flow"),
         ("Engine", _e(idn.get("engine") or "—") + (f" <code>{_e(idn['image'])}</code>" if idn.get("image") else "")),
         ("Configuration", (f"<code>{_e(idn['config_file'])}</code>" if idn.get("config_file") else "—") + (f", SHA-256 <code>{_e(idn['config_sha256'])}</code>" if idn.get("config_sha256") else "") + f" · overrides: {_e(ov)}"),
         ("Command", f"<code>{_e(idn['command'])}</code>" if idn.get("command") else "—"),
-        ("Layout", (f"<code>{_e(idn['gds']['path'])}</code>, {fmt_n(idn['gds']['size'])} bytes, SHA-256 <code>{_e(idn['gds']['sha256'])}</code>") if idn.get("gds") else "no final GDS"),
+        ("Layout", (f"<code>{_e(gds.get('path'))}</code>, {_hn(gds.get('size'))} bytes, SHA-256 <code>{_e(gds.get('sha256'))}</code>") if gds else "no final GDS"),
         ("Written by", f"LanEx {_e(idn['lanex'])} on {_e(_when(r['generated_at']))}"),
     ]
     H.append("<table class='idt'><tbody>" + "".join(f"<tr><td>{k}</td><td>{val}</td></tr>" for k, val in idrows) + "</tbody></table>")
     sc = {"pass": "ok", "fail": "bad", "warn": "wn"}
     H.append("<h2>Checks</h2>" + _htable(
         [("Check", False), ("Result", False), ("Value", True), ("Limit", True), ("LibreLane", False), ("Source", False)],
-        [[(_e(c["name"]), ""), (_e(c["result"]), sc.get(c["status"], "mut")), (_e(c["value"]), "n"), (_e(c["limit"]), "n"),
+        [[(_e(c["name"]), ""), (_e(c["result"]), sc.get(str(c["status"]), "mut")), (_e(c["value"]), "n"), (_e(c["limit"]), "n"),
           (_e(c["gate"]) + (f"<br><span class='src'>{_e(c['gate_note'])}</span>" if c["gate_note"] else ""), ""),
           (f"<span class='src'>{_e(c['source'])}</span>", "")] for c in r["checks"]]))
     t = r["timing"]
@@ -647,8 +721,8 @@ def render_html(r: Dict[str, Any], *, fonts_dir: Optional[Path] = None, chip_png
             [("Corner", False), ("Setup WNS ns", True), ("Setup TNS ns", True), ("Viol.", True), ("Hold WNS ns", True), ("Hold TNS ns", True),
              ("Viol.", True), ("reg→reg Fmax", True), ("Fails the run on", False)],
             [[(f"<code>{_e(c['corner'])}</code>", ""), (fmt_ns(c["setup_ws"]), _slack_cls(c["setup_ws"])), (fmt_ns(c["setup_tns"]), _slack_cls(c["setup_tns"])),
-              (fmt_n(c["setup_vio"]), "n"), (fmt_ns(c["hold_ws"]), _slack_cls(c["hold_ws"])), (fmt_ns(c["hold_tns"]), _slack_cls(c["hold_tns"])),
-              (fmt_n(c["hold_vio"]), "n"), ((f"{c['fmax']:.1f} MHz" if _isnum(c.get("fmax")) else "—"), "n"),
+              (_hn(c["setup_vio"]), "n"), (fmt_ns(c["hold_ws"]), _slack_cls(c["hold_ws"])), (fmt_ns(c["hold_tns"]), _slack_cls(c["hold_tns"])),
+              (_hn(c["hold_vio"]), "n"), ((f"{c['fmax']:.1f} MHz" if _isnum(c.get("fmax")) else "—"), "n"),
               (" · ".join(x for x in (("setup" if c["setup_gate"] else ""), ("hold" if c["hold_gate"] else "")) if x) or "<span class='mut'>warns only</span>", "")]
              for c in t["corners"]]))
         H.append("<p class='mut'>reg→reg Fmax is OpenSTA’s <code>report_clock_min_period</code> for register-to-register paths; input and output paths are not in it.</p>")
@@ -656,33 +730,34 @@ def render_html(r: Dict[str, Any], *, fonts_dir: Optional[Path] = None, chip_png
         p = t.get(f"worst_{kind}")
         if not p:
             continue
+        neg = _isnum(p["slack"]) and p["slack"] < 0
         H.append(f"<h3>Worst {kind} path · <code>{_e(p['corner'])}</code></h3>")
         H.append(f"<p><code>{_e(p['start'])}</code> <span class='mut'>({_e(p['start_desc'])})</span> → <code>{_e(p['end'])}</code> · slack "
-                 f"<b class='mono {'bad' if p['slack'] < 0 else 'ok'}'>{fmt_ns(p['slack'])} ns</b> · one of {p['endpoints']} endpoints in this corner</p>")
-        H.append(f"<p class='mono'>{'Needed by' if kind == 'setup' else 'Must arrive after'} {p['required']:.3f} = {_e(_terms(p['required_terms']))}<br>"
-                 f"Arrives at {p['arrival']:.3f} = {_e(_terms(p['arrival_terms']))}</p>")
+                 f"<b class='mono {'bad' if neg else 'ok'}'>{fmt_ns(p['slack'])} ns</b> · one of {_hn(p['endpoints'])} endpoints in this corner</p>")
+        H.append(f"<p class='mono'>{'Needed by' if kind == 'setup' else 'Must arrive after'} {_e(_f(p['required']))} = {_e(_terms(p['required_terms']))}<br>"
+                 f"Arrives at {_e(_f(p['arrival']))} = {_e(_terms(p['arrival_terms']))}</p>")
         H.append(_htable(
             [("Pin", False), ("Cell", False), ("Edge", False), ("Fanout", True), ("Cap fF", True), ("Slew ns", True), ("Incr ns", True), ("Arrival ns", True)],
             [[(f"<code>{_e(x['what'])}</code>", ""), (_e(x.get("cell", "")), "mono"), (_e(x.get("edge", "")), ""),
-              (fmt_n(x.get("fanout")) if x.get("fanout") is not None else "", "n"),
+              (_hn(x.get("fanout")) if x.get("fanout") is not None else "", "n"),
               (f"{x['cap_ff']:.2f}" if _isnum(x.get("cap_ff")) else "", "n"), (f"{x['slew']:.3f}" if _isnum(x.get("slew")) else "", "n"),
               (f"{x['incr']:.3f}" if _isnum(x.get("incr")) else "", "n"), (f"{x['time']:.3f}" if _isnum(x.get("time")) else "", "n")]
              for x in p["rows"]]))
-        H.append(f"<p class='src'>Source: {_e(p['source']['rel'])} line {_e(p['line'])}</p>")
+        H.append(f"<p class='src'>Source: {_e(_sub(p['source'], 'rel'))} line {_e(p['line'])}</p>")
     ph = r["physical"]
     items = [
-        f"Design rules (DRC): Magic <b class='mono'>{fmt_n(ph['magic_drc'])}</b> · KLayout <b class='mono'>{fmt_n(ph['klayout_drc'])}</b>"
-        + (f" ({_e(ph['klayout_rules'])} rules in the deck)" if ph.get("klayout_rules") else "") + f" · router <b class='mono'>{fmt_n(ph['route_drc'])}</b>",
+        f"Design rules (DRC): Magic <b class='mono'>{_hn(ph['magic_drc'])}</b> · KLayout <b class='mono'>{_hn(ph['klayout_drc'])}</b>"
+        + (f" ({_e(ph['klayout_rules'])} rules in the deck)" if ph.get("klayout_rules") else "") + f" · router <b class='mono'>{_hn(ph['route_drc'])}</b>",
         f"Layout vs netlist (LVS): <b>{_e(ph['lvs'] or '—')}</b>",
-        f"XOR: <b class='mono'>{fmt_n(ph['xor'])}</b> differences" + (f" on {_e(ph['xor_layers'])} layers" if ph.get("xor_layers") else ""),
-        f"Antenna: <b class='mono'>{fmt_n(ph['antenna_nets'])}</b> nets · <b class='mono'>{fmt_n(ph['antenna_pins'])}</b> pins" + (f" · {fmt_n(ph['diodes'])} diodes" if ph.get("diodes") is not None else ""),
-        f"Power grid: <b class='mono'>{fmt_n(ph['pdn'])}</b> unconnected" + "".join(f" · worst IR drop on {_e(x['net'])} {_e(x['pct'])} % of supply" for x in (ph.get("ir") or [])[:2]),
+        f"XOR: <b class='mono'>{_hn(ph['xor'])}</b> differences" + (f" on {_e(ph['xor_layers'])} layers" if ph.get("xor_layers") else ""),
+        f"Antenna: <b class='mono'>{_hn(ph['antenna_nets'])}</b> nets · <b class='mono'>{_hn(ph['antenna_pins'])}</b> pins" + (f" · {_hn(ph['diodes'])} diodes" if ph.get("diodes") is not None else ""),
+        f"Power grid: <b class='mono'>{_hn(ph['pdn'])}</b> unconnected" + "".join(f" · worst IR drop on {_e(_sub(x, 'net'))} {_e(_sub(x, 'pct'))} % of supply" for x in (ph.get("ir") or [])[:2]),
     ]
     H.append("<h2>Physical verification</h2><ul>" + "".join(f"<li>{x}</li>" for x in items) + "</ul>")
     a = r["area"]
     bits = []
     if a.get("die_w"):
-        bits.append(f"die <b class='mono'>{a['die_w']} × {a['die_h']} µm</b>")
+        bits.append(f"die <b class='mono'>{_e(a['die_w'])} × {_e(a.get('die_h'))} µm</b>")
     if _isnum(a.get("util")):
         bits.append(f"core utilisation <b class='mono'>{a['util'] * 100:.1f} %</b>")
     if _isnum(a.get("logic_cells")):
@@ -702,17 +777,22 @@ def render_html(r: Dict[str, Any], *, fonts_dir: Optional[Path] = None, chip_png
     if wr.get("waiver_error"):
         H.append(f"<div class='disc'>{_e(wr['waiver_error'])}</div>")
     if wr["groups"]:
+        def _wv(g: Dict[str, Any]) -> str:
+            w = g.get("waiver") if isinstance(g.get("waiver"), dict) else None
+            if not (g.get("waived") and w):
+                return ""
+            return (f"waived: {_e(w.get('reason'))}, “{_e(w.get('note'))}” "
+                    f"({_e(w.get('by') or 'unnamed')}, {_e(w.get('date'))})")
         H.append(_htable([("Code", False), ("Tool", False), ("Count", True), ("LanEx's reading", False), ("What it is", False), ("Waiver", False)],
                          [[(f"<code>{_e(g['code'])}</code>" + (" <span class='chip wn'>new</span>" if g.get("new") else ""), ""), (_e(g["tool"]), ""),
-                           (fmt_n(g["count"]), "n"), (_e(g.get("worry") or ""), ""), (_e(g["title"]), ""),
-                           ((f"waived: {_e(g['waiver']['reason'])}, “{_e(g['waiver']['note'])}” ({_e(g['waiver']['by'] or 'unnamed')}, {_e(g['waiver']['date'])})"
-                             if g.get("waived") and g.get("waiver") else ""), "mut")] for g in wr["groups"]]))
+                           (_hn(g["count"]), "n"), (_e(g.get("worry") or ""), ""), (_e(g["title"]), ""),
+                           (_wv(g), "mut")] for g in wr["groups"]]))
     if r["tools"]:
         H.append("<h2>Tools</h2><p>" + " · ".join(f"{_e(x['tool'])} <span class='mono'>{_e(x['version'])}</span>" for x in r["tools"])
                  + " <span class='mut'>(from this run’s logs; OpenROAD and OpenSTA are named by the image above)</span></p>")
     H.append("<h2>Files this report read</h2>" + _htable(
         [("File", False), ("Bytes", True), ("SHA-256", False)],
-        [[(f"<code>{_e(f['path'])}</code>", ""), (fmt_n(f["size"]), "n"), (f"<span class='src'>{_e(f['sha256'])}</span>", "")] for f in r["files"]]))
+        [[(f"<code>{_e(f['path'])}</code>", ""), (_hn(f["size"]), "n"), (f"<span class='src'>{_e(f['sha256'])}</span>", "")] for f in r["files"]]))
     H.append("<h2>What this report does not cover</h2><ul>" + "".join(f"<li>{_e(x)}</li>" for x in r["not_covered"]) + "</ul>")
     H.append(f"<p class='foot'>Written by LanEx {_e(idn['lanex'])} on {_e(_when(r['generated_at']))} from the run folder’s own files. "
              "LanEx is not affiliated with or endorsed by LibreLane.</p></div></body></html>")
@@ -725,20 +805,20 @@ def write(run_dir: str | Path, *, design_dir: Optional[str | Path] = None, base_
     """Build the report and write ``report.json``, ``report.md``, ``report.html``
     and ``SHA256SUMS`` to ``<run>/lanex-report/``: ``{dir, files, generated_at}``."""
     run_dir = Path(run_dir).resolve()
+    # The run folder may hold links planted to send these writes elsewhere:
+    # lanex-report must be a real folder in the run, and each file is a new
+    # temp file renamed over its name, so a link there is replaced, not followed.
+    out = safefs.confined_dir(run_dir, REPORT_DIR)
     rep = build(run_dir, design_dir=design_dir, base_dir=base_dir, verdict=verdict)
-    out = run_dir / REPORT_DIR
-    out.mkdir(exist_ok=True)
     texts = {"report.json": json.dumps(rep, indent=1, ensure_ascii=False, default=str) + "\n",
              "report.md": render_md(rep),
              "report.html": render_html(rep, fonts_dir=fonts_dir, chip_png=chip_png)}
     sums = []
     for name, text in texts.items():
         data = text.encode("utf-8")
-        tmp = out / (name + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(out / name)
+        safefs.write_bytes(out, name, data)
         sums.append(f"{hashlib.sha256(data).hexdigest()}  {name}")
-    (out / "SHA256SUMS").write_text("\n".join(sums) + "\n", encoding="utf-8")
+    safefs.write_text(out, "SHA256SUMS", "\n".join(sums) + "\n")
     return {"dir": _rel(run_dir, out), "files": {k.split(".")[1]: f"{REPORT_DIR}/{k}" for k in texts},
             "generated_at": rep["generated_at"], "verdict": rep["verdict"]["title"],
             "sizes": {k: len(v.encode('utf-8')) for k, v in texts.items()}}
