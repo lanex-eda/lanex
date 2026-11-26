@@ -3815,6 +3815,39 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.equal(TM.takeDropped(), 2);
     assert.equal(TM.takeDropped(), 0);
   });
+  const PM = await import(toUrl(resolve(MOD, "palettemodel.js")));
+  check("palette: ! projects and : flow steps scope the search; checks and tools come up by name", () => {
+    assert.deepEqual(PM.parseQuery("!spm"), { group: "project", q: "spm", prefix: "!" });
+    assert.deepEqual(PM.parseQuery(":cts"), { group: "step", q: "cts", prefix: ":" });
+    const items = [
+      { id: "a:run", group: "action", title: "Run the flow" },
+      { id: "pj:/p/spm", group: "project", title: "spm", keys: ["/p/spm"] },
+      { id: "sp:OpenROAD.CTS", group: "step", title: "Clock tree synthesis", keys: ["OpenROAD.CTS"] },
+      { id: "ck:magic_drc", group: "check", title: "Magic DRC check", keys: ["magic_drc"] },
+      { id: "tl:klayout", group: "tool", title: "KLayout", keys: ["klayout"] },
+    ];
+    assert.deepEqual(PM.rank(items, ":cts").map((x) => x.id), ["sp:OpenROAD.CTS"]);
+    assert.deepEqual(PM.rank(items, "!spm").map((x) => x.id), ["pj:/p/spm"]);
+    assert.equal(PM.rank(items, "drc")[0].id, "ck:magic_drc");
+    assert.equal(PM.rank(items, "klayout")[0].id, "tl:klayout");
+  });
+  check("palette: data that arrives late keeps the highlighted row", () => {
+    const a = [{ id: "x" }, { id: "y" }, { id: "z" }];
+    assert.equal(PM.keepSelection([{ id: "n" }, ...a], "y", 1), 2);
+    assert.equal(PM.keepSelection(a, "gone", 7), 2);
+    assert.equal(PM.keepSelection([], "gone", 3), 0);
+  });
+  check("palette: a run's actions are the Runs panel's own, Delete asks first and is never a recent", () => {
+    const p = readFileSync(resolve(MOD, "palette.js"), "utf8");
+    assert.match(p, /m\.runAction\(id, r\)/);
+    assert.match(p, /act\("delete", "Delete run " \+ r\.tag \+ "…"[^\n]*danger: true/);
+    assert.match(p, /!a\.danger\)/);
+    assert.match(p, /m\.switchProject\(d\)/);
+    assert.match(p, /tab\("verify", \{ check: id \}\)/);
+    assert.match(p, /tab\("tools", \{ item: k \}\)/);
+    assert.match(p, /isDown\(\) \? probeNow\(\) : location\.reload\(\)/);
+    assert.match(readFileSync(resolve(MOD, "runs.js"), "utf8"), /export async function runAction\(id, r\)/);
+  });
   const NV = await import(toUrl(resolve(MOD, "nav.js")));
   check("nav: the Flow page's address is #flow, and #pipeline still opens it", () => {
     assert.equal(NV.addressOf("pipeline"), "flow");

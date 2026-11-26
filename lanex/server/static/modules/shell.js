@@ -59,7 +59,7 @@ export function paintProject() {
 // The last list the server gave; a failed fetch shows that instead of an
 // almost-empty list.
 let _serverKnown = [];
-async function knownProjects() {
+export async function knownProjects() {
   let dirs = [];
   try { dirs = _serverKnown = (await api.knownDesigns()).designs || []; } catch (_e) { dirs = _serverKnown.slice(); }
   try {
@@ -164,7 +164,8 @@ function wireHub() {
   renderHubRows();
 }
 
-async function switchProject(dir) {
+// The project menu's and the palette's ("! projects") way to open one.
+export async function switchProject(dir) {
   if (!dir || dir === state.designDir) return;
   try {
     const res = await api.setDesignDir(dir);

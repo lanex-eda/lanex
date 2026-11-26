@@ -182,7 +182,12 @@ async function render() {
 
 // A link to one check (nav.js go("verify", { check })): open its row.
 export async function revealCheck(id) {
+  // Opened from another page (the palette, a failure card) the page may not
+  // have started reading its report yet: wait for it a moment, and if it
+  // still has none, the row opens when the report arrives.
+  for (let i = 0; i < 50 && !_rep && !_rendering; i++) await new Promise((r) => setTimeout(r, 100));
   if (_rendering) await _rendering;
+  if (!_rep) { _open.add(id); return; }
   jumpTo("vf-checks", id);
 }
 
