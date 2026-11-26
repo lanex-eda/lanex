@@ -334,6 +334,15 @@ export const api = {
     _fetch("/api/timing-paths?kind=" + encodeURIComponent(kind || "setup") +
       (tag ? "&tag=" + encodeURIComponent(tag) : "") +
       (limit ? "&limit=" + encodeURIComponent(limit) : "")),
+  // Verify's timing explorer (lane 4): one corner's endpoints, one path in
+  // full; the run's warnings with waivers; the sign-off report files.
+  timingList: (q) => _fetch("/api/timing/paths?" + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v != null && v !== "")).toString(), { timeout: 60000 }),
+  timingPath: (q) => _fetch("/api/timing/path?" + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v != null && v !== "")).toString(), { timeout: 60000 }),
+  warnings: (tag, base) => _fetch("/api/warnings?tag=" + encodeURIComponent(tag) + (base ? "&base=" + encodeURIComponent(base) : "")),
+  waive: (entry, mtime, tag) => _fetch("/api/warnings/waive", { method: "POST", body: JSON.stringify({ entry, mtime, tag }) }),
+  unwaive: (id, mtime) => _fetch("/api/warnings/unwaive", { method: "POST", body: JSON.stringify({ id, mtime }) }),
+  verifyReport: (body) => _fetch("/api/verify/report", { method: "POST", body: JSON.stringify(body), timeout: 120000 }),
+  verifySummary: (tag, base) => _fetch("/api/verify/summary?tag=" + encodeURIComponent(tag) + (base ? "&base=" + encodeURIComponent(base) : ""), { timeout: 60000 }),
 
   // ---------- Phase 2: re-verify + DSE
   verifyRerun: (payload) =>

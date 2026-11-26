@@ -2825,6 +2825,102 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.match(css, /\.toast-host \{[^}]*bottom: calc\(var\(--status-h, 30px\) \+ var\(--s-3\)\)/);
   });
 }
+// ---- Verify: timing explorer, corner grid, warnings, share card (lane 4)
+{
+  const CG = await import(toUrl(resolve(MOD, "cornergrid.js")));
+  const TX = await import(toUrl(resolve(MOD, "timing.js")));
+  const WN = await import(toUrl(resolve(MOD, "warnings.js")));
+  const SC = await import(toUrl(resolve(MOD, "sharecard.js")));
+  const VM = await import(toUrl(resolve(MOD, "verify-model.js")));
+  check("cornergrid: sky130 and IHP corner names parse into process, temperature, voltage, wire RC", () => {
+    assert.deepEqual(CG.parseCorner("max_ss_100C_1v60"), { name: "max_ss_100C_1v60", rc: "max", process: "ss", speed: "slow", temp: 100, volt: 1.6 });
+    assert.equal(CG.parseCorner("min_ff_n40C_1v95").temp, -40);
+    const ihp = CG.parseCorner("nom_fast_1p32V_m40C");
+    assert.equal(ihp.speed, "fast"); assert.equal(ihp.volt, 1.32); assert.equal(ihp.temp, -40); assert.equal(ihp.rc, "nom");
+    assert.equal(CG.cornerWords("max_ss_100C_1v60"), "slow process, 100 °C, 1.60 V, max wire RC");
+  });
+  check("cornergrid: nine sky130 corners lay out 3 × 3 (fast → slow across, min → max RC down); unknown names fall back to a strip", () => {
+    const names = ["max_ff_n40C_1v95", "max_ss_100C_1v60", "max_tt_025C_1v80", "min_ff_n40C_1v95", "min_ss_100C_1v60", "min_tt_025C_1v80", "nom_ff_n40C_1v95", "nom_ss_100C_1v60", "nom_tt_025C_1v80"];
+    const L = CG.cornerLayout(names);
+    assert.equal(L.grid, true);
+    assert.deepEqual(L.rows, ["min", "nom", "max"]);
+    assert.equal(L.cols.length, 3);
+    assert.match(L.cols[0], /^ff\|/); assert.match(L.cols[2], /^ss\|/);
+    assert.equal(CG.cornerLayout(["foo", "bar"]).grid, false);
+    const html = CG.cornerGridHtml(names.map((c, i) => ({ corner: c, ws: i - 4 })), { value: (r) => r.ws, selected: "nom_tt_025C_1v80", gate: (r) => r.corner.includes("tt") });
+    assert.equal((html.match(/class='cg-b'/g) || []).length, 9);
+    assert.match(html, /is-bad/); assert.match(html, /is-sel/); assert.match(html, /aria-pressed='true'/);
+    assert.match(html, /fails the run here/);
+  });
+  check("timing: a slack never rounds a failure to zero; sums read as the report's terms", () => {
+    assert.equal(TX.fmtSlack(4.10026), "+4.100");
+    assert.equal(TX.fmtSlack(-0.0002), "−0.000200");
+    assert.equal(TX.fmtSlack(1e30), "no path");
+    assert.equal(TX.fmtSlack(null), "—");
+    assert.equal(TX.termsText(10.2682, [{ v: 10, word: "clock edge" }, { v: 0.651066, word: "capture clock" }, { v: -0.1, word: "uncertainty" }, { v: -0.282867, word: "setup time (dfrtp_2)" }]),
+      "10.268 = 10.000 clock edge + 0.651 capture clock − 0.100 uncertainty − 0.283 setup time (dfrtp_2)");
+  });
+  check("timing: Show on layout carries the names lane 3 highlights (insts, nets, pins, ports, clock split)", () => {
+    const p = { check: "setup", corner: "max_ss_100C_1v60", start: "x", end: "_278_", slack: 4.1, data: { rows: [{ pin: "_278_/D" }] },
+      highlight: { insts: ["input34", "_278_"], nets: ["x", "net34"], pins: ["input34/A", "_278_/D"], ports: ["x"], clock: { launch: { insts: [], nets: [] }, capture: { insts: ["clkbuf_0_clk"], nets: ["clk"] } } } };
+    const h = TX.highlightOf(p, "baseline");
+    assert.equal(h.kind, "path");
+    assert.deepEqual(h.insts, ["input34", "_278_"]);
+    assert.deepEqual(h.clock.capture.insts, ["clkbuf_0_clk"]);
+    assert.equal(h.label, "setup · max_ss_100C_1v60 · x → _278_/D · +4.100 ns");
+    assert.equal(h.run, "baseline");
+  });
+  check("timing: the old merged worst-paths card and its second baseline picker are gone from Verify", () => {
+    const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+    assert.doesNotMatch(html, /id="timing-compare"/);
+    assert.match(html, /id="vf-tx"/);
+    assert.match(html, /data-jump="vf-warnings"/);
+    assert.match(html, /data-export="html"/);
+  });
+  check("warnings: new-since-baseline and waived filters keep waived groups visible unless asked", () => {
+    const gs = [
+      { key: "a", code: "STA-1140", tool: "OpenSTA", count: 18, waived_count: 18, new: false, base_count: 18, samples: ["library x already exists"] },
+      { key: "b", code: "RSZ-0062", tool: "OpenROAD", count: 1, waived_count: 0, new: true, base_count: 0, samples: [] },
+      { key: "c", code: "DRT-0349", tool: "OpenROAD", count: 12, waived_count: 0, new: false, base_count: 10, samples: [] },
+    ];
+    assert.deepEqual(WN.filterGroups(gs, { mode: "all" }).map((g) => g.key), ["a", "b", "c"]);
+    assert.deepEqual(WN.filterGroups(gs, { mode: "new" }).map((g) => g.key), ["b", "c"], "a count that changed counts as new");
+    assert.deepEqual(WN.filterGroups(gs, { mode: "all", showWaived: false }).map((g) => g.key), ["b", "c"]);
+    assert.deepEqual(WN.filterGroups(gs, { q: "already" }).map((g) => g.key), ["a"]);
+  });
+  check("verdict: a run with no clock is 'Timing was never checked', never Clean", () => {
+    const rep = { verdict: { state: "incomplete", missing_core: ["setup", "hold"], skipped_core: [], blocker_ids: [], warning_ids: [], total: 20 },
+      flow_state: { state: "complete" }, run_verdict: { state: "incomplete", label: "Timing not checked: no clock" },
+      checks: [{ id: "setup", name: "Setup violations", status: "not_run", no_clock: { clock_port: null, registers: 64 } }, { id: "hold", name: "Hold violations", status: "not_run" }] };
+    const cp = VM.verdictCopy(rep);
+    assert.equal(cp.tone, "warn");
+    assert.equal(cp.title, "Timing was never checked");
+    assert.match(cp.sub, /CLOCK_PORT/);
+  });
+  check("share card: the numbers students post, Fmax per process corner, never a hidden failing verdict", () => {
+    const sum = { identity: { design: "spm", pdk: "sky130A", scl: "sky130_fd_sc_hd", run: "baseline", librelane: "3.0.4", finished: "2026-09-17T00:07:30" },
+      area: { die_w: 96.6, die_h: 107.32, util: 0.630246, logic_cells: 324, flipflops: 64 },
+      timing: { clock_period: 10, mhz: 100, corners: [
+        { corner: "max_ss_100C_1v60", setup_ws: 4.1, setup_tns: 0, hold_ws: 1.13, hold_tns: 0, fmax: 343.12 },
+        { corner: "nom_ss_100C_1v60", setup_ws: 4.15, setup_tns: 0, hold_ws: 1.13, hold_tns: 0, fmax: 344.6 },
+        { corner: "max_tt_025C_1v80", setup_ws: 5.96, setup_tns: 0, hold_ws: 0.5, hold_tns: 0, fmax: 684.16 },
+        { corner: "min_ff_n40C_1v95", setup_ws: 6.69, setup_tns: 0, hold_ws: 0.281, hold_tns: 0, fmax: 1034.5 }] },
+      physical: { magic_drc: 0, klayout_drc: 0, route_drc: 0, lvs: "Circuits match uniquely.", antenna_nets: 0 } };
+    const d = SC.cardData(sum, { tone: "pass", title: "Clean", short: "clean" });
+    const rows = Object.fromEntries(d.rows);
+    assert.equal(rows.Die, "96.6 × 107.3 µm");
+    assert.equal(rows["Logic cells"], "324 · 64 flip-flops");
+    assert.equal(rows.Utilisation, "63 %");
+    assert.equal(rows.Setup, "WNS +4.10 ns · TNS 0.00");
+    assert.equal(rows["Reg→reg Fmax"], "343 ss · 684 tt · 1035 ff MHz");
+    assert.equal(rows.Checks, "DRC 0 · LVS match · antenna 0");
+    assert.equal(d.word, "CLEAN");
+    const bad = SC.cardData({ ...sum, timing: { ...sum.timing, no_clock: { registers: 64 } } }, { tone: "warn", title: "Timing was never checked", short: "timing not checked" });
+    assert.equal(bad.word, "TIMING NOT CHECKED");
+    assert.ok(!Object.fromEntries(bad.rows)["Reg→reg Fmax"]);
+    assert.match(SC.altText(d), /^Layout of spm on sky130A: a 96\.6 by 107\.3 µm die, 324 logic cells, 10 ns clock\. .*not a foundry sign-off\.$/);
+  });
+}
 
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));

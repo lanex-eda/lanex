@@ -20,7 +20,9 @@ import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
 import { provBtnHtml, wireProvBtns, needleLine } from "./provenance.js";
 import { renderFileText, fileActionsHtml, wireFileActions } from "./fileview.js";
-import { renderTimingPaths } from "./timing.js";
+import { renderTimingExplorer } from "./timing.js";
+import { renderWarnings } from "./warnings.js";
+import { wireExport } from "./signoff.js";
 import { toast } from "./toast.js";
 import * as AM from "./analytics-model.js";
 import * as V from "./verify-model.js";
@@ -200,7 +202,7 @@ function wireOnce() {
   mountRunBar(document.getElementById("verify-runbar"), { baseline: true });
   ctx.onContext(async (d) => {
     if (!sec.classList.contains("section-active") || d.why === "loaded" || d.why === "settled") return;   // it renders when shown
-    if (d.why === "baseline") { _baseTag = ctx.contextBaseline(); await loadBase(); paint(); return; }
+    if (d.why === "baseline") { _baseTag = ctx.contextBaseline(); await loadBase(); paint(); paintExtras(); return; }
     renderVerify();
   });
   document.getElementById("btn-verify-refresh").addEventListener("click", () => renderVerify());
@@ -209,7 +211,12 @@ function wireOnce() {
     openResolvedSettings(_tag);
   });
   document.getElementById("btn-verify-klayout").addEventListener("click", (e) => openKlayout(e.currentTarget));
-  document.getElementById("btn-verify-copy").addEventListener("click", copySummary);
+  // Export: the sign-off report (HTML, Markdown), the share card, the text summary.
+  wireExport({
+    btn: document.getElementById("btn-verify-export"), menu: document.getElementById("vf-export-menu"),
+    ctx: () => ({ tag: _tag, base: _baseTag, rep: _rep, verdict: _rep ? verdictCopy() : null, design: (ctx.contextRow(_tag) || {})._design || state.designDir }),
+    copySummary,
+  });
   const nav = document.getElementById("verify-jump");
   nav.addEventListener("click", (e) => {
     const b = e.target.closest("[data-jump]");
@@ -268,7 +275,7 @@ async function selectRun(tag) {
   if (!_rep) {
     document.getElementById("vf-overview").innerHTML = "<div class='empty'><span class='ico'>" + icon("alert", { size: 40 }) +
       "</span><h3>Could not read " + esc(tag) + "</h3><p>The run folder may have been moved or deleted. Refresh, or pick another run.</p></div>";
-    for (const id of ["vf-checks", "vf-timing-body", "vf-drc", "vf-lvs", "vf-rel", "vf-reports-body"]) {
+    for (const id of ["vf-checks", "vf-timing-body", "vf-tx", "vf-timing-table", "vf-drc", "vf-lvs", "vf-rel", "vf-warnings", "vf-reports-body"]) {
       const el = document.getElementById(id); if (el) el.innerHTML = "";
     }
     return;
@@ -276,7 +283,22 @@ async function selectRun(tag) {
   // Problems open by default: that is what the user came to read.
   if (!_open.size) for (const c of _rep.checks || []) if (c.status === "fail") _open.add(c.id);
   paint();
-  renderTimingPaths(tag);
+  paintExtras();
+}
+
+// The timing explorer and the warnings: they load their own data (the run's
+// STA reports, its warning.log) and follow the run and the baseline.
+function paintExtras() {
+  if (!_rep) return;
+  renderTimingExplorer({ tag: _tag, base: _baseTag, rep: _rep });
+  renderWarnings(document.getElementById("vf-warnings"), { tag: _tag, base: _baseTag }).then((w) => {
+    const chip = document.getElementById("vf-jump-warn");
+    if (!chip) return;
+    const look = w && w.ok ? (w.look || 0) : 0;
+    chip.hidden = !look;
+    chip.textContent = look ? String(look) : "";
+    chip.title = look ? look + " warning group" + (look === 1 ? "" : "s") + " to look at" : "";
+  }).catch(() => {});
 }
 
 async function loadBase() {
@@ -615,6 +637,8 @@ function renderTiming() {
     const s = by.get("setup");
     el.innerHTML = head("Timing", "Timing in every corner", "") +
       "<div class='an-none'>" + esc((s && s.detail) || "This run has no per-corner timing.") + "</div>";
+    const all = document.getElementById("vf-timing-table");
+    if (all) all.innerHTML = "";
     return;
   }
   const worst = (k, lo) => rows.reduce((m, r) => (V.isNum(r[k]) && (m === null || (lo ? r[k] < m : r[k] > m)) ? r[k] : m), null);
@@ -656,8 +680,17 @@ function renderTiming() {
     ? "<p class='vf-callout is-warn'>Sign-off timing (OpenROAD.STAPostPNR) didn't run in this run. These are the last estimates an earlier timing step left behind, before routing finished; they are not a sign-off result.</p>" : "";
   el.innerHTML = head("Timing", "Timing in every corner", lede,
       btn("Timing charts in Analytics", "data-go='analytics' data-go-section='an-timing'", { ic: "chevron" })) +
-    est + facts + timingDiag() + "<div class='an-card vf-card-flush'>" + table + "</div>" +
-    "<p class='an-foot'>A corner is a process (tt typical, ss slow, ff fast), temperature and voltage, with wire parasitics at their min, nominal or max. Worst values are outlined; red fails the run, amber only warns.</p>";
+    est + facts + timingDiag();
+  // Every corner's numbers, folded under the explorer: the grids above are the
+  // way in, this is the full table (TNS, counts, slew, cap and fanout too).
+  const all = document.getElementById("vf-timing-table");
+  if (all) {
+    const was = all.querySelector("details")?.open;
+    all.innerHTML = "<details class='tx-allc'" + (was ? " open" : "") + "><summary><span class='vf-chev'>" + icon("chevron", { size: 13 }) + "</span>All corner numbers" +
+      "<small>worst and total slack and violations for setup and hold, slew, capacitance and fanout, in all " + rows.length + " corners</small></summary>" +
+      "<div class='an-card vf-card-flush'>" + table + "</div>" +
+      "<p class='an-foot'>A corner is a process (tt typical, ss slow, ff fast), temperature and voltage, with wire parasitics at their min, nominal or max. Worst values are outlined; red fails the run, amber only warns.</p></details>";
+  }
 }
 
 function timingDiag() {
