@@ -3777,6 +3777,26 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   });
 }
 
+check("runs: no-clock runs count as Warnings, summed violation counts say so, voltages share one unit", () => {
+  const RT = RUNS._test;
+  assert.equal(RT.resultBucket({ state: "incomplete", no_clock: true }), "warning");
+  assert.equal(RT.resultBucket({ state: "incomplete" }), "stopped");
+  assert.equal(RT.resultBucket({ state: "stopped" }), "stopped");
+  assert.equal(RT.resultBucket({ state: "warning" }), "warning");
+  assert.equal(RT.resultBucket({ state: "passed" }), "passed");
+  assert.ok(!/timed no path/.test(RT.UNTIMED_TIP) && /no flip-flop had a clock/.test(RT.UNTIMED_TIP));
+  assert.ok(RT.extraCol("m:timing__setup_vio__count").tip.includes(MF.CORNER_SUM_NOTE));
+  assert.ok(!RT.extraCol("m:timing__setup_vio__count__corner:nom_tt_025C_1v80").tip.includes(MF.CORNER_SUM_NOTE));
+  assert.ok(!RT.extraCol("m:design__die__area").tip.includes(MF.CORNER_SUM_NOTE));
+  // A voltage column: without a scale yet it says V; the cells use the column's scale.
+  const vc = RT.extraCol("m:design_powergrid__voltage__worst");
+  if (MF.unitOf(MF.parseKey("design_powergrid__voltage__worst").base) === "V") {
+    assert.equal(vc.unit, "V");
+    const src = readFileSync(resolve(MOD, "runs.js"), "utf8");
+    assert.match(src, /if \(c\.key && scaled\(c\.key\)\) _scales\.set/);
+  }
+});
+
 await checkAsync("toasts: the Undo toast stays outside the cap and clear(); the trash is purged only on timeout or close", async () => {
   class El {
     constructor() { this.children = []; this.parent = null; this.cls = new Set(); this.on = {}; this.attrs = {}; }
