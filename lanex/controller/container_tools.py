@@ -379,10 +379,25 @@ def _mount(host_path: Path) -> List[str]:
 def _tool_command(tool: str, *, gds: Optional[Path], pdk: Optional[str],
                   pdk_root: Optional[str], odb: Optional[Path],
                   script: Optional[Path] = None,
-                  marker_dbs: Optional[List[Path]] = None) -> List[str]:
+                  marker_dbs: Optional[List[Path]] = None,
+                  layout_script: Optional[Path] = None) -> List[str]:
     """The argv to run *inside* the container for *tool*. *script* is a generated
     startup .tcl (written by the caller into a mounted dir) used to load the run
-    into OpenROAD / set Netgen up."""
+    into OpenROAD / set Netgen up. *layout_script* opens a stage's DEF instead
+    of a GDS (KLayout: a ``-rm`` macro; Magic: a Tcl script; see
+    ``desktop.def_open_script``)."""
+    if layout_script is not None and tool in ("magic", "klayout"):
+        if tool == "klayout":
+            return ["klayout", "-rm", str(layout_script)]
+        cmd = ["magic"]
+        if script is not None:
+            cmd += ["-rcfile", str(script)]
+        elif pdk and pdk_root:
+            from .desktop import find_magicrc
+            magicrc = find_magicrc(Path(pdk_root) / pdk / "libs.tech", pdk)
+            if magicrc is not None:
+                cmd += ["-rcfile", str(magicrc)]
+        return cmd + [str(layout_script)]
     if tool == "magic":
         cmd = ["magic"]
         if script is not None:
@@ -454,6 +469,7 @@ def build_argv(
     pdk_root: Optional[str] = None,
     script: Optional[Path] = None,
     marker_dbs: Optional[List[Path]] = None,
+    layout_script: Optional[Path] = None,
 ) -> List[str]:
     """Assemble the full ``<engine> run --rm … <image> <tool> …`` command."""
     argv: List[str] = [engine, "run", "--rm", "-i"]
@@ -472,7 +488,7 @@ def build_argv(
     argv += ["-w", str(work_dir)]
     argv += [image]
     argv += _tool_command(tool, gds=gds, pdk=pdk, pdk_root=pdk_root, odb=odb, script=script,
-                          marker_dbs=marker_dbs)
+                          marker_dbs=marker_dbs, layout_script=layout_script)
     return argv
 
 
@@ -726,6 +742,7 @@ def open_in_container_tool(
     odb: Optional[str | Path] = None,
     pdk: Optional[str] = None,
     pdk_root: Optional[str] = None,
+    layout_script: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """Launch *tool* inside the LibreLane container as a detached process.
 
@@ -788,7 +805,7 @@ def open_in_container_tool(
         engine, image, tool,
         design_dir=design_dir, work_dir=work_dir,
         gds=gds_p, odb=odb_p, pdk=pdk, pdk_root=pdk_root, script=script_p,
-        marker_dbs=marker_dbs,
+        marker_dbs=marker_dbs, layout_script=Path(layout_script) if layout_script else None,
     )
     run_env = os.environ.copy()
     try:
@@ -803,15 +820,10 @@ def open_in_container_tool(
     if sys.platform == "darwin":
         _darwin_allow_x11_clients(run_env)
     try:
-        kwargs: Dict[str, Any] = {
-            "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
-            "cwd": str(design_dir), "env": run_env,
-        }
-        if sys.platform != "win32":
-            kwargs["start_new_session"] = True
-        proc = subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool/engine only
-        from . import activity
-        activity.track_viewer(proc, spec["label"])
+        # The tool's output (and the engine's: image missing, display refused)
+        # goes to a log the page can show if the window never appears.
+        from .desktop import spawn_viewer
+        launch = spawn_viewer(argv, tool=tool, label=spec["label"], cwd=str(design_dir), env=run_env)
         hint = None
         if tool == "openroad":
             hint = (f"OpenROAD GUI opening with the run loaded ({odb_p.name}). The console "
@@ -827,7 +839,8 @@ def open_in_container_tool(
             hint = (f"{len(marker_dbs)} DRC/XOR marker database(s) loaded — open KLayout's "
                     "marker browser to step through violations.")
         out = {"ok": True, "tool": tool, "label": spec["label"], "argv": argv,
-               "used_odb": bool(tool == "openroad" and odb_p), "hint": hint}
+               "used_odb": bool(tool == "openroad" and odb_p), "hint": hint,
+               "launch": launch["id"], "log": launch["log"]}
         if marker_dbs:
             out["marker_dbs"] = [str(p) for p in marker_dbs]
         return out
