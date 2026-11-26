@@ -138,7 +138,7 @@ def slug(step_id: str) -> str:
 
 
 def _dpl_0036(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    ev = ev or {}
+    ev = dict(ev or {}, cfg=cfg)
     step = str(ev.get("step") or "")
     # OpenROAD lists the cells just above the error (DPL-0034/0035).
     cells = re.findall(r"DPL-0035\]\s+(\S+)", ev.get("log") or "")
@@ -153,6 +153,23 @@ def _dpl_0036(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None
                               "Spread the cells out before they are legalised.", "Spread the cells", sure="try"))
     which = ("%d cell%s (%s)" % (len(cells), "" if len(cells) == 1 else "s", ", ".join(cells[:4]) + (" …" if len(cells) > 4 else ""))
              if cells else "some cells")
+    # A macro whose keep-out leaves a narrow strip of rows by the core edge
+    # (forced: the SRAM in the bottom-left corner, a 7.02 µm strip on its left;
+    # the same strip with rows below it placed fine).
+    strips = _macro_strips(ev) if cfg.get("MACROS") else []
+    if strips:
+        inst, side, gap = strips[0]
+        halo = _num(cfg.get("FP_MACRO_HORIZONTAL_HALO"))
+        return {"title": "The rows beside %s are too narrow" % inst,
+                "plain": "%s's %s µm keep-out leaves a %s µm strip of cell rows on its %s, between the keep-out and the "
+                         "core edge. The placer puts buffers there, next to the block's pins, and %s then had no legal "
+                         "spot in rows that narrow. Leave at least 20 µm of rows beside a macro, or none: move it against "
+                         "the core edge, so its keep-out covers the rows there."
+                         % (inst, fmt(10 if halo is None else halo), fmt(gap), side, which),
+                "fixes": [_open("Move %s" % inst, _MACROS_PAGE,
+                                "The Arrange canvas shows the strip and its width; Arrange for me leaves wide channels."),
+                          _open("Show the layout", {"tab": "layout"}, "Where the cells that didn't fit sit.")],
+                "learn": ["macro", "utilization"]}
     if slug(step).startswith("openroad-cts"):
         # cts.tcl legalises after inserting the clock buffers (LibreLane 3.0.4:
         # "[INFO] Legalizing…" then detailed_placement, then DPL-0036).
@@ -777,45 +794,290 @@ def _pdn_0351(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None
             "fixes": fixes, "learn": ["pdn", "core-margin"]}
 
 
+# ---------------------------------------------------------------- macros
+# Each card below was checked against a real LibreLane 3.0.4 run of LanEx's
+# SRAM template on sky130A with one thing broken in its macro overlay
+# (scripts/failure_goldens.py, cases macro_*), or lane 7's IHP run.
+
+_MACROS_PAGE = {"tab": "cells", "section": "cl-macros"}
+_ROTATED = ("E", "W", "FE", "FW")
+
+
+def _macro_of(cfg: Dict[str, Any], inst: str) -> tuple:
+    """``(module, instance settings)`` of a MACROS instance, or ``(None, {})``."""
+    macros = cfg.get("MACROS")
+    for mod, v in (macros.items() if isinstance(macros, dict) else []):
+        ins = (v or {}).get("instances") if isinstance(v, dict) else None
+        if isinstance(ins, dict) and inst in ins:
+            return mod, ins[inst] if isinstance(ins[inst], dict) else {}
+    return None, {}
+
+
+def _rtl_instances(cfg: Dict[str, Any], modules: List[str]) -> Optional[Dict[str, List[str]]]:
+    """``{module: [instance paths]}`` in the RTL this run read (its resolved
+    VERILOG_FILES, from DESIGN_NAME down), or None when it can't be read."""
+    files = cfg.get("VERILOG_FILES")
+    files = [str(f) for f in (files if isinstance(files, list) else [files] if files else [])]
+    if not files or not modules:
+        return None
+    try:
+        from . import macrolib
+        scan = macrolib.find_instances(str(cfg.get("DESIGN_DIR") or ""), cfg.get("DESIGN_NAME"), modules, files=files)
+    except Exception:
+        return None
+    return scan.get("instances") if scan.get("ok") and scan.get("top_found") else None
+
+
+def _run_warnings(ev: Optional[Dict[str, Any]]) -> str:
+    """The run's warning.log (what a warning-only problem left behind), capped."""
+    rd = (ev or {}).get("run_dir")
+    try:
+        p = Path(rd) / "warning.log" if rd else None
+        if p and p.is_file():
+            with open(p, encoding="utf-8", errors="replace") as f:
+                return f.read(400_000)
+    except OSError:
+        pass
+    return ""
+
+
 def _pdn_macro_grid(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    # [PDN-0233] Failed to generate full power grid. after [WARNING PDN-0232]
-    # The grid "{}" ({}) does not contain any shapes or vias. (PdnGen.cc)
+    # [WARNING PDN-0232] The grid "macro - u_sram" (Instance) does not contain any
+    # shapes or vias.  then  [ERROR PDN-0233] Failed to generate full power grid.
+    # (forced: u_sram turned to E on the SRAM template)
     log = (ev or {}).get("log") or ""
-    g = re.search(r'PDN-0232\][^\n]*The grid "([^"]+)"', log + "\n" + msg)
+    g = re.search(r'PDN-0232\][^\n]*The grid "([^"]+)"', log + "\n" + msg + "\n" + _run_warnings(ev))
     grid = g.group(1) if g else None
-    return {"title": "The power grid for %s came out empty" % (grid or "a macro"),
-            "plain": "OpenROAD built the grid%s but nothing in it connected: the layers it joins don't reach the "
-                     "macro's power pins. Check the macro's power connections (PDN_MACRO_CONNECTIONS) and the layers "
-                     "of its power pins in its LEF." % ((" \"%s\"" % grid) if grid else ""),
-            "fixes": [_open("Show the macros", {"tab": "cells", "section": "cl-macros"},
-                            "Each macro's power pins and how they are hooked to the grid.")],
-            "learn": ["pdn", "macro"]}
+    inst = re.sub(r"^macro\s*-\s*", "", grid) if grid else None
+    mod, ins = _macro_of(cfg, inst) if inst else (None, {})
+    orient = str(ins.get("orientation") or "").upper()
+    vlayer = str(cfg.get("PDN_VERTICAL_LAYER") or "vertical")
+    hlayer = str(cfg.get("PDN_HORIZONTAL_LAYER") or "horizontal")
+    fixes = [_open("Show the macros", _MACROS_PAGE, "Each macro's orientation, power pins and how they reach the grid.")]
+    if inst and orient in _ROTATED:
+        return {"title": "%s is turned 90° (%s), so no power strap reaches it" % (inst, orient),
+                "plain": "The power grid joins a macro through straps that cross its power pins: %s straps over its "
+                         "%s pins. Turned to %s, %s's %s power pins run the same way as the %s straps, beside them "
+                         "instead of under them, so its grid (\"%s\") came out with no shapes or vias (PDN-0232) and the "
+                         "power step stopped. Use N, S, FN or FS." % (hlayer, vlayer, orient, inst, vlayer, hlayer, grid),
+                "fixes": [_open("Turn %s back" % inst, _MACROS_PAGE,
+                                "Pick N, S, FN or FS in its inspector on the Arrange canvas.")] + fixes,
+                "learn": ["pdn", "macro"]}
+    return {"title": "The power grid for %s came out empty" % (inst or "a macro"),
+            "plain": "OpenROAD built the grid%s but nothing in it connected: no strap crosses the macro's power pins. "
+                     "Check the macro's power connections (PDN_MACRO_CONNECTIONS), where it sits against the straps, and "
+                     "the layers of its power pins in its LEF." % ((" \"%s\"" % grid) if grid else ""),
+            "fixes": fixes, "learn": ["pdn", "macro"]}
 
 
 def _pdn_unplaced(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    # [PDN-0235] Design has unplaced macros. after [WARNING PDN-0234] {} has not been placed and fixed.
-    log = (ev or {}).get("log") or ""
-    names = re.findall(r"PDN-0234\]\s+(\S+) has not been placed", log + "\n" + msg)
+    # [TAP-0032] Macro u_sram is not placed.  (CutRows and TapEndcapInsertion)
+    # [WARNING PDN-0234] u_sram has not been placed and fixed.
+    # [ERROR PDN-0235] Design has unplaced macros.  (forced: location null)
+    said = ((ev or {}).get("log") or "") + "\n" + msg + "\n" + _run_warnings(ev)
+    names: List[str] = []
+    for n in re.findall(r"PDN-0234\]\s+(\S+) has not been placed", said) + re.findall(r"TAP-0032\]\s+Macro (\S+) is not placed", said):
+        if n not in names:
+            names.append(n)
     who = ", ".join(names[:4]) + (" …" if len(names) > 4 else "") if names else "a macro"
+    tap = re.search(r"TAP-0032\]\s+(Macro \S+ is not placed)", said)
     return {"title": "%s has no position" % (names[0] if len(names) == 1 else "Some macros have" if names else "A macro"),
-            "plain": "LibreLane doesn't place macros by itself: every macro instance needs a location (MACROS, its "
-                     "instances), and %s has none, so the power grid can't be built around it." % who,
-            "fixes": [_open("Show the macros", {"tab": "cells", "section": "cl-macros"},
-                            "Arrange places them inside the core; the positions are saved in the config.")],
+            "plain": "LibreLane doesn't place macros by itself: each macro instance needs a position, and %s has none.%s "
+                     "The power grid can't be built around a block that isn't placed, so the run stopped here. Give it a "
+                     "position: Arrange for me on Cells & macros puts it inside the core."
+                     % (who, (" The tap cell step already said so (TAP-0032 \"%s\")." % tap.group(1)) if tap else ""),
+            "fixes": [_open("Give %s a position" % (names[0] if len(names) == 1 else "the macros"), _MACROS_PAGE,
+                            "Arrange places each block inside the core; drag it on the canvas to move it.")],
             "learn": ["macro"]}
 
 
 def _macro_instance(ev: Dict[str, Any], m: Any) -> Dict[str, Any]:
+    # Check Macro Instances: "No macro instance u_wrong found." (forced: the
+    # overlay renamed u_sram to u_wrong); placers.py: "One or more instances
+    # not found. Make sure you use their Verilog and not their LEF names."
+    cfg = ev.get("cfg") or {}
     log = (ev.get("log") or "") + "\n" + (ev.get("text") or "")
-    names = re.findall(r"^\s*\*\s+(\S+)\s*$", log, re.M)[:4] or ([m.group("inst")] if _Groups(m).group("inst") else [])
-    return {"title": "MACROS names an instance the netlist doesn't have",
-            "plain": "The macro settings place %s, and synthesis made no instance by that name. After synthesis the "
-                     "names are flattened paths of the Verilog instances (u_core.u_sram), not the LEF's cell name."
-                     % (", ".join(names) or "an instance"),
+    names = list(dict.fromkeys(re.findall(r"^\s*\*\s+(\S+)\s*$", log, re.M)
+                               or re.findall(r"No macro instance (\S+) found", log)
+                               or ([m.group("inst")] if _Groups(m).group("inst") else [])))[:4]
+    mods = {n: _macro_of(cfg, n)[0] for n in names}
+    rtl = _rtl_instances(cfg, sorted({x for x in mods.values() if x}))
+    plain = []
+    for n in names:
+        mod = mods.get(n)
+        found = (rtl or {}).get(mod) if mod else None
+        what = " (a %s)" % mod if mod else ""
+        if rtl is None or not mod:
+            plain.append("The macro settings place an instance named %s%s, and LibreLane found no instance by that name "
+                         "in the netlist." % (n, what))
+        elif found:
+            plain.append("The macro settings place an instance named %s%s, and your RTL names it %s." % (n, what, " or ".join(found)))
+        else:
+            plain.append("The macro settings place an instance named %s%s, and your RTL doesn't instantiate %s at all: "
+                         "add it to the RTL, or switch the macro off." % (n, what, mod))
+    plain.append("A macro instance is named by your Verilog: the name after the module name (%s u_sram (…)), with a "
+                 "dotted path when it sits inside a submodule (u_core.u_sram). It is never the macro's cell name."
+                 % (next((x for x in mods.values() if x), None) or "my_macro"))
+    single = names[0] if len(names) == 1 else None
+    fixed = single and rtl and mods.get(single) and (rtl.get(mods[single]) or [])
+    return {"title": ("%s isn't an instance in your RTL" % single) if single else "Macro settings name instances your RTL doesn't have",
+            "plain": " ".join(plain),
             "evidence": [m.group(0).strip()[:300]],
-            "fixes": [_open("Show the macros", {"tab": "cells", "section": "cl-macros"},
-                            "Each macro's instances, checked against the netlist's names.")],
+            "fixes": [_open("Use the RTL's names", _MACROS_PAGE,
+                            ("Rename %s to %s in the macro's instance list." % (single, fixed[0])) if fixed
+                            else "Each macro's instances, checked against your RTL's names.")],
             "learn": ["macro", "hierarchy"]}
+
+
+def _macro_power(ev: Dict[str, Any], m: Any) -> Optional[Dict[str, Any]]:
+    # Checker.DisconnectedPins: "1 critical disconnected pins found." after
+    # [WARNING PDN-0231] u_sram is not connected to any power/ground nets. and
+    # [WARNING PDN-0189] Supply pin u_sram/vccd1 is not connected to any net.
+    # (forced: no PDN_MACRO_CONNECTIONS; the power step only warns, the run
+    # routes, then this check stops it). LibreLane counts every disconnected
+    # input and power pin as critical (steps/odb.py ReportDisconnectedPins).
+    said = (ev.get("log") or "") + "\n" + _run_warnings(ev)
+    blocks = []
+    for b in re.findall(r"PDN-0231\]\s+(\S+) is not connected to any power/ground nets", said):
+        if b not in blocks:
+            blocks.append(b)
+    pins: Dict[str, List[str]] = {}
+    for b, p in re.findall(r"PDN-0189\]\s+Supply pin (\S+?)/(\S+) is not connected to any net", said):
+        if p not in pins.setdefault(b, []):
+            pins[b].append(p)
+    blocks += [b for b in pins if b not in blocks]
+    n = m.group("n") if isinstance(m, re.Match) else None
+    if not blocks:
+        return {"title": "A pin is connected to nothing",
+                "plain": "LibreLane's disconnected-pins check found %s critical pin%s with no wire: an input nothing "
+                         "drives, a power pin no net reaches, or a block whose outputs all go nowhere. The report of the "
+                         "step before it (Odb.ReportDisconnectedPins) lists them by instance."
+                         % (n or "a", "" if n in (None, "1") else "s"),
+                "fixes": [_open("Show the layout", {"tab": "layout"}, "Look for the instance the report names.")],
+                "learn": ["disconnected-pin"]}
+    b = blocks[0]
+    pp = pins.get(b) or []
+    return {"title": "%s's power pins aren't hooked up" % b if len(blocks) == 1 else "Macro power pins aren't hooked up",
+            "plain": "Nothing connects %s's power pins%s to the design's power and ground nets: no PDN_MACRO_CONNECTIONS line "
+                     "names %s. The power step only warned (PDN-0231 \"%s is not connected to any power/ground nets\"), so "
+                     "the run went on through routing until LibreLane's disconnected-pins check stopped it: a block with no "
+                     "power can't work. Hook up its power pins to the power and ground nets."
+                     % (b, (" (" + ", ".join(pp) + ")") if pp else "", "them" if len(blocks) == 1 else "these blocks", b),
+            "fixes": [_open("Hook up its power pins", _MACROS_PAGE,
+                            "Each power pin with the net it joins; LanEx writes the PDN_MACRO_CONNECTIONS lines for the run.")],
+            "learn": ["pdn", "macro"]}
+
+
+_PSM_SHAPE_RX = re.compile(r"PSM-0038\] Unconnected shape on net (\S+) at \((-?[\d.]+)um, (-?[\d.]+)um\) - "
+                           r"\((-?[\d.]+)um, (-?[\d.]+)um\), layer: (\S+?)\.?$", re.M)
+
+
+def _psm_0069(msg: str, cfg: Dict[str, Any], ev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # IR drop: [PSM-0038] Unconnected shape on net VGND at (328.800um, 67.820um) -
+    # (394.080um, 68.260um), layer: Metal1.  …  [PSM-0069] Check connectivity
+    # failed on VGND.  (lane 7's ihp-sg13g2 SRAM run: LanEx's first macro grid
+    # with a keep-out halo left the rails beside the block unconnected. LanEx no
+    # longer writes that grid; a config's own PDN_CFG or halo can still do it.)
+    net = (re.search(r"Check connectivity failed on (\S+?)\.?$", msg, re.M) or re.search(r"on (\S+?)\.", msg))
+    net_name = net.group(1) if net else "a power net"
+    log = (ev or {}).get("log") or ""
+    full = log
+    rd = (ev or {}).get("run_dir")
+    try:
+        if rd:
+            for p in sorted(Path(rd).glob("*-openroad-irdropreport*/*.log")):
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    full = f.read(4_000_000)
+    except OSError:
+        pass
+    # The step log, and warning.log (which keeps every PSM-0038 line too).
+    found = list(dict.fromkeys(_PSM_SHAPE_RX.findall(full + "\n" + _run_warnings(ev))))
+    shapes = [s for s in found if s[0] == net_name] or found
+    first = shapes[0] if shapes else None
+    own = str(cfg.get("PDN_CFG") or "")
+    halo = [k for k in ("PDN_HORIZONTAL_HALO", "PDN_VERTICAL_HALO") if _num(cfg.get(k))]
+    # OpenROAD prints one message id at most 1,000 times.
+    count = ("1,000 or more shapes" if len(shapes) >= 1000 else "%d shape%s" % (len(shapes), "" if len(shapes) == 1 else "s")) \
+        if shapes else "part of the grid"
+    plain = ("The IR-drop step checks that every piece of the power grid reaches the power pins, and %s on %s %s "
+             "connected to nothing%s." % (count, net_name, "is" if len(shapes) == 1 else "are",
+                                          (" (PSM-0038; the first is a %s piece at (%s, %s) µm)" % (first[5], fmt(float(first[1])), fmt(float(first[2])))) if first else ""))
+    if cfg.get("MACROS"):
+        plain += (" With a macro, the usual cause is a power grid for the block%s together with a keep-out halo%s: the halo "
+                  "cuts the cell rows' rails beside the block off from the straps."
+                  % ((" (PDN_CFG %s)" % Path(own).name) if own else "", (" (" + ", ".join(halo) + ")") if halo else ""))
+        plain += (" This run used the grid an earlier LanEx wrote for the block; LanEx now writes it without a halo, so "
+                  "running again fixes it." if own.endswith(".gui-macros-pdn.tcl") else
+                  " LanEx's own grid for IHP and gf180 blocks uses no halo, so look at the config's own power grid and "
+                  "halo settings.")
+    fixes = [_open("Show the macros", _MACROS_PAGE, "The macro's keep-out and power grid.")]
+    if first:
+        fixes.append(_open("Show the first piece in Layout", {"tab": "layout", "box": ",".join(
+            "%.2f" % float(v) for v in first[1:5])}, "The final layout, zoomed to the first unconnected shape."))
+    return {"title": "Part of the %s grid isn't connected" % net_name, "plain": plain, "fixes": fixes,
+            "learn": ["pdn", "macro"] if cfg.get("MACROS") else ["pdn"]}
+
+
+def _macro_strips(ev: Dict[str, Any]) -> List[tuple]:
+    """``(instance, side, width µm)`` for each strip of cell rows between a
+    macro's keep-out and the left or right core edge that survives the row cut
+    (wider than two end caps) yet is under 20 µm: where a forced sky130 run
+    failed detailed placement (macrolib.placement_problems has the same rule)."""
+    cfg = ev.get("cfg") or {}
+    macros = cfg.get("MACROS")
+    core = _core_box(ev)
+    if not isinstance(macros, dict) or not core:
+        return []
+    halo = _num(cfg.get("FP_MACRO_HORIZONTAL_HALO"))
+    halo = 10.0 if halo is None else halo
+    out = []
+    for mod, v in macros.items():
+        size = _macro_size(cfg, mod)
+        ins = (v or {}).get("instances") if isinstance(v, dict) else None
+        if not size or not isinstance(ins, dict):
+            continue
+        for name, i in ins.items():
+            loc = (i or {}).get("location") if isinstance(i, dict) else None
+            if not (isinstance(loc, (list, tuple)) and len(loc) == 2):
+                continue
+            w = size[1] if str((i or {}).get("orientation") or "N").upper() in _ROTATED else size[0]
+            x = float(loc[0])
+            for side, gap in (("left", x - halo - core[0]), ("right", core[2] - (x + w + halo))):
+                if 3.0 < gap < 20.0:
+                    out.append((name, side, round(gap, 2)))
+    return out
+
+
+def _core_box(ev: Dict[str, Any]) -> Optional[List[float]]:
+    """The core the floorplan made (``design__core__bbox`` in a finished
+    step's state), else CORE_AREA."""
+    rd = ev.get("run_dir")
+    try:
+        for p in sorted(Path(rd).glob("*-openroad-floorplan/state_out.json")) if rd else []:
+            import json
+            v = (json.loads(p.read_text(encoding="utf-8")).get("metrics") or {}).get("design__core__bbox")
+            box = [float(x) for x in str(v).split()] if v else []
+            if len(box) == 4:
+                return box
+    except (OSError, ValueError):
+        pass
+    ca = (ev.get("cfg") or {}).get("CORE_AREA")
+    box = [_num(x) for x in (ca if isinstance(ca, (list, tuple)) else str(ca or "").split())]
+    return box if len(box) == 4 and None not in box else None  # type: ignore[return-value]
+
+
+def _macro_size(cfg: Dict[str, Any], module: str) -> Optional[tuple]:
+    """``(w, h)`` µm of a macro from the LEF the run used."""
+    lef = ((cfg.get("MACROS") or {}).get(module) or {}).get("lef")
+    for f in (lef if isinstance(lef, list) else [lef] if lef else []):
+        try:
+            from . import macrolib
+            g = macrolib.macro_geometry(Path(str(f)), module)
+            if g.get("ok") and g.get("w") and g.get("h"):
+                return float(g["w"]), float(g["h"])
+        except Exception:
+            continue
+    return None
 
 
 # ---------------------------------------------------------------- resizer, routing, placement
@@ -1023,8 +1285,10 @@ KB: List[Dict[str, Any]] = [
     {"id": "gpl-0304", "code": "GPL-0304", "fn": _code_card(_gpl_0304), "stage": "placement",
      "source": "OpenROAD dcf36133 gpl (text)", "about": "The global placer's first step diverged."},
     {"id": "dpl-0036", "code": "DPL-0036", "fn": _code_card(_dpl_0036),
-     "source": "forced: sweep point FP_CORE_UTIL 70 (in OpenROAD.CTS)", "stage": "placement",
-     "about": "Detailed placement found no legal row position for some cells."},
+     "source": "forced: sweep point FP_CORE_UTIL 70 (in OpenROAD.CTS); the SRAM template with a 7 µm strip of rows by "
+               "its keep-out (macro_channel)", "stage": "placement",
+     "about": "Detailed placement found no legal row position for some cells (also: a strip of rows beside a macro "
+              "that is too narrow)."},
     {"id": "dpl-0015", "code": "DPL-0015", "fn": _code_card(_dpl_0015), "stage": "placement",
      "source": "OpenROAD dcf36133 dpl (text)", "about": "A cell or macro is bigger than the rows."},
     {"id": "grt-0116", "code": "GRT-0116", "also": ["GRT-0228", "GRT-0229"], "fn": _code_card(_grt_congestion),
@@ -1044,9 +1308,13 @@ KB: List[Dict[str, Any]] = [
      "source": "text in the 3.0.4 image's OpenROAD (pdn)", "stage": "pdn",
      "about": "The straps can't pass through a gap between macros."},
     {"id": "pdn-0233", "code": "PDN-0233", "fn": _code_card(_pdn_macro_grid), "stage": "pdn",
-     "source": "OpenROAD dcf36133 pdn PdnGen.cc (text)", "about": "A macro's power grid came out empty."},
+     "source": "forced: the SRAM template turned to E (macro_orient_e)",
+     "about": "A macro's power grid came out empty, usually a block turned 90°."},
     {"id": "pdn-0235", "code": "PDN-0235", "fn": _code_card(_pdn_unplaced), "stage": "pdn",
-     "source": "OpenROAD dcf36133 pdn PdnGen.cc (text)", "about": "A macro has no position."},
+     "source": "forced: the SRAM template with no location (macro_unplaced)", "about": "A macro has no position."},
+    {"id": "psm-0069", "code": "PSM-0069", "fn": _code_card(_psm_0069), "stage": "signoff",
+     "source": "forced: lane 7's ihp-sg13g2 SRAM run, a macro grid with a keep-out halo (macro_ihp_halo)",
+     "about": "Part of the power grid connects to nothing (IR drop's connectivity check)."},
     {"id": "pdn-0351", "code": "PDN-0351", "fn": _code_card(_pdn_0351), "stage": "pdn",
      "source": "OpenROAD dcf36133 pdn rings.cpp (text)", "about": "The core ring doesn't fit inside the die."},
     {"id": "ppl-0024", "code": "PPL-0024", "fn": _code_card(_ppl_0024), "source": "forced: 602 pins on a 60 um die",
@@ -1072,8 +1340,11 @@ KB: List[Dict[str, Any]] = [
     {"id": "macro-instance",
      "rx": re.compile(r"One or more instances not found\. Make sure you use their Verilog and not their LEF names\."
                       r"|No macro instance (?P<inst>\S+) found"),
-     "fn": _macro_instance, "source": "LibreLane 3.0.4 placers.py and check_macro_instances.tcl (text)",
-     "stage": "floorplan", "about": "The macro settings name an instance synthesis didn't make."},
+     "fn": _macro_instance, "source": "forced: the SRAM template's instance renamed u_wrong (macro_inst)",
+     "stage": "floorplan", "about": "The macro settings name an instance your RTL doesn't have."},
+    {"id": "macro-power", "rx": re.compile(r"(?P<n>\d+) critical disconnected pins? found"), "fn": _macro_power,
+     "source": "forced: the SRAM template with no PDN_MACRO_CONNECTIONS (macro_nopower)", "stage": "signoff",
+     "about": "A pin is connected to nothing; with PDN-0231 warnings, a macro's power pins aren't hooked up."},
     {"id": "pin-order", "rx": _PIN_ORDER_RX, "fn": _pin_order, "source": "forced: clk left out of spm's pin_order.cfg",
      "stage": "floorplan", "about": "The pin order file doesn't match the design's ports."},
     # RTL the tools refused. The coded Verilator errors and Yosys's own

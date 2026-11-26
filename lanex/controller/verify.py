@@ -1270,7 +1270,12 @@ def _flow_state(run: _Run) -> Dict[str, Any]:
         state = "stopped"
     else:
         state = "unknown"
-    first_stop = stopped[0] if stopped else None
+    # A checker with a deferred error ("4 Routing DRC errors found. -
+    # deferred") leaves no state_out either, and the flow goes on: in a run
+    # that didn't finish, the step that stopped it is the last one that didn't
+    # finish, not the first (forced: an SRAM with no power hookup stops at
+    # Checker.DisconnectedPins after Checker.TrDRC deferred).
+    first_stop = (stopped[0] if run.completed else stopped[-1]) if stopped else None
     last = run.steps[-1] if run.steps else None
     planned, off = _planned_steps(run)
     return {

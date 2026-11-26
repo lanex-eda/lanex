@@ -53,7 +53,10 @@ KEEP = ["DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD", "FP_SIZING", "DIE_AREA", "C
         "ERRORS_ON_UNMATCHED_IO", "MAX_TRANSITION_CONSTRAINT", "MAX_FANOUT_CONSTRAINT", "PNR_SDC_FILE",
         "DESIGN_REPAIR_MAX_SLEW_PCT", "TIMING_VIOLATION_CORNERS", "LINTER_ERROR_ON_LATCH", "DIODE_ON_PORTS",
         "RUN_ANTENNA_REPAIR", "GRT_ANTENNA_REPAIR_ITERS", "GRT_ANTENNA_REPAIR_MARGIN", "CTS_CLK_BUFFERS",
-        "CTS_ROOT_BUFFER"]
+        "CTS_ROOT_BUFFER",
+        # macros (the SRAM template's cases)
+        "MACROS", "PDN_MACRO_CONNECTIONS", "FP_MACRO_HORIZONTAL_HALO", "FP_MACRO_VERTICAL_HALO",
+        "PDN_HORIZONTAL_HALO", "PDN_VERTICAL_HALO", "PDN_CFG", "PDN_VERTICAL_LAYER", "PDN_HORIZONTAL_LAYER"]
 
 BLINKY = """// Free-running counter; the MSB toggles slowly -> drives an LED.
 module blinky #(
@@ -255,6 +258,78 @@ def _pdk_missing(d: Path) -> None:
     _cfg(d, PDK="sky130C")
 
 
+# The SRAM template on sky130A: LanEx adds the PDK's SRAM, placed and powered,
+# and writes the macro overlay a run gets (.gui-macros.json, passed after the
+# config the way LanEx passes it). Each case breaks one thing in that overlay.
+SRAM_PDK, SRAM_SCL = "sky130A", "sky130_fd_sc_hd"
+
+
+def _sram(d: Path, edit: Optional[Callable[[Dict[str, Any]], None]] = None) -> None:
+    sys.path.insert(0, str(ROOT))
+    from lanex.controller import custommacros, scaffold
+    res = scaffold.create_project(d, "sram", top="", pdk=SRAM_PDK, scl=SRAM_SCL)
+    assert res.get("ok"), res
+    added = custommacros.apply_template_macros(d, "sram", SRAM_PDK, SRAM_SCL)
+    assert added and all(a["ok"] for a in added), added
+    ov = custommacros.write_overlay(d, SRAM_PDK, SRAM_SCL)
+    assert ov, "no macro overlay"
+    if edit:
+        p = Path(ov)
+        doc = json.loads(p.read_text())
+        edit(doc)
+        p.write_text(json.dumps(doc, indent=2) + "\n")
+
+
+def _inst(doc: Dict[str, Any]) -> Dict[str, Any]:
+    m = next(iter(doc["MACROS"].values()))
+    return m["instances"]
+
+
+@case("macro_inst", "sram: the macro overlay names the instance u_wrong; the RTL calls it u_sram")
+def _macro_inst(d: Path) -> None:
+    def edit(doc: Dict[str, Any]) -> None:
+        ins = _inst(doc)
+        ins["u_wrong"] = ins.pop("u_sram")
+        doc["PDN_MACRO_CONNECTIONS"] = [c.replace("u_sram", "u_wrong") for c in doc.get("PDN_MACRO_CONNECTIONS", [])]
+    _sram(d, edit)
+
+
+@case("macro_unplaced", "sram: u_sram listed with no location (what LanEx wrote before lane 7)")
+def _macro_unplaced(d: Path) -> None:
+    def edit(doc: Dict[str, Any]) -> None:
+        _inst(doc)["u_sram"]["location"] = None
+    _sram(d, edit)
+
+
+@case("macro_orient_e", "sram: u_sram turned 90 degrees (orientation E) on the default power grid")
+def _macro_orient_e(d: Path) -> None:
+    def edit(doc: Dict[str, Any]) -> None:
+        _inst(doc)["u_sram"]["orientation"] = "E"
+    _sram(d, edit)
+
+
+@case("macro_nopower", "sram: no PDN_MACRO_CONNECTIONS, so u_sram's power pins hook up to nothing")
+def _macro_nopower(d: Path) -> None:
+    def edit(doc: Dict[str, Any]) -> None:
+        doc.pop("PDN_MACRO_CONNECTIONS", None)
+    _sram(d, edit)
+
+
+@case("macro_ihp_halo", "ihp-sg13g2 SRAM with LanEx's first macro grid and a keep-out halo (lane 7's run lanex1, "
+                        "adopted): Metal1 rails cut by the halo, IR drop stops on PSM-0069")
+def _macro_ihp_halo(d: Path) -> None:
+    raise SystemExit("macro_ihp_halo is adopted from a real run, not forced: "
+                     "failure_goldens.py adopt macro_ihp_halo <design>/runs/<tag> <console.log> <exit code>")
+
+
+@case("macro_channel", "sram: u_sram in the bottom-left corner, its 10 um keep-out leaving a 7 um strip of rows "
+                       "to the left core edge (the same strip with 80 um of rows below it placed fine)")
+def _macro_channel(d: Path) -> None:
+    def edit(doc: Dict[str, Any]) -> None:
+        _inst(doc)["u_sram"]["location"] = [22.54, 21.76]
+    _sram(d, edit)
+
+
 # --------------------------------------------------------------- run
 def _py() -> str:
     venv = Path.home() / ".local/share/pipx/venvs/lanex/bin/python"
@@ -270,14 +345,34 @@ def force(scratch: Path, name: str) -> Dict[str, Any]:
     cfg = "config.json" if (d / "config.json").is_file() else "config.yaml"
     argv = [_py(), "-m", "librelane", "--pdk-root", str(PDK_ROOT), "--docker-no-tty", "--dockerized", cfg,
             "--run-tag", "f1", "--overwrite"]
+    if (d / ".gui-macros.json").is_file():
+        # As LanEx runs a design with macros: the overlay after the config.
+        argv[argv.index(cfg) + 1:argv.index(cfg) + 1] = [".gui-macros.json", "-p", SRAM_PDK, "-s", SRAM_SCL]
     p = subprocess.run(argv, cwd=d, capture_output=True, text=True, timeout=1800)
     (d / "stdout.log").write_text(p.stdout + p.stderr, encoding="utf-8")
     (d / "exit_code").write_text(str(p.returncode))
     return {"case": name, "rc": p.returncode}
 
 
+def adopt(scratch: Path, name: str, run_dir: Path, console: Path, rc: int) -> None:
+    """Take a real run made elsewhere as a case (one that can't be forced
+    again, such as a LanEx setting since changed): its folder becomes
+    ``<scratch>/<name>/runs/f1``, its console ``stdout.log``."""
+    d = scratch / name
+    if d.exists():
+        shutil.rmtree(d)
+    (d / "runs").mkdir(parents=True)
+    shutil.copytree(run_dir, d / "runs" / "f1", symlinks=True)
+    shutil.copyfile(console, d / "stdout.log")
+    (d / "exit_code").write_text(str(rc))
+    (d / "adopted_from").write_text(str(run_dir.resolve().parents[1]))
+
+
 # --------------------------------------------------------------- capture
 def _norm(text: str, d: Path) -> str:
+    src = d / "adopted_from"
+    if src.is_file():
+        text = text.replace(src.read_text().strip(), str(d))
     return text.replace(str(d.parent), "/work").replace(str(PDK_ROOT), "/pdk")
 
 
@@ -297,9 +392,14 @@ def capture(scratch: Path, name: str) -> Dict[str, Any]:
                     "design_dir": "/work/" + name})
         return rec
     steps = sorted(p.name for p in run.iterdir() if p.is_dir() and p.name[:2].isdigit())
-    stopped = next((s for s in steps if not (run / s / "state_out.json").is_file()), None)
+    # The last step that didn't finish stopped the run; a checker before it
+    # that didn't finish recorded a deferred error and the flow went on.
+    open_ = [s for s in steps if not (run / s / "state_out.json").is_file()]
+    stopped = open_[-1] if open_ else None
     rec["steps"] = steps
     rec["stopped"] = stopped
+    if len(open_) > 1:
+        rec["deferred"] = open_[:-1]
     rec["final"] = (run / "final").is_dir()
     el = run / "error.log"
     rec["error_log"] = _norm(el.read_text(encoding="utf-8", errors="replace"), d) if el.is_file() else ""
@@ -325,6 +425,19 @@ def capture(scratch: Path, name: str) -> Dict[str, Any]:
     rec["warnings"] = warn
     res = json.loads((run / "resolved.json").read_text()) if (run / "resolved.json").is_file() else {}
     rec["cfg"] = json.loads(_norm(json.dumps({k: res.get(k) for k in KEEP if k in res}), d))
+    # The die and core the floorplan made, and the sign-off counts of a run
+    # that finished (what a check's card reads).
+    done = [s for s in steps if (run / s / "state_out.json").is_file()]
+    if done:
+        mets = json.loads((run / done[-1] / "state_out.json").read_text()).get("metrics") or {}
+        keep = {k: v for k, v in mets.items() if k in ("design__core__bbox", "design__die__bbox")}
+        if keep:
+            rec["metrics"] = keep
+    fm = run / "final" / "metrics.json"
+    if fm.is_file():
+        mets = json.loads(fm.read_text())
+        rec["final_metrics"] = {k: v for k, v in mets.items()
+                                if re.search(r"lvs|power_grid|xor|drc__count|antenna", k)}
     rec["design_dir"] = "/work/" + name
     said = [ln for ln in out.splitlines() if ln.strip()]
     rec["console_tail"] = [_norm(x, d) for x in said[-12:]]
@@ -338,10 +451,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scratch", type=Path, default=Path.home() / "lanex-scratch" / "force")
     ap.add_argument("-j", type=int, default=2, help="cases at a time")
-    ap.add_argument("cmd", choices=["run", "capture", "list"])
+    ap.add_argument("cmd", choices=["run", "capture", "list", "adopt"])
     ap.add_argument("cases", nargs="*")
     a = ap.parse_args()
-    names = a.cases or sorted(CASES)
+    if a.cmd == "adopt":
+        name, run_dir, console, rc = a.cases
+        adopt(a.scratch, name, Path(run_dir), Path(console), int(rc))
+        return 0
+    names = a.cases or sorted(n for n in CASES if n != "macro_ihp_halo")
     if a.cmd == "list":
         for n in sorted(CASES):
             print("%-20s %s" % (n, CASES[n]["note"]))

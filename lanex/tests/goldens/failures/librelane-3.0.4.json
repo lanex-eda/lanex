@@ -4113,6 +4113,1477 @@
     "                    'runs/f1/01-verilator-lint'\u2026                                ",
     "[06:09:02] VERBOSE  Logging subprocess to                           step.py:1338"
    ]
+  },
+  "macro_inst": {
+   "note": "sram: the macro overlay names the instance u_wrong; the RTL calls it u_sram",
+   "exit_code": 2,
+   "steps": [
+    "01-verilator-lint",
+    "02-checker-linttimingconstructs",
+    "03-checker-linterrors",
+    "04-checker-lintwarnings",
+    "05-yosys-jsonheader",
+    "06-yosys-synthesis",
+    "07-checker-yosysunmappedcells",
+    "08-checker-yosyssynthchecks",
+    "09-checker-netlistassignstatements",
+    "10-openroad-checksdcfiles",
+    "11-openroad-checkmacroinstances"
+   ],
+   "stopped": "11-openroad-checkmacroinstances",
+   "final": false,
+   "error_log": "No macro instance u_wrong found.\n",
+   "step_log_name": "openroad-checkmacroinstances.log",
+   "step_log_tail": [
+    "+ define_corners nom_tt_025C_1v80",
+    "Reading timing models for corner nom_tt_025C_1v80\u2026",
+    "Reading cell library for the 'nom_tt_025C_1v80' corner at '/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib'\u2026",
+    "Reading cell library for the 'nom_tt_025C_1v80' corner at '/work/macro_inst/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib'\u2026",
+    "Reading top-level netlist at '/work/macro_inst/runs/f1/06-yosys-synthesis/sram_demo.nl.v'\u2026",
+    "Linking design 'sram_demo' from netlist\u2026",
+    "Reading design constraints file at '/nix/store/ps0r3qpgjh1lqyqacra33rvxsjgkd874-python3-3.13.9-env/lib/python3.13/site-packages/librelane/scripts/base.sdc'\u2026",
+    "[INFO] Using clock clk\u2026",
+    "[INFO] Setting output delay to: 5.0",
+    "[INFO] Setting input delay to: 5.0",
+    "[INFO] Setting load to: 0.033442",
+    "[INFO] Setting clock uncertainty to: 0.25",
+    "[INFO] Setting clock transition to: 0.1499999999999999944488848768742172978818416595458984375",
+    "[INFO] Setting timing derate to: 5%",
+    "Warning: check_macro_instances.tcl line 1, instance 'u_wrong' not found.",
+    "[ERROR] No macro instance u_wrong found."
+   ],
+   "process_stats": {
+    "time": {
+     "cpu_time_user": "00:00:00.160",
+     "cpu_time_system": "00:00:00.010",
+     "runtime": "00:00:00.200",
+     "cpu_time_iowait": "00:00:00.000"
+    },
+    "peak_resources": {
+     "cpu_percent": 89.8,
+     "memory_rss": "43MiB",
+     "memory_vms": "56MiB",
+     "threads": 1
+    },
+    "avg_resources": {
+     "cpu_percent": 42.4,
+     "memory_rss": "11MiB",
+     "memory_vms": "17MiB",
+     "threads": 0.75
+    }
+   },
+   "lint_log_tail": [
+    "%Warning-PINMISSING: /work/macro_inst/src/sram_demo.v:16:39: Instance has missing pin: 'vccd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_inst/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:7:21: ... Location of port declaration",
+    "    7 |     inout           vccd1,",
+    "      |                     ^~~~~",
+    "                     ... For warning description see https://verilator.org/warn/PINMISSING?v=5.044",
+    "                     ... Use \"/* verilator lint_off PINMISSING */\" and lint_on around source to disable this message.",
+    "%Warning-PINMISSING: /work/macro_inst/src/sram_demo.v:16:39: Instance has missing pin: 'vssd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_inst/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:8:21: ... Location of port declaration",
+    "    8 |     inout           vssd1,",
+    "      |                     ^~~~~",
+    "%Warning-UNUSEDSIGNAL: /work/macro_inst/src/sram_demo.v:14:17: Signal is not used: 'dout1'",
+    "                                                                                                : ... note: In instance 'sram_demo'",
+    "   14 |     wire [31:0] dout1;",
+    "      |                 ^~~~~",
+    "                       ... For warning description see https://verilator.org/warn/UNUSEDSIGNAL?v=5.044",
+    "                       ... Use \"/* verilator lint_off UNUSEDSIGNAL */\" and lint_on around source to disable this message.",
+    "- V e r i l a t i o n   R e p o r t: Verilator 5.044 2026-01-01 rev v5.040",
+    "- Verilator: Built from 0.585 MB sources in 449 modules, into 0.008 MB in 3 C++ files needing 0.000 MB",
+    "- Verilator: Walltime 0.021 s (elab=0.006, cvt=0.001, bld=0.000); cpu 0.021 s on 1 threads; alloced 27.984 MB"
+   ],
+   "warnings": {},
+   "cfg": {
+    "DESIGN_NAME": "sram_demo",
+    "CLOCK_PORT": "clk",
+    "CLOCK_PERIOD": 25,
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [
+     0,
+     0,
+     700,
+     600
+    ],
+    "CORE_AREA": null,
+    "FP_CORE_UTIL": 50,
+    "PL_TARGET_DENSITY_PCT": null,
+    "PDK": "sky130A",
+    "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+    "VERILOG_FILES": [
+     "/work/macro_inst/src/sram_demo.v"
+    ],
+    "RUN_LINTER": true,
+    "PDN_VPITCH": 153.6,
+    "PDN_HPITCH": 153.18,
+    "PDN_VWIDTH": 1.6,
+    "PDN_HWIDTH": 1.6,
+    "PDN_VSPACING": 1.7,
+    "PDN_HSPACING": 1.7,
+    "PDN_VOFFSET": 16.32,
+    "PDN_HOFFSET": 16.65,
+    "PDN_CORE_RING": false,
+    "PDN_CORE_RING_VWIDTH": 1.6,
+    "PDN_CORE_RING_HWIDTH": 1.6,
+    "PDN_CORE_RING_VOFFSET": 6,
+    "PDN_CORE_RING_HOFFSET": 6,
+    "PDN_CORE_RING_VSPACING": 1.7,
+    "PDN_CORE_RING_HSPACING": 1.7,
+    "LEFT_MARGIN_MULT": 12,
+    "RIGHT_MARGIN_MULT": 12,
+    "TOP_MARGIN_MULT": 4,
+    "BOTTOM_MARGIN_MULT": 4,
+    "USE_SLANG": false,
+    "VERILOG_INCLUDE_DIRS": null,
+    "IO_PIN_ORDER_CFG": null,
+    "ERRORS_ON_UNMATCHED_IO": "unmatched_design",
+    "MAX_TRANSITION_CONSTRAINT": 0.75,
+    "MAX_FANOUT_CONSTRAINT": 10,
+    "PNR_SDC_FILE": null,
+    "DESIGN_REPAIR_MAX_SLEW_PCT": 20,
+    "TIMING_VIOLATION_CORNERS": [
+     "*tt*"
+    ],
+    "LINTER_ERROR_ON_LATCH": true,
+    "DIODE_ON_PORTS": "none",
+    "RUN_ANTENNA_REPAIR": true,
+    "GRT_ANTENNA_REPAIR_ITERS": 3,
+    "GRT_ANTENNA_REPAIR_MARGIN": 10,
+    "CTS_CLK_BUFFERS": [
+     "sky130_fd_sc_hd__clkbuf_8",
+     "sky130_fd_sc_hd__clkbuf_4",
+     "sky130_fd_sc_hd__clkbuf_2"
+    ],
+    "CTS_ROOT_BUFFER": "sky130_fd_sc_hd__clkbuf_16",
+    "MACROS": {
+     "sky130_sram_1kbyte_1rw1r_32x256_8": {
+      "gds": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/gds/sky130_sram_1kbyte_1rw1r_32x256_8.gds"
+      ],
+      "lef": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/lef/sky130_sram_1kbyte_1rw1r_32x256_8.lef"
+      ],
+      "instances": {
+       "u_wrong": {
+        "location": [
+         110.4,
+         100.64
+        ],
+        "orientation": "N"
+       }
+      },
+      "vh": [
+       "/work/macro_inst/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v"
+      ],
+      "nl": [],
+      "pnl": [],
+      "spef": {},
+      "lib": {
+       "*": [
+        "/work/macro_inst/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib"
+       ]
+      },
+      "spice": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/spice/sky130_sram_1kbyte_1rw1r_32x256_8.spice"
+      ],
+      "sdf": {},
+      "json_h": null
+     }
+    },
+    "PDN_MACRO_CONNECTIONS": [
+     "u_wrong VPWR VGND vccd1 vssd1"
+    ],
+    "FP_MACRO_HORIZONTAL_HALO": 10,
+    "FP_MACRO_VERTICAL_HALO": 10,
+    "PDN_HORIZONTAL_HALO": 10,
+    "PDN_VERTICAL_HALO": 10,
+    "PDN_CFG": null,
+    "PDN_VERTICAL_LAYER": "met4",
+    "PDN_HORIZONTAL_LAYER": "met5"
+   },
+   "design_dir": "/work/macro_inst",
+   "console_tail": [
+    "[08:30:54] WARNING  [OpenROAD.CheckSDCFiles] 'PNR_SDC_FILE' is not   flow.py:701",
+    "                    defined. Using generic fallback SDC for OpenROAD            ",
+    "                    PnR steps.                                                  ",
+    "[08:30:54] WARNING  [OpenROAD.CheckSDCFiles] 'SIGNOFF_SDC_FILE' is   flow.py:701",
+    "                    not defined. Using generic fallback SDC for                 ",
+    "                    OpenROAD PnR steps.                                         ",
+    "[08:30:54] ERROR    The following error was encountered while    __main__.py:189",
+    "                    running the flow:                                           ",
+    "                    OpenROAD.CheckMacroInstances failed with the                ",
+    "                    following errors:                                           ",
+    "                    No macro instance u_wrong found.                            ",
+    "[08:30:54] ERROR    LibreLane will now quit.                     __main__.py:190"
+   ],
+   "console_head": [
+    "[08:30:52] INFO     Running containerized command:              container.py:285",
+    "[08:30:52] INFO     Starting a new run of the 'Classic' flow with    flow.py:654",
+    "                    the tag 'f1'.                                               ",
+    "[08:30:52] INFO     Starting\u2026                                  sequential.py:339",
+    "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Verilator Lint \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    "[08:30:52] VERBOSE  Running 'Verilator.Lint' at                     step.py:1138",
+    "                    'runs/f1/01-verilator-lint'\u2026                                ",
+    "[08:30:53] VERBOSE  Logging subprocess to                           step.py:1338"
+   ]
+  },
+  "macro_unplaced": {
+   "note": "sram: u_sram listed with no location (what LanEx wrote before lane 7)",
+   "exit_code": 2,
+   "steps": [
+    "01-verilator-lint",
+    "02-checker-linttimingconstructs",
+    "03-checker-linterrors",
+    "04-checker-lintwarnings",
+    "05-yosys-jsonheader",
+    "06-yosys-synthesis",
+    "07-checker-yosysunmappedcells",
+    "08-checker-yosyssynthchecks",
+    "09-checker-netlistassignstatements",
+    "10-openroad-checksdcfiles",
+    "11-openroad-checkmacroinstances",
+    "12-openroad-staprepnr",
+    "13-openroad-floorplan",
+    "14-openroad-dumprcvalues",
+    "15-odb-checkmacroantennaproperties",
+    "16-odb-setpowerconnections",
+    "17-odb-manualmacroplacement",
+    "18-openroad-cutrows",
+    "19-openroad-tapendcapinsertion",
+    "20-odb-addpdnobstructions",
+    "21-openroad-generatepdn"
+   ],
+   "stopped": "21-openroad-generatepdn",
+   "final": false,
+   "error_log": "[PDN-0235] Design has unplaced macros.\n",
+   "step_log_name": "openroad-generatepdn.log",
+   "step_log_tail": [
+    "Reading timing models for corner nom_tt_025C_1v80\u2026",
+    "Reading timing library for the 'nom_tt_025C_1v80' corner at '/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib'\u2026",
+    "Reading timing library for the 'nom_tt_025C_1v80' corner at '/work/macro_unplaced/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib'\u2026",
+    "Reading OpenROAD database at '/work/macro_unplaced/runs/f1/19-openroad-tapendcapinsertion/sram_demo.odb'\u2026",
+    "Reading design constraints file at '/nix/store/ps0r3qpgjh1lqyqacra33rvxsjgkd874-python3-3.13.9-env/lib/python3.13/site-packages/librelane/scripts/base.sdc'\u2026",
+    "[INFO] Using clock clk\u2026",
+    "[INFO] Setting output delay to: 5.0",
+    "[INFO] Setting input delay to: 5.0",
+    "[INFO] Setting load to: 0.033442",
+    "[INFO] Setting clock uncertainty to: 0.25",
+    "[INFO] Setting clock transition to: 0.1499999999999999944488848768742172978818416595458984375",
+    "[INFO] Setting timing derate to: 5%",
+    "[INFO] Setting global connections...",
+    "u_sram matched with u_sram",
+    "[INFO ODB-0403] 0 connections made, 0 conflicts skipped.",
+    "+ pdngen ",
+    "[WARNING PDN-0234] u_sram has not been placed and fixed.",
+    "[ERROR PDN-0235] Design has unplaced macros.",
+    "PDN-0235"
+   ],
+   "process_stats": {
+    "time": {
+     "cpu_time_user": "00:00:00.270",
+     "cpu_time_system": "00:00:00.040",
+     "runtime": "00:00:00.401",
+     "cpu_time_iowait": "00:00:00.000"
+    },
+    "peak_resources": {
+     "cpu_percent": 109.6,
+     "memory_rss": "124MiB",
+     "memory_vms": "293MiB",
+     "threads": 1
+    },
+    "avg_resources": {
+     "cpu_percent": 51.46666666666666,
+     "memory_rss": "52MiB",
+     "memory_vms": "138MiB",
+     "threads": 0.8333333333333334
+    }
+   },
+   "lint_log_tail": [
+    "%Warning-PINMISSING: /work/macro_unplaced/src/sram_demo.v:16:39: Instance has missing pin: 'vccd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_unplaced/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:7:21: ... Location of port declaration",
+    "    7 |     inout           vccd1,",
+    "      |                     ^~~~~",
+    "                     ... For warning description see https://verilator.org/warn/PINMISSING?v=5.044",
+    "                     ... Use \"/* verilator lint_off PINMISSING */\" and lint_on around source to disable this message.",
+    "%Warning-PINMISSING: /work/macro_unplaced/src/sram_demo.v:16:39: Instance has missing pin: 'vssd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_unplaced/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:8:21: ... Location of port declaration",
+    "    8 |     inout           vssd1,",
+    "      |                     ^~~~~",
+    "%Warning-UNUSEDSIGNAL: /work/macro_unplaced/src/sram_demo.v:14:17: Signal is not used: 'dout1'",
+    "                                                                                                    : ... note: In instance 'sram_demo'",
+    "   14 |     wire [31:0] dout1;",
+    "      |                 ^~~~~",
+    "                       ... For warning description see https://verilator.org/warn/UNUSEDSIGNAL?v=5.044",
+    "                       ... Use \"/* verilator lint_off UNUSEDSIGNAL */\" and lint_on around source to disable this message.",
+    "- V e r i l a t i o n   R e p o r t: Verilator 5.044 2026-01-01 rev v5.040",
+    "- Verilator: Built from 0.590 MB sources in 449 modules, into 0.008 MB in 3 C++ files needing 0.000 MB",
+    "- Verilator: Walltime 0.021 s (elab=0.005, cvt=0.001, bld=0.000); cpu 0.021 s on 1 threads; alloced 27.992 MB"
+   ],
+   "warnings": {
+    "TAP-0032": "[TAP-0032] Macro u_sram is not placed.",
+    "PDN-0234": "[PDN-0234] u_sram has not been placed and fixed."
+   },
+   "cfg": {
+    "DESIGN_NAME": "sram_demo",
+    "CLOCK_PORT": "clk",
+    "CLOCK_PERIOD": 25,
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [
+     0,
+     0,
+     700,
+     600
+    ],
+    "CORE_AREA": null,
+    "FP_CORE_UTIL": 50,
+    "PL_TARGET_DENSITY_PCT": null,
+    "PDK": "sky130A",
+    "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+    "VERILOG_FILES": [
+     "/work/macro_unplaced/src/sram_demo.v"
+    ],
+    "RUN_LINTER": true,
+    "PDN_VPITCH": 153.6,
+    "PDN_HPITCH": 153.18,
+    "PDN_VWIDTH": 1.6,
+    "PDN_HWIDTH": 1.6,
+    "PDN_VSPACING": 1.7,
+    "PDN_HSPACING": 1.7,
+    "PDN_VOFFSET": 16.32,
+    "PDN_HOFFSET": 16.65,
+    "PDN_CORE_RING": false,
+    "PDN_CORE_RING_VWIDTH": 1.6,
+    "PDN_CORE_RING_HWIDTH": 1.6,
+    "PDN_CORE_RING_VOFFSET": 6,
+    "PDN_CORE_RING_HOFFSET": 6,
+    "PDN_CORE_RING_VSPACING": 1.7,
+    "PDN_CORE_RING_HSPACING": 1.7,
+    "LEFT_MARGIN_MULT": 12,
+    "RIGHT_MARGIN_MULT": 12,
+    "TOP_MARGIN_MULT": 4,
+    "BOTTOM_MARGIN_MULT": 4,
+    "USE_SLANG": false,
+    "VERILOG_INCLUDE_DIRS": null,
+    "IO_PIN_ORDER_CFG": null,
+    "ERRORS_ON_UNMATCHED_IO": "unmatched_design",
+    "MAX_TRANSITION_CONSTRAINT": 0.75,
+    "MAX_FANOUT_CONSTRAINT": 10,
+    "PNR_SDC_FILE": null,
+    "DESIGN_REPAIR_MAX_SLEW_PCT": 20,
+    "TIMING_VIOLATION_CORNERS": [
+     "*tt*"
+    ],
+    "LINTER_ERROR_ON_LATCH": true,
+    "DIODE_ON_PORTS": "none",
+    "RUN_ANTENNA_REPAIR": true,
+    "GRT_ANTENNA_REPAIR_ITERS": 3,
+    "GRT_ANTENNA_REPAIR_MARGIN": 10,
+    "CTS_CLK_BUFFERS": [
+     "sky130_fd_sc_hd__clkbuf_8",
+     "sky130_fd_sc_hd__clkbuf_4",
+     "sky130_fd_sc_hd__clkbuf_2"
+    ],
+    "CTS_ROOT_BUFFER": "sky130_fd_sc_hd__clkbuf_16",
+    "MACROS": {
+     "sky130_sram_1kbyte_1rw1r_32x256_8": {
+      "gds": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/gds/sky130_sram_1kbyte_1rw1r_32x256_8.gds"
+      ],
+      "lef": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/lef/sky130_sram_1kbyte_1rw1r_32x256_8.lef"
+      ],
+      "instances": {
+       "u_sram": {
+        "location": null,
+        "orientation": "N"
+       }
+      },
+      "vh": [
+       "/work/macro_unplaced/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v"
+      ],
+      "nl": [],
+      "pnl": [],
+      "spef": {},
+      "lib": {
+       "*": [
+        "/work/macro_unplaced/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib"
+       ]
+      },
+      "spice": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/spice/sky130_sram_1kbyte_1rw1r_32x256_8.spice"
+      ],
+      "sdf": {},
+      "json_h": null
+     }
+    },
+    "PDN_MACRO_CONNECTIONS": [
+     "u_sram VPWR VGND vccd1 vssd1"
+    ],
+    "FP_MACRO_HORIZONTAL_HALO": 10,
+    "FP_MACRO_VERTICAL_HALO": 10,
+    "PDN_HORIZONTAL_HALO": 10,
+    "PDN_VERTICAL_HALO": 10,
+    "PDN_CFG": null,
+    "PDN_VERTICAL_LAYER": "met4",
+    "PDN_HORIZONTAL_LAYER": "met5"
+   },
+   "metrics": {
+    "design__die__bbox": "0.0 0.0 700.0 600.0",
+    "design__core__bbox": "5.52 10.88 694.14 587.52"
+   },
+   "design_dir": "/work/macro_unplaced",
+   "console_tail": [
+    "                    They might not be connected to a gate. (and 1               ",
+    "                    similar warnings)                                           ",
+    "[08:30:58] WARNING  [OpenROAD.CutRows] [TAP-0032] Macro u_sram is    flow.py:701",
+    "                    not placed. (and 1 similar warnings)                        ",
+    "[08:30:58] WARNING  [OpenROAD.GeneratePDN] [PDN-0234] u_sram has not flow.py:701",
+    "                    been placed and fixed.                                      ",
+    "[08:30:58] ERROR    The following error was encountered while    __main__.py:189",
+    "                    running the flow:                                           ",
+    "                    OpenROAD.GeneratePDN failed with the                        ",
+    "                    following errors:                                           ",
+    "                    [PDN-0235] Design has unplaced macros.                      ",
+    "[08:30:58] ERROR    LibreLane will now quit.                     __main__.py:190"
+   ],
+   "console_head": [
+    "[08:30:52] INFO     Running containerized command:              container.py:285",
+    "[08:30:52] INFO     Starting a new run of the 'Classic' flow with    flow.py:654",
+    "                    the tag 'f1'.                                               ",
+    "[08:30:52] INFO     Starting\u2026                                  sequential.py:339",
+    "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Verilator Lint \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    "[08:30:52] VERBOSE  Running 'Verilator.Lint' at                     step.py:1138",
+    "                    'runs/f1/01-verilator-lint'\u2026                                ",
+    "[08:30:53] VERBOSE  Logging subprocess to                           step.py:1338"
+   ]
+  },
+  "macro_orient_e": {
+   "note": "sram: u_sram turned 90 degrees (orientation E) on the default power grid",
+   "exit_code": 2,
+   "steps": [
+    "01-verilator-lint",
+    "02-checker-linttimingconstructs",
+    "03-checker-linterrors",
+    "04-checker-lintwarnings",
+    "05-yosys-jsonheader",
+    "06-yosys-synthesis",
+    "07-checker-yosysunmappedcells",
+    "08-checker-yosyssynthchecks",
+    "09-checker-netlistassignstatements",
+    "10-openroad-checksdcfiles",
+    "11-openroad-checkmacroinstances",
+    "12-openroad-staprepnr",
+    "13-openroad-floorplan",
+    "14-openroad-dumprcvalues",
+    "15-odb-checkmacroantennaproperties",
+    "16-odb-setpowerconnections",
+    "17-odb-manualmacroplacement",
+    "18-openroad-cutrows",
+    "19-openroad-tapendcapinsertion",
+    "20-odb-addpdnobstructions",
+    "21-openroad-generatepdn"
+   ],
+   "stopped": "21-openroad-generatepdn",
+   "final": false,
+   "error_log": "[PDN-0233] Failed to generate full power grid.\n",
+   "step_log_name": "openroad-generatepdn.log",
+   "step_log_tail": [
+    "Reading timing models for corner nom_tt_025C_1v80\u2026",
+    "Reading timing library for the 'nom_tt_025C_1v80' corner at '/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib'\u2026",
+    "Reading timing library for the 'nom_tt_025C_1v80' corner at '/work/macro_orient_e/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib'\u2026",
+    "Reading OpenROAD database at '/work/macro_orient_e/runs/f1/19-openroad-tapendcapinsertion/sram_demo.odb'\u2026",
+    "Reading design constraints file at '/nix/store/ps0r3qpgjh1lqyqacra33rvxsjgkd874-python3-3.13.9-env/lib/python3.13/site-packages/librelane/scripts/base.sdc'\u2026",
+    "[INFO] Using clock clk\u2026",
+    "[INFO] Setting output delay to: 5.0",
+    "[INFO] Setting input delay to: 5.0",
+    "[INFO] Setting load to: 0.033442",
+    "[INFO] Setting clock uncertainty to: 0.25",
+    "[INFO] Setting clock transition to: 0.1499999999999999944488848768742172978818416595458984375",
+    "[INFO] Setting timing derate to: 5%",
+    "[INFO] Setting global connections...",
+    "u_sram matched with u_sram",
+    "[INFO ODB-0403] 0 connections made, 0 conflicts skipped.",
+    "+ pdngen ",
+    "[INFO PDN-0001] Inserting grid: stdcell_grid",
+    "[INFO PDN-0001] Inserting grid: macro - u_sram",
+    "[WARNING PDN-0232] The grid \"macro - u_sram\" (Instance) does not contain any shapes or vias.",
+    "[ERROR PDN-0233] Failed to generate full power grid.",
+    "PDN-0233"
+   ],
+   "process_stats": {
+    "time": {
+     "cpu_time_user": "00:00:00.270",
+     "cpu_time_system": "00:00:00.040",
+     "runtime": "00:00:00.401",
+     "cpu_time_iowait": "00:00:00.000"
+    },
+    "peak_resources": {
+     "cpu_percent": 109.7,
+     "memory_rss": "126MiB",
+     "memory_vms": "294MiB",
+     "threads": 1
+    },
+    "avg_resources": {
+     "cpu_percent": 51.5,
+     "memory_rss": "53MiB",
+     "memory_vms": "138MiB",
+     "threads": 0.8333333333333334
+    }
+   },
+   "lint_log_tail": [
+    "%Warning-PINMISSING: /work/macro_orient_e/src/sram_demo.v:16:39: Instance has missing pin: 'vccd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_orient_e/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:7:21: ... Location of port declaration",
+    "    7 |     inout           vccd1,",
+    "      |                     ^~~~~",
+    "                     ... For warning description see https://verilator.org/warn/PINMISSING?v=5.044",
+    "                     ... Use \"/* verilator lint_off PINMISSING */\" and lint_on around source to disable this message.",
+    "%Warning-PINMISSING: /work/macro_orient_e/src/sram_demo.v:16:39: Instance has missing pin: 'vssd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_orient_e/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:8:21: ... Location of port declaration",
+    "    8 |     inout           vssd1,",
+    "      |                     ^~~~~",
+    "%Warning-UNUSEDSIGNAL: /work/macro_orient_e/src/sram_demo.v:14:17: Signal is not used: 'dout1'",
+    "                                                                                                    : ... note: In instance 'sram_demo'",
+    "   14 |     wire [31:0] dout1;",
+    "      |                 ^~~~~",
+    "                       ... For warning description see https://verilator.org/warn/UNUSEDSIGNAL?v=5.044",
+    "                       ... Use \"/* verilator lint_off UNUSEDSIGNAL */\" and lint_on around source to disable this message.",
+    "- V e r i l a t i o n   R e p o r t: Verilator 5.044 2026-01-01 rev v5.040",
+    "- Verilator: Built from 0.590 MB sources in 449 modules, into 0.008 MB in 3 C++ files needing 0.000 MB",
+    "- Verilator: Walltime 0.021 s (elab=0.006, cvt=0.001, bld=0.000); cpu 0.021 s on 1 threads; alloced 27.988 MB"
+   ],
+   "warnings": {
+    "PDN-0232": "[PDN-0232] The grid \"macro - u_sram\" (Instance) does not contain any shapes or vias."
+   },
+   "cfg": {
+    "DESIGN_NAME": "sram_demo",
+    "CLOCK_PORT": "clk",
+    "CLOCK_PERIOD": 25,
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [
+     0,
+     0,
+     700,
+     600
+    ],
+    "CORE_AREA": null,
+    "FP_CORE_UTIL": 50,
+    "PL_TARGET_DENSITY_PCT": null,
+    "PDK": "sky130A",
+    "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+    "VERILOG_FILES": [
+     "/work/macro_orient_e/src/sram_demo.v"
+    ],
+    "RUN_LINTER": true,
+    "PDN_VPITCH": 153.6,
+    "PDN_HPITCH": 153.18,
+    "PDN_VWIDTH": 1.6,
+    "PDN_HWIDTH": 1.6,
+    "PDN_VSPACING": 1.7,
+    "PDN_HSPACING": 1.7,
+    "PDN_VOFFSET": 16.32,
+    "PDN_HOFFSET": 16.65,
+    "PDN_CORE_RING": false,
+    "PDN_CORE_RING_VWIDTH": 1.6,
+    "PDN_CORE_RING_HWIDTH": 1.6,
+    "PDN_CORE_RING_VOFFSET": 6,
+    "PDN_CORE_RING_HOFFSET": 6,
+    "PDN_CORE_RING_VSPACING": 1.7,
+    "PDN_CORE_RING_HSPACING": 1.7,
+    "LEFT_MARGIN_MULT": 12,
+    "RIGHT_MARGIN_MULT": 12,
+    "TOP_MARGIN_MULT": 4,
+    "BOTTOM_MARGIN_MULT": 4,
+    "USE_SLANG": false,
+    "VERILOG_INCLUDE_DIRS": null,
+    "IO_PIN_ORDER_CFG": null,
+    "ERRORS_ON_UNMATCHED_IO": "unmatched_design",
+    "MAX_TRANSITION_CONSTRAINT": 0.75,
+    "MAX_FANOUT_CONSTRAINT": 10,
+    "PNR_SDC_FILE": null,
+    "DESIGN_REPAIR_MAX_SLEW_PCT": 20,
+    "TIMING_VIOLATION_CORNERS": [
+     "*tt*"
+    ],
+    "LINTER_ERROR_ON_LATCH": true,
+    "DIODE_ON_PORTS": "none",
+    "RUN_ANTENNA_REPAIR": true,
+    "GRT_ANTENNA_REPAIR_ITERS": 3,
+    "GRT_ANTENNA_REPAIR_MARGIN": 10,
+    "CTS_CLK_BUFFERS": [
+     "sky130_fd_sc_hd__clkbuf_8",
+     "sky130_fd_sc_hd__clkbuf_4",
+     "sky130_fd_sc_hd__clkbuf_2"
+    ],
+    "CTS_ROOT_BUFFER": "sky130_fd_sc_hd__clkbuf_16",
+    "MACROS": {
+     "sky130_sram_1kbyte_1rw1r_32x256_8": {
+      "gds": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/gds/sky130_sram_1kbyte_1rw1r_32x256_8.gds"
+      ],
+      "lef": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/lef/sky130_sram_1kbyte_1rw1r_32x256_8.lef"
+      ],
+      "instances": {
+       "u_sram": {
+        "location": [
+         110.4,
+         100.64
+        ],
+        "orientation": "E"
+       }
+      },
+      "vh": [
+       "/work/macro_orient_e/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v"
+      ],
+      "nl": [],
+      "pnl": [],
+      "spef": {},
+      "lib": {
+       "*": [
+        "/work/macro_orient_e/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib"
+       ]
+      },
+      "spice": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/spice/sky130_sram_1kbyte_1rw1r_32x256_8.spice"
+      ],
+      "sdf": {},
+      "json_h": null
+     }
+    },
+    "PDN_MACRO_CONNECTIONS": [
+     "u_sram VPWR VGND vccd1 vssd1"
+    ],
+    "FP_MACRO_HORIZONTAL_HALO": 10,
+    "FP_MACRO_VERTICAL_HALO": 10,
+    "PDN_HORIZONTAL_HALO": 10,
+    "PDN_VERTICAL_HALO": 10,
+    "PDN_CFG": null,
+    "PDN_VERTICAL_LAYER": "met4",
+    "PDN_HORIZONTAL_LAYER": "met5"
+   },
+   "metrics": {
+    "design__die__bbox": "0.0 0.0 700.0 600.0",
+    "design__core__bbox": "5.52 10.88 694.14 587.52"
+   },
+   "design_dir": "/work/macro_orient_e",
+   "console_tail": [
+    "                    They might not be connected to a gate. (and 1               ",
+    "                    similar warnings)                                           ",
+    "[08:31:02] WARNING  [OpenROAD.GeneratePDN] [PDN-0232] The grid       flow.py:701",
+    "                    \"macro - u_sram\" (Instance) does not contain any            ",
+    "                    shapes or vias.                                             ",
+    "[08:31:02] ERROR    The following error was encountered while    __main__.py:189",
+    "                    running the flow:                                           ",
+    "                    OpenROAD.GeneratePDN failed with the                        ",
+    "                    following errors:                                           ",
+    "                    [PDN-0233] Failed to generate full power                    ",
+    "                    grid.                                                       ",
+    "[08:31:02] ERROR    LibreLane will now quit.                     __main__.py:190"
+   ],
+   "console_head": [
+    "[08:30:55] INFO     Running containerized command:              container.py:285",
+    "[08:30:56] INFO     Starting a new run of the 'Classic' flow with    flow.py:654",
+    "                    the tag 'f1'.                                               ",
+    "[08:30:56] INFO     Starting\u2026                                  sequential.py:339",
+    "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Verilator Lint \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    "[08:30:56] VERBOSE  Running 'Verilator.Lint' at                     step.py:1138",
+    "                    'runs/f1/01-verilator-lint'\u2026                                ",
+    "[08:30:56] VERBOSE  Logging subprocess to                           step.py:1338"
+   ]
+  },
+  "macro_nopower": {
+   "note": "sram: no PDN_MACRO_CONNECTIONS, so u_sram's power pins hook up to nothing",
+   "exit_code": 2,
+   "steps": [
+    "01-verilator-lint",
+    "02-checker-linttimingconstructs",
+    "03-checker-linterrors",
+    "04-checker-lintwarnings",
+    "05-yosys-jsonheader",
+    "06-yosys-synthesis",
+    "07-checker-yosysunmappedcells",
+    "08-checker-yosyssynthchecks",
+    "09-checker-netlistassignstatements",
+    "10-openroad-checksdcfiles",
+    "11-openroad-checkmacroinstances",
+    "12-openroad-staprepnr",
+    "13-openroad-floorplan",
+    "14-openroad-dumprcvalues",
+    "15-odb-checkmacroantennaproperties",
+    "16-odb-setpowerconnections",
+    "17-odb-manualmacroplacement",
+    "18-openroad-cutrows",
+    "19-openroad-tapendcapinsertion",
+    "20-odb-addpdnobstructions",
+    "21-openroad-generatepdn",
+    "22-odb-removepdnobstructions",
+    "23-odb-addroutingobstructions",
+    "24-openroad-globalplacementskipio",
+    "25-openroad-ioplacement",
+    "26-odb-customioplacement",
+    "27-odb-applydeftemplate",
+    "28-openroad-globalplacement",
+    "29-odb-writeverilogheader",
+    "30-checker-powergridviolations",
+    "31-openroad-stamidpnr",
+    "32-openroad-repairdesignpostgpl",
+    "33-odb-manualglobalplacement",
+    "34-openroad-detailedplacement",
+    "35-openroad-cts",
+    "36-openroad-stamidpnr-1",
+    "37-openroad-resizertimingpostcts",
+    "38-openroad-stamidpnr-2",
+    "39-openroad-globalrouting",
+    "40-openroad-checkantennas",
+    "41-odb-diodesonports",
+    "42-openroad-repairantennas",
+    "43-openroad-stamidpnr-3",
+    "44-openroad-detailedrouting",
+    "45-odb-removeroutingobstructions",
+    "46-openroad-checkantennas-1",
+    "47-checker-trdrc",
+    "48-odb-reportdisconnectedpins",
+    "49-checker-disconnectedpins"
+   ],
+   "stopped": "49-checker-disconnectedpins",
+   "deferred": [
+    "47-checker-trdrc"
+   ],
+   "final": false,
+   "error_log": "4 Routing DRC errors found. - deferred\n1 critical disconnected pins found.\n",
+   "lint_log_tail": [
+    "%Warning-PINMISSING: /work/macro_nopower/src/sram_demo.v:16:39: Instance has missing pin: 'vccd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_nopower/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:7:21: ... Location of port declaration",
+    "    7 |     inout           vccd1,",
+    "      |                     ^~~~~",
+    "                     ... For warning description see https://verilator.org/warn/PINMISSING?v=5.044",
+    "                     ... Use \"/* verilator lint_off PINMISSING */\" and lint_on around source to disable this message.",
+    "%Warning-PINMISSING: /work/macro_nopower/src/sram_demo.v:16:39: Instance has missing pin: 'vssd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_nopower/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:8:21: ... Location of port declaration",
+    "    8 |     inout           vssd1,",
+    "      |                     ^~~~~",
+    "%Warning-UNUSEDSIGNAL: /work/macro_nopower/src/sram_demo.v:14:17: Signal is not used: 'dout1'",
+    "                                                                                                   : ... note: In instance 'sram_demo'",
+    "   14 |     wire [31:0] dout1;",
+    "      |                 ^~~~~",
+    "                       ... For warning description see https://verilator.org/warn/UNUSEDSIGNAL?v=5.044",
+    "                       ... Use \"/* verilator lint_off UNUSEDSIGNAL */\" and lint_on around source to disable this message.",
+    "- V e r i l a t i o n   R e p o r t: Verilator 5.044 2026-01-01 rev v5.040",
+    "- Verilator: Built from 0.589 MB sources in 449 modules, into 0.008 MB in 3 C++ files needing 0.000 MB",
+    "- Verilator: Walltime 0.038 s (elab=0.012, cvt=0.002, bld=0.000); cpu 0.038 s on 1 threads; alloced 27.988 MB"
+   ],
+   "warnings": {
+    "PDN-0231": "[PDN-0231] u_sram is not connected to any power/ground nets.",
+    "PDN-0189": "[PDN-0189] Supply pin u_sram/vccd1 is not connected to any net.",
+    "STA-1140": "[STA-1140] /work/macro_nopower/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib line 1, library sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C_lib already exists.",
+    "RSZ-0020": "[RSZ-0020] found 2 floating nets.",
+    "DRT-0349": "[DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer mcon"
+   },
+   "cfg": {
+    "DESIGN_NAME": "sram_demo",
+    "CLOCK_PORT": "clk",
+    "CLOCK_PERIOD": 25,
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [
+     0,
+     0,
+     700,
+     600
+    ],
+    "CORE_AREA": null,
+    "FP_CORE_UTIL": 50,
+    "PL_TARGET_DENSITY_PCT": null,
+    "PDK": "sky130A",
+    "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+    "VERILOG_FILES": [
+     "/work/macro_nopower/src/sram_demo.v"
+    ],
+    "RUN_LINTER": true,
+    "PDN_VPITCH": 153.6,
+    "PDN_HPITCH": 153.18,
+    "PDN_VWIDTH": 1.6,
+    "PDN_HWIDTH": 1.6,
+    "PDN_VSPACING": 1.7,
+    "PDN_HSPACING": 1.7,
+    "PDN_VOFFSET": 16.32,
+    "PDN_HOFFSET": 16.65,
+    "PDN_CORE_RING": false,
+    "PDN_CORE_RING_VWIDTH": 1.6,
+    "PDN_CORE_RING_HWIDTH": 1.6,
+    "PDN_CORE_RING_VOFFSET": 6,
+    "PDN_CORE_RING_HOFFSET": 6,
+    "PDN_CORE_RING_VSPACING": 1.7,
+    "PDN_CORE_RING_HSPACING": 1.7,
+    "LEFT_MARGIN_MULT": 12,
+    "RIGHT_MARGIN_MULT": 12,
+    "TOP_MARGIN_MULT": 4,
+    "BOTTOM_MARGIN_MULT": 4,
+    "USE_SLANG": false,
+    "VERILOG_INCLUDE_DIRS": null,
+    "IO_PIN_ORDER_CFG": null,
+    "ERRORS_ON_UNMATCHED_IO": "unmatched_design",
+    "MAX_TRANSITION_CONSTRAINT": 0.75,
+    "MAX_FANOUT_CONSTRAINT": 10,
+    "PNR_SDC_FILE": null,
+    "DESIGN_REPAIR_MAX_SLEW_PCT": 20,
+    "TIMING_VIOLATION_CORNERS": [
+     "*tt*"
+    ],
+    "LINTER_ERROR_ON_LATCH": true,
+    "DIODE_ON_PORTS": "none",
+    "RUN_ANTENNA_REPAIR": true,
+    "GRT_ANTENNA_REPAIR_ITERS": 3,
+    "GRT_ANTENNA_REPAIR_MARGIN": 10,
+    "CTS_CLK_BUFFERS": [
+     "sky130_fd_sc_hd__clkbuf_8",
+     "sky130_fd_sc_hd__clkbuf_4",
+     "sky130_fd_sc_hd__clkbuf_2"
+    ],
+    "CTS_ROOT_BUFFER": "sky130_fd_sc_hd__clkbuf_16",
+    "MACROS": {
+     "sky130_sram_1kbyte_1rw1r_32x256_8": {
+      "gds": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/gds/sky130_sram_1kbyte_1rw1r_32x256_8.gds"
+      ],
+      "lef": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/lef/sky130_sram_1kbyte_1rw1r_32x256_8.lef"
+      ],
+      "instances": {
+       "u_sram": {
+        "location": [
+         110.4,
+         100.64
+        ],
+        "orientation": "N"
+       }
+      },
+      "vh": [
+       "/work/macro_nopower/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v"
+      ],
+      "nl": [],
+      "pnl": [],
+      "spef": {},
+      "lib": {
+       "*": [
+        "/work/macro_nopower/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib"
+       ]
+      },
+      "spice": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/spice/sky130_sram_1kbyte_1rw1r_32x256_8.spice"
+      ],
+      "sdf": {},
+      "json_h": null
+     }
+    },
+    "PDN_MACRO_CONNECTIONS": null,
+    "FP_MACRO_HORIZONTAL_HALO": 10,
+    "FP_MACRO_VERTICAL_HALO": 10,
+    "PDN_HORIZONTAL_HALO": 10,
+    "PDN_VERTICAL_HALO": 10,
+    "PDN_CFG": null,
+    "PDN_VERTICAL_LAYER": "met4",
+    "PDN_HORIZONTAL_LAYER": "met5"
+   },
+   "metrics": {
+    "design__die__bbox": "0.0 0.0 700.0 600.0",
+    "design__core__bbox": "5.52 10.88 694.14 587.52"
+   },
+   "design_dir": "/work/macro_nopower",
+   "console_tail": [
+    "                    sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C_li            ",
+    "                    b already exists. (and 41 similar warnings)                 ",
+    "[08:32:57] WARNING  [OpenROAD.RepairDesignPostGPL] [RSZ-0020] found  flow.py:701",
+    "                    2 floating nets.                                            ",
+    "[08:32:57] WARNING  [OpenROAD.DetailedRouting] [DRT-0349]            flow.py:701",
+    "                    LEF58_ENCLOSURE with no CUTCLASS is not                     ",
+    "                    supported. Skipping for layer mcon (and 9                   ",
+    "                    similar warnings)                                           ",
+    "[08:32:57] ERROR    The following error was encountered while    __main__.py:189",
+    "                    running the flow:                                           ",
+    "                    1 critical disconnected pins found.                         ",
+    "[08:32:57] ERROR    LibreLane will now quit.                     __main__.py:190"
+   ],
+   "console_head": [
+    "[08:31:03] INFO     Running containerized command:              container.py:285",
+    "[08:31:04] INFO     Starting a new run of the 'Classic' flow with    flow.py:654",
+    "                    the tag 'f1'.                                               ",
+    "[08:31:04] INFO     Starting\u2026                                  sequential.py:339",
+    "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Verilator Lint \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    "[08:31:04] VERBOSE  Running 'Verilator.Lint' at                     step.py:1138",
+    "                    'runs/f1/01-verilator-lint'\u2026                                ",
+    "[08:31:04] VERBOSE  Logging subprocess to                           step.py:1338"
+   ]
+  },
+  "macro_channel": {
+   "note": "sram: u_sram in the bottom-left corner, its 10 um keep-out leaving a 7 um strip of rows to the left core edge (the same strip with 80 um of rows below it placed fine)",
+   "exit_code": 2,
+   "steps": [
+    "01-verilator-lint",
+    "02-checker-linttimingconstructs",
+    "03-checker-linterrors",
+    "04-checker-lintwarnings",
+    "05-yosys-jsonheader",
+    "06-yosys-synthesis",
+    "07-checker-yosysunmappedcells",
+    "08-checker-yosyssynthchecks",
+    "09-checker-netlistassignstatements",
+    "10-openroad-checksdcfiles",
+    "11-openroad-checkmacroinstances",
+    "12-openroad-staprepnr",
+    "13-openroad-floorplan",
+    "14-openroad-dumprcvalues",
+    "15-odb-checkmacroantennaproperties",
+    "16-odb-setpowerconnections",
+    "17-odb-manualmacroplacement",
+    "18-openroad-cutrows",
+    "19-openroad-tapendcapinsertion",
+    "20-odb-addpdnobstructions",
+    "21-openroad-generatepdn",
+    "22-odb-removepdnobstructions",
+    "23-odb-addroutingobstructions",
+    "24-openroad-globalplacementskipio",
+    "25-openroad-ioplacement",
+    "26-odb-customioplacement",
+    "27-odb-applydeftemplate",
+    "28-openroad-globalplacement",
+    "29-odb-writeverilogheader",
+    "30-checker-powergridviolations",
+    "31-openroad-stamidpnr",
+    "32-openroad-repairdesignpostgpl"
+   ],
+   "stopped": "32-openroad-repairdesignpostgpl",
+   "final": false,
+   "error_log": "[DPL-0036] Detailed placement failed.\n",
+   "step_log_name": "openroad-repairdesignpostgpl.log",
+   "step_log_tail": [
+    "      210 |     +0.1% |       1 |      23 |            20 |        67",
+    "      220 |     +0.1% |       1 |      23 |            20 |        57",
+    "      230 |     +0.1% |       1 |      23 |            20 |        47",
+    "      240 |     +0.1% |       1 |      23 |            20 |        37",
+    "      250 |     +0.1% |       1 |      23 |            20 |        27",
+    "      260 |     +0.1% |       1 |      23 |            20 |        17",
+    "      270 |     +0.1% |       1 |      23 |            20 |         7",
+    "    final |     +0.1% |       1 |      23 |            20 |         0",
+    "---------------------------------------------------------------------",
+    "[INFO RSZ-0034] Found 1 slew violations.",
+    "[INFO RSZ-0035] Found 1 fanout violations.",
+    "[INFO RSZ-0036] Found 19 capacitance violations.",
+    "[INFO RSZ-0039] Resized 1 instances.",
+    "[INFO RSZ-0038] Inserted 23 buffers in 20 nets.",
+    "[INFO RSZ-0042] Inserted 9 tie sky130_fd_sc_hd__conb_1 instances.",
+    "[INFO RSZ-0042] Inserted 1 tie sky130_fd_sc_hd__conb_1 instances.",
+    "[WARNING RSZ-0020] found 2 floating nets.",
+    " VGND",
+    " VPWR",
+    "+ detailed_placement -max_displacement  500 100 ",
+    "[INFO DPL-0034] Detailed placement failed on the following 17 instances:",
+    "[INFO DPL-0035]  _099_",
+    "[INFO DPL-0035]  _096_",
+    "[INFO DPL-0035]  _102_",
+    "[INFO DPL-0035]  _101_",
+    "[INFO DPL-0035]  _105_",
+    "[INFO DPL-0035]  _098_",
+    "[INFO DPL-0035]  _095_",
+    "[INFO DPL-0035]  _106_",
+    "[INFO DPL-0035]  _100_",
+    "[INFO DPL-0035]  _103_",
+    "[INFO DPL-0035]  _107_",
+    "[INFO DPL-0035]  _104_",
+    "[INFO DPL-0035]  _108_",
+    "[INFO DPL-0035]  _097_",
+    "[INFO DPL-0035]  wire80",
+    "[INFO DPL-0035]  wire83",
+    "[INFO DPL-0035]  wire85",
+    "[ERROR DPL-0036] Detailed placement failed.",
+    "Error: repair_design.tcl, 68 DPL-0036"
+   ],
+   "process_stats": {
+    "time": {
+     "cpu_time_user": "00:00:02.240",
+     "cpu_time_system": "00:00:00.500",
+     "runtime": "00:00:02.825",
+     "cpu_time_iowait": "00:00:00.000"
+    },
+    "peak_resources": {
+     "cpu_percent": 109.6,
+     "memory_rss": "292MiB",
+     "memory_vms": "467MiB",
+     "threads": 1
+    },
+    "avg_resources": {
+     "cpu_percent": 90.53666666666668,
+     "memory_rss": "204MiB",
+     "memory_vms": "357MiB",
+     "threads": 0.9666666666666667
+    }
+   },
+   "lint_log_tail": [
+    "%Warning-PINMISSING: /work/macro_channel/src/sram_demo.v:16:39: Instance has missing pin: 'vccd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_channel/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:7:21: ... Location of port declaration",
+    "    7 |     inout           vccd1,",
+    "      |                     ^~~~~",
+    "                     ... For warning description see https://verilator.org/warn/PINMISSING?v=5.044",
+    "                     ... Use \"/* verilator lint_off PINMISSING */\" and lint_on around source to disable this message.",
+    "%Warning-PINMISSING: /work/macro_channel/src/sram_demo.v:16:39: Instance has missing pin: 'vssd1'",
+    "   16 |     sky130_sram_1kbyte_1rw1r_32x256_8 u_sram (",
+    "      |                                       ^~~~~~",
+    "                     /work/macro_channel/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v:8:21: ... Location of port declaration",
+    "    8 |     inout           vssd1,",
+    "      |                     ^~~~~",
+    "%Warning-UNUSEDSIGNAL: /work/macro_channel/src/sram_demo.v:14:17: Signal is not used: 'dout1'",
+    "                                                                                                   : ... note: In instance 'sram_demo'",
+    "   14 |     wire [31:0] dout1;",
+    "      |                 ^~~~~",
+    "                       ... For warning description see https://verilator.org/warn/UNUSEDSIGNAL?v=5.044",
+    "                       ... Use \"/* verilator lint_off UNUSEDSIGNAL */\" and lint_on around source to disable this message.",
+    "- V e r i l a t i o n   R e p o r t: Verilator 5.044 2026-01-01 rev v5.040",
+    "- Verilator: Built from 0.589 MB sources in 449 modules, into 0.008 MB in 3 C++ files needing 0.000 MB",
+    "- Verilator: Walltime 0.021 s (elab=0.006, cvt=0.001, bld=0.000); cpu 0.021 s on 1 threads; alloced 27.984 MB"
+   ],
+   "warnings": {
+    "PDN-0110": "[PDN-0110] No via inserted between met1 and met4 at (331.5400, 429.8600) - (333.1400, 430.0000) on VGND",
+    "STA-1140": "[STA-1140] /work/macro_channel/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib line 1, library sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C_lib already exists.",
+    "RSZ-0020": "[RSZ-0020] found 2 floating nets."
+   },
+   "cfg": {
+    "DESIGN_NAME": "sram_demo",
+    "CLOCK_PORT": "clk",
+    "CLOCK_PERIOD": 25,
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [
+     0,
+     0,
+     700,
+     600
+    ],
+    "CORE_AREA": null,
+    "FP_CORE_UTIL": 50,
+    "PL_TARGET_DENSITY_PCT": null,
+    "PDK": "sky130A",
+    "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+    "VERILOG_FILES": [
+     "/work/macro_channel/src/sram_demo.v"
+    ],
+    "RUN_LINTER": true,
+    "PDN_VPITCH": 153.6,
+    "PDN_HPITCH": 153.18,
+    "PDN_VWIDTH": 1.6,
+    "PDN_HWIDTH": 1.6,
+    "PDN_VSPACING": 1.7,
+    "PDN_HSPACING": 1.7,
+    "PDN_VOFFSET": 16.32,
+    "PDN_HOFFSET": 16.65,
+    "PDN_CORE_RING": false,
+    "PDN_CORE_RING_VWIDTH": 1.6,
+    "PDN_CORE_RING_HWIDTH": 1.6,
+    "PDN_CORE_RING_VOFFSET": 6,
+    "PDN_CORE_RING_HOFFSET": 6,
+    "PDN_CORE_RING_VSPACING": 1.7,
+    "PDN_CORE_RING_HSPACING": 1.7,
+    "LEFT_MARGIN_MULT": 12,
+    "RIGHT_MARGIN_MULT": 12,
+    "TOP_MARGIN_MULT": 4,
+    "BOTTOM_MARGIN_MULT": 4,
+    "USE_SLANG": false,
+    "VERILOG_INCLUDE_DIRS": null,
+    "IO_PIN_ORDER_CFG": null,
+    "ERRORS_ON_UNMATCHED_IO": "unmatched_design",
+    "MAX_TRANSITION_CONSTRAINT": 0.75,
+    "MAX_FANOUT_CONSTRAINT": 10,
+    "PNR_SDC_FILE": null,
+    "DESIGN_REPAIR_MAX_SLEW_PCT": 20,
+    "TIMING_VIOLATION_CORNERS": [
+     "*tt*"
+    ],
+    "LINTER_ERROR_ON_LATCH": true,
+    "DIODE_ON_PORTS": "none",
+    "RUN_ANTENNA_REPAIR": true,
+    "GRT_ANTENNA_REPAIR_ITERS": 3,
+    "GRT_ANTENNA_REPAIR_MARGIN": 10,
+    "CTS_CLK_BUFFERS": [
+     "sky130_fd_sc_hd__clkbuf_8",
+     "sky130_fd_sc_hd__clkbuf_4",
+     "sky130_fd_sc_hd__clkbuf_2"
+    ],
+    "CTS_ROOT_BUFFER": "sky130_fd_sc_hd__clkbuf_16",
+    "MACROS": {
+     "sky130_sram_1kbyte_1rw1r_32x256_8": {
+      "gds": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/gds/sky130_sram_1kbyte_1rw1r_32x256_8.gds"
+      ],
+      "lef": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/lef/sky130_sram_1kbyte_1rw1r_32x256_8.lef"
+      ],
+      "instances": {
+       "u_sram": {
+        "location": [
+         22.54,
+         21.76
+        ],
+        "orientation": "N"
+       }
+      },
+      "vh": [
+       "/work/macro_channel/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8.bb.v"
+      ],
+      "nl": [],
+      "pnl": [],
+      "spef": {},
+      "lib": {
+       "*": [
+        "/work/macro_channel/macros/sky130_sram_1kbyte_1rw1r_32x256_8/sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.lib"
+       ]
+      },
+      "spice": [
+       "/pdk/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_sram_macros/spice/sky130_sram_1kbyte_1rw1r_32x256_8.spice"
+      ],
+      "sdf": {},
+      "json_h": null
+     }
+    },
+    "PDN_MACRO_CONNECTIONS": [
+     "u_sram VPWR VGND vccd1 vssd1"
+    ],
+    "FP_MACRO_HORIZONTAL_HALO": 10,
+    "FP_MACRO_VERTICAL_HALO": 10,
+    "PDN_HORIZONTAL_HALO": 10,
+    "PDN_VERTICAL_HALO": 10,
+    "PDN_CFG": null,
+    "PDN_VERTICAL_LAYER": "met4",
+    "PDN_HORIZONTAL_LAYER": "met5"
+   },
+   "metrics": {
+    "design__die__bbox": "0.0 0.0 700.0 600.0",
+    "design__core__bbox": "5.52 10.88 694.14 587.52"
+   },
+   "design_dir": "/work/macro_channel",
+   "console_tail": [
+    "                    sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C.li            ",
+    "                    b line 1, library                                           ",
+    "                    sky130_sram_1kbyte_1rw1r_32x256_8_TT_1p8V_25C_li            ",
+    "                    b already exists. (and 13 similar warnings)                 ",
+    "[08:37:08] WARNING  [OpenROAD.RepairDesignPostGPL] [RSZ-0020] found  flow.py:701",
+    "                    2 floating nets.                                            ",
+    "[08:37:08] ERROR    The following error was encountered while    __main__.py:189",
+    "                    running the flow:                                           ",
+    "                    OpenROAD.RepairDesignPostGPL failed with the                ",
+    "                    following errors:                                           ",
+    "                    [DPL-0036] Detailed placement failed.                       ",
+    "[08:37:08] ERROR    LibreLane will now quit.                     __main__.py:190"
+   ],
+   "console_head": [
+    "[08:36:55] INFO     Running containerized command:              container.py:285",
+    "[08:36:55] INFO     Starting a new run of the 'Classic' flow with    flow.py:654",
+    "                    the tag 'f1'.                                               ",
+    "[08:36:55] INFO     Starting\u2026                                  sequential.py:339",
+    "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Verilator Lint \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    "[08:36:55] VERBOSE  Running 'Verilator.Lint' at                     step.py:1138",
+    "                    'runs/f1/01-verilator-lint'\u2026                                ",
+    "[08:36:56] VERBOSE  Logging subprocess to                           step.py:1338"
+   ]
+  },
+  "macro_ihp_halo": {
+   "note": "ihp-sg13g2 SRAM with LanEx's first macro grid and a keep-out halo (lane 7's run lanex1, adopted): Metal1 rails cut by the halo, IR drop stops on PSM-0069",
+   "exit_code": 2,
+   "steps": [
+    "01-verilator-lint",
+    "02-checker-linttimingconstructs",
+    "03-checker-linterrors",
+    "04-checker-lintwarnings",
+    "05-yosys-jsonheader",
+    "06-yosys-synthesis",
+    "07-checker-yosysunmappedcells",
+    "08-checker-yosyssynthchecks",
+    "09-checker-netlistassignstatements",
+    "10-openroad-checksdcfiles",
+    "11-openroad-checkmacroinstances",
+    "12-openroad-staprepnr",
+    "13-openroad-floorplan",
+    "14-openroad-dumprcvalues",
+    "15-odb-checkmacroantennaproperties",
+    "16-odb-setpowerconnections",
+    "17-odb-manualmacroplacement",
+    "18-openroad-cutrows",
+    "19-openroad-tapendcapinsertion",
+    "20-odb-addpdnobstructions",
+    "21-openroad-generatepdn",
+    "22-odb-removepdnobstructions",
+    "23-odb-addroutingobstructions",
+    "24-openroad-globalplacementskipio",
+    "25-openroad-ioplacement",
+    "26-odb-customioplacement",
+    "27-odb-applydeftemplate",
+    "28-openroad-globalplacement",
+    "29-odb-writeverilogheader",
+    "30-checker-powergridviolations",
+    "31-openroad-stamidpnr",
+    "32-openroad-repairdesignpostgpl",
+    "33-odb-manualglobalplacement",
+    "34-openroad-detailedplacement",
+    "35-openroad-cts",
+    "36-openroad-stamidpnr-1",
+    "37-openroad-resizertimingpostcts",
+    "38-openroad-stamidpnr-2",
+    "39-openroad-globalrouting",
+    "40-openroad-checkantennas",
+    "41-odb-diodesonports",
+    "42-openroad-repairantennas",
+    "43-openroad-stamidpnr-3",
+    "44-openroad-detailedrouting",
+    "45-odb-removeroutingobstructions",
+    "46-openroad-checkantennas-1",
+    "47-checker-trdrc",
+    "48-odb-reportdisconnectedpins",
+    "49-checker-disconnectedpins",
+    "50-odb-reportwirelength",
+    "51-checker-wirelength",
+    "52-openroad-fillinsertion",
+    "53-odb-cellfrequencytables",
+    "54-openroad-rcx",
+    "55-openroad-stapostpnr",
+    "56-openroad-irdropreport"
+   ],
+   "stopped": "56-openroad-irdropreport",
+   "deferred": [
+    "30-checker-powergridviolations"
+   ],
+   "final": false,
+   "error_log": "[PSM-0069] Check connectivity failed on VGND.\n1434 power grid violations (as reported by OpenROAD PSM- you may ignore these if LVS passes) found. - deferred\n[PSM-0069] Check connectivity failed on VGND.\n",
+   "step_log_name": "openroad-irdropreport.log",
+   "step_log_tail": [
+    "[WARNING PSM-0039] Unconnected instance input17/VSS at location (393.155um, 75.812um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_13_808/VSS at location (393.840um, 68.040um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_14_808/VSS at location (393.840um, 68.040um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_15_808/VSS at location (393.840um, 75.600um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_17_808/VSS at location (393.840um, 83.160um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_18_808/VSS at location (393.840um, 83.160um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_19_808/VSS at location (393.840um, 90.720um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_20_808/VSS at location (393.840um, 90.720um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_21_808/VSS at location (393.840um, 98.280um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_22_808/VSS at location (393.840um, 98.280um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_23_808/VSS at location (393.840um, 105.840um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_24_808/VSS at location (393.840um, 105.840um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_25_808/VSS at location (393.840um, 113.400um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_26_808/VSS at location (393.840um, 113.400um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_27_808/VSS at location (393.840um, 120.960um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_28_808/VSS at location (393.840um, 120.960um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_29_808/VSS at location (393.840um, 128.520um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_30_808/VSS at location (393.840um, 128.520um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_31_808/VSS at location (393.840um, 136.080um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_32_808/VSS at location (393.840um, 136.080um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_33_808/VSS at location (393.840um, 143.640um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_34_808/VSS at location (393.840um, 143.640um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_35_808/VSS at location (393.840um, 151.200um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_36_808/VSS at location (393.840um, 151.200um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_37_808/VSS at location (393.840um, 158.760um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_38_808/VSS at location (393.840um, 158.760um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_39_808/VSS at location (393.840um, 166.320um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_40_808/VSS at location (393.840um, 166.320um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_41_808/VSS at location (393.840um, 173.880um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_42_808/VSS at location (393.840um, 173.880um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_43_808/VSS at location (393.840um, 181.440um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_44_808/VSS at location (393.840um, 181.440um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_45_808/VSS at location (393.840um, 189.000um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_46_808/VSS at location (393.840um, 189.000um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_47_808/VSS at location (393.840um, 196.560um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_48_808/VSS at location (393.840um, 196.560um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_49_808/VSS at location (393.840um, 204.120um).",
+    "[WARNING PSM-0039] Unconnected instance FILLER_50_808/VSS at location (393.840um, 204.120um).",
+    "[ERROR PSM-0069] Check connectivity failed on VGND.",
+    "Error: irdrop.tcl, 51 PSM-0069"
+   ],
+   "process_stats": {
+    "time": {
+     "cpu_time_user": "00:00:01.000",
+     "cpu_time_system": "00:00:00.050",
+     "runtime": "00:00:01.938",
+     "cpu_time_iowait": "00:00:00.000"
+    },
+    "peak_resources": {
+     "cpu_percent": 109.6,
+     "memory_rss": "134MiB",
+     "memory_vms": "302MiB",
+     "threads": 1
+    },
+    "avg_resources": {
+     "cpu_percent": 49.795238095238105,
+     "memory_rss": "109MiB",
+     "memory_vms": "253MiB",
+     "threads": 0.9523809523809523
+    }
+   },
+   "lint_log_tail": [
+    "- V e r i l a t i o n   R e p o r t: Verilator 5.044 2026-01-01 rev v5.040",
+    "- Verilator: Built from 0.193 MB sources in 109 modules, into 0.008 MB in 3 C++ files needing 0.000 MB",
+    "- Verilator: Walltime 0.006 s (elab=0.001, cvt=0.001, bld=0.000); cpu 0.006 s on 1 threads; alloced 20.848 MB"
+   ],
+   "warnings": {
+    "PDN-0110": "[PDN-0110] No via inserted between Metal1 and TopMetal1 at (328.8000, 67.8200) - (329.0600, 68.2600) on VGND",
+    "PSM-0038": "[PSM-0038] Unconnected shape on net VGND at (328.800um, 67.820um) - (394.080um, 68.260um), layer: Metal1.",
+    "DRT-0349": "[DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer Cont",
+    "PSM-0039": "[PSM-0039] Unconnected instance u_sram_86/VSS at location (329.920um, 75.696um)."
+   },
+   "cfg": {
+    "DESIGN_NAME": "sram_demo_ihp",
+    "CLOCK_PORT": "clk",
+    "CLOCK_PERIOD": 20,
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [
+     0,
+     0,
+     400,
+     300
+    ],
+    "CORE_AREA": null,
+    "FP_CORE_UTIL": 50,
+    "PL_TARGET_DENSITY_PCT": null,
+    "PDK": "ihp-sg13g2",
+    "STD_CELL_LIBRARY": "sg13g2_stdcell",
+    "VERILOG_FILES": [
+     "/work/macro_ihp_halo/src/sram_demo_ihp.v"
+    ],
+    "RUN_LINTER": true,
+    "PDN_VPITCH": 75.6,
+    "PDN_HPITCH": 75.6,
+    "PDN_VWIDTH": 2.2,
+    "PDN_HWIDTH": 2.2,
+    "PDN_VSPACING": 4,
+    "PDN_HSPACING": 4,
+    "PDN_VOFFSET": 13.6,
+    "PDN_HOFFSET": 13.6,
+    "PDN_CORE_RING": false,
+    "PDN_CORE_RING_VWIDTH": 5,
+    "PDN_CORE_RING_HWIDTH": 5,
+    "PDN_CORE_RING_VOFFSET": 4.5,
+    "PDN_CORE_RING_HOFFSET": 4.5,
+    "PDN_CORE_RING_VSPACING": 2,
+    "PDN_CORE_RING_HSPACING": 2,
+    "LEFT_MARGIN_MULT": 12,
+    "RIGHT_MARGIN_MULT": 12,
+    "TOP_MARGIN_MULT": 4,
+    "BOTTOM_MARGIN_MULT": 4,
+    "USE_SLANG": false,
+    "VERILOG_INCLUDE_DIRS": null,
+    "IO_PIN_ORDER_CFG": null,
+    "ERRORS_ON_UNMATCHED_IO": "unmatched_design",
+    "MAX_TRANSITION_CONSTRAINT": null,
+    "MAX_FANOUT_CONSTRAINT": 10,
+    "PNR_SDC_FILE": null,
+    "DESIGN_REPAIR_MAX_SLEW_PCT": 20,
+    "TIMING_VIOLATION_CORNERS": [
+     "*typ*"
+    ],
+    "LINTER_ERROR_ON_LATCH": true,
+    "DIODE_ON_PORTS": "none",
+    "RUN_ANTENNA_REPAIR": true,
+    "GRT_ANTENNA_REPAIR_ITERS": 3,
+    "GRT_ANTENNA_REPAIR_MARGIN": 10,
+    "CTS_CLK_BUFFERS": [
+     "sg13g2_buf_8",
+     "sg13g2_buf_4",
+     "sg13g2_buf_2"
+    ],
+    "CTS_ROOT_BUFFER": "sg13g2_buf_16",
+    "MACROS": {
+     "RM_IHPSG13_1P_256x16_c2_bm_bist": {
+      "gds": [
+       "/pdk/ciel/ihp-sg13g2/versions/c4b8b4e5e7a05f375cca3815d51b3a37721fbf5c/ihp-sg13g2/libs.ref/sg13g2_sram/gds/RM_IHPSG13_1P_256x16_c2_bm_bist.gds"
+      ],
+      "lef": [
+       "/pdk/ciel/ihp-sg13g2/versions/c4b8b4e5e7a05f375cca3815d51b3a37721fbf5c/ihp-sg13g2/libs.ref/sg13g2_sram/lef/RM_IHPSG13_1P_256x16_c2_bm_bist.lef"
+      ],
+      "instances": {
+       "u_sram": {
+        "location": [
+         81.6,
+         75.6
+        ],
+        "orientation": "N"
+       }
+      },
+      "vh": [
+       "/work/macro_ihp_halo/macros/RM_IHPSG13_1P_256x16_c2_bm_bist/RM_IHPSG13_1P_256x16_c2_bm_bist.bb.v"
+      ],
+      "nl": [],
+      "pnl": [],
+      "spef": {},
+      "lib": {
+       "*_fast_1p32V_m40C": [
+        "/pdk/ciel/ihp-sg13g2/versions/c4b8b4e5e7a05f375cca3815d51b3a37721fbf5c/ihp-sg13g2/libs.ref/sg13g2_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_fast_1p32V_m55C.lib"
+       ],
+       "*_slow_1p08V_125C": [
+        "/pdk/ciel/ihp-sg13g2/versions/c4b8b4e5e7a05f375cca3815d51b3a37721fbf5c/ihp-sg13g2/libs.ref/sg13g2_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_slow_1p08V_125C.lib"
+       ],
+       "*_typ_1p20V_25C": [
+        "/pdk/ciel/ihp-sg13g2/versions/c4b8b4e5e7a05f375cca3815d51b3a37721fbf5c/ihp-sg13g2/libs.ref/sg13g2_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_typ_1p20V_25C.lib"
+       ]
+      },
+      "spice": [
+       "/pdk/ciel/ihp-sg13g2/versions/c4b8b4e5e7a05f375cca3815d51b3a37721fbf5c/ihp-sg13g2/libs.ref/sg13g2_sram/cdl/RM_IHPSG13_1P_256x16_c2_bm_bist.cdl"
+      ],
+      "sdf": {},
+      "json_h": null
+     }
+    },
+    "PDN_MACRO_CONNECTIONS": [
+     "u_sram VPWR VGND VDD! VSS!",
+     "u_sram VPWR VGND VDDARRAY! VSS!"
+    ],
+    "FP_MACRO_HORIZONTAL_HALO": 10,
+    "FP_MACRO_VERTICAL_HALO": 10,
+    "PDN_HORIZONTAL_HALO": 10,
+    "PDN_VERTICAL_HALO": 10,
+    "PDN_CFG": "/work/macro_ihp_halo/.gui-macros-pdn.tcl",
+    "PDN_VERTICAL_LAYER": "TopMetal1",
+    "PDN_HORIZONTAL_LAYER": "TopMetal2"
+   },
+   "metrics": {
+    "design__die__bbox": "0.0 0.0 400.0 300.0",
+    "design__core__bbox": "5.76 15.12 394.08 283.5"
+   },
+   "design_dir": "/work/macro_ihp_halo",
+   "console_tail": [
+    "                    you may ignore this warning, otherwise, see the             ",
+    "                    documentation for 'VSRC_LOC_FILES'.                         ",
+    "[07:18:42] WARNING  [OpenROAD.IRDropReport] [PSM-0039] Unconnected   flow.py:701",
+    "                    instance u_sram_86/VSS at location (329.920um,              ",
+    "                    75.696um). (and 797 similar warnings)                       ",
+    "[07:18:42] ERROR    The following error was encountered while    __main__.py:189",
+    "                    running the flow:                                           ",
+    "                    OpenROAD.IRDropReport failed with the                       ",
+    "                    following errors:                                           ",
+    "                    [PSM-0069] Check connectivity failed on                     ",
+    "                    VGND.                                                       ",
+    "[07:18:42] ERROR    LibreLane will now quit.                     __main__.py:190"
+   ],
+   "console_head": [
+    "[07:18:18] INFO     Running containerized command:              container.py:285",
+    "[07:18:19] VERBOSE  Resolved PDK variant ihp-sg13g2.                  cli.py:534",
+    "[07:18:19] INFO     Starting a new run of the 'Classic' flow with    flow.py:654",
+    "                    the tag 'lanex1'.                                           ",
+    "[07:18:19] INFO     Starting\u2026                                  sequential.py:339",
+    "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 Verilator Lint \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    "[07:18:19] VERBOSE  Running 'Verilator.Lint' at                     step.py:1138",
+    "                    'runs/lanex1/01-verilator-lint'\u2026                            "
+   ]
   }
  }
 }

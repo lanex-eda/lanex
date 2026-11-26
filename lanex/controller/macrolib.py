@@ -521,19 +521,24 @@ def _instances(body: str, wanted: set) -> List[Tuple[str, str]]:
     return out
 
 
-def find_instances(design_dir: str, top: Optional[str], macro_modules: List[str]) -> Dict[str, Any]:
+def find_instances(design_dir: str, top: Optional[str], macro_modules: List[str],
+                   files: Optional[List[str]] = None) -> Dict[str, Any]:
     """Flattened instance paths of each macro module under *top*, and whether a
     macro's module is *defined* in the design's own sources (its behavioural
-    model sneaking into synthesis)."""
-    try:
-        from . import configedit
-        info = configedit.read_config(design_dir)
-        data = info.get("data") or {}
-        top = top or data.get("DESIGN_NAME")
-        src = configedit.resolve_sources(design_dir, data)
-        files = [f for f in src.get("files", []) if Path(f).suffix.lower() in (".v", ".sv", ".vh", ".svh")]
-    except Exception as ex:
-        return {"ok": False, "error": str(ex)}
+    model sneaking into synthesis). *files*: the sources to read (a run's
+    resolved VERILOG_FILES) instead of the project config's."""
+    if files is not None:
+        files = [str(f) for f in files if Path(str(f)).suffix.lower() in (".v", ".sv", ".vh", ".svh")]
+    else:
+        try:
+            from . import configedit
+            info = configedit.read_config(design_dir)
+            data = info.get("data") or {}
+            top = top or data.get("DESIGN_NAME")
+            src = configedit.resolve_sources(design_dir, data)
+            files = [f for f in src.get("files", []) if Path(f).suffix.lower() in (".v", ".sv", ".vh", ".svh")]
+        except Exception as ex:
+            return {"ok": False, "error": str(ex)}
     mods = _modules(files)
     wanted = set(mods) | set(macro_modules)
     found: Dict[str, List[str]] = {m: [] for m in macro_modules}
