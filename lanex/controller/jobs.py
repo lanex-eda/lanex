@@ -796,6 +796,12 @@ class Scheduler:
         with self._lock:
             return [dict(j) for j in self.queue_of(design_dir)["jobs"]]
 
+    def group_jobs(self, group: str) -> List[Dict[str, Any]]:
+        """Every job of a sweep or study (copies), in queue order."""
+        with self._lock:
+            return [dict(j) for j in sorted(self._all_jobs(), key=lambda j: float(j.get("seq") or 0))
+                    if j.get("group") == group]
+
     def jobs_snapshot_live(self) -> List[Dict[str, Any]]:
         with self._lock:
             return [dict(j) for j in self._all_jobs() if j.get("state") in LIVE]
@@ -1512,12 +1518,24 @@ class Scheduler:
             f = termwatch.Follower(j["design_dir"], j.get("tag") or "", job_id=j["id"], origin=j.get("origin") or "lanex",
                                    container=j.get("container"), on_end=self._follower_end)
             self._followers[j["id"]] = f
+            # Its steps move the job as a runner's would (the chip, the ETA).
+            listen = self._listener_for(j["id"])
+            termwatch._LISTENERS[j["id"]] = lambda kind, body: listen(kind, body) if kind != "flow_done" else None
             f.start()
         except Exception:
             _log.exception("could not follow %s again", j.get("id"))
 
     def _follower_end(self, job_id: str, result: Dict[str, Any]) -> None:
         f = self._followers.pop(job_id, None)
+        try:
+            from . import termwatch
+            termwatch._LISTENERS.pop(job_id, None)
+        except Exception:
+            pass
+        if f is not None:
+            _note_outcome(f.run_dir, {"result": "ok" if result.get("result") == "ok" else "error",
+                                      "error": None if result.get("result") == "ok" else result.get("message"),
+                                      "how": "followed after a restart"})
         with self._lock:
             j = self.job(job_id)
             if j is None or j.get("state") not in LIVE:

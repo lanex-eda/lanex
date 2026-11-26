@@ -1319,6 +1319,8 @@ class FlowRunner:
                 EventType.INFO,
                 {"message": "Container mode — running: " + " ".join(argv)},
             )
+            # The console log starts with exactly what ran (VS Code's Git output does the same).
+            self._tee_line("> " + " ".join(argv))
             self._emit_resources_note()
             # Seed an immediate phase so the pipeline shows "preparing" the
             # instant the run starts, before any container stdout arrives.
@@ -1544,6 +1546,7 @@ class FlowRunner:
                 EventType.INFO,
                 {"message": f"Step {idx + 1}/{len(steps)} ({sid}) — running: " + " ".join(argv)},
             )
+            self._tee_line("> " + " ".join(argv))
             self._emit(EventType.PHASE, {"label": f"Starting the container for step '{sid}'…"})
 
             proc = subprocess.Popen(

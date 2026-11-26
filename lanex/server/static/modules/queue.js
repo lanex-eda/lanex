@@ -87,7 +87,9 @@ export function chipText(q, { seenFail = new Set() } = {}) {
       const unknown = (q.eta && q.eta.unknown_count) || 0;
       if (!left && unknown) out.title = unknown + " of the " + (running.length + waiting.length) + " have no estimate yet.";
     }
-    if (q.terminal) out.text += " · " + q.terminal + " from a terminal";
+    const term = running.filter((j) => j.origin === "terminal").length;
+    if (term && term === running.length) out.text = out.text.replace(/^Running( \d+)?/, (m) => m + " from a terminal");
+    else if (term) out.text += " · " + term + " from a terminal";
     if (failed.length) out.tone = "fail";
     return out;
   }
@@ -270,9 +272,9 @@ function rowInterrupted(j) {
     "<div class='q-row-top'><span class='rn-v is-warn'><i></i>" + esc(j.project || "") + "</span><span class='q-tag'>" + esc(j.tag || "") + "</span></div>" +
     "<p class='q-note'>" + esc(j.reason || "LanEx stopped while this run was going.") + (r.reason && !can ? " " + esc(r.reason) : "") + "</p>" +
     "<div class='q-row-meta'><span></span><span class='q-acts'>" +
-      (can ? "<button class='btn btn-primary btn-xs' data-q='continue'>Continue from " + esc(at) + "</button>" : "") +
+      (can ? "<button class='btn btn-primary btn-xs' data-q='continue'>Continue from " + esc(stepWords(at)) + "</button>" : "") +
       "<button class='btn btn-ghost btn-xs' data-q='markstop'>Mark as stopped</button></span></div>" +
-    (can ? "<p class='q-hint'>Continue reruns " + esc(at) + " and the steps after it, in this same run folder. Mark as stopped keeps the finished steps.</p>" : "") +
+    (can ? "<p class='q-hint'>Continue reruns " + esc(stepWords(at)) + " and the steps after it, in this same run folder. Mark as stopped keeps the finished steps.</p>" : "") +
   "</li>";
 }
 
@@ -486,13 +488,26 @@ export function setupQueue() {
   refreshQueue().then(() => offerRecovery());
 }
 
-// After a restart that interrupted runs: one toast that stays until answered.
+// After a restart that interrupted runs: one toast that stays until answered
+// (it goes by itself once every interrupted run is continued or stopped).
 let _offered = false;
+let _offerToast = null;
 function offerRecovery() {
   if (_offered || !snap) return;
   const n = (snap.jobs || []).filter((j) => j.state === "interrupted").length;
   if (!n) return;
   _offered = true;
-  toast.show("LanEx stopped while " + (n === 1 ? "a run was" : n + " runs were") + " going. The queue is paused until you decide.", "warn", 0,
+  _offerToast = toast.show("LanEx stopped while " + (n === 1 ? "a run was" : n + " runs were") + " going. The queue is paused until you decide.", "warn", 0,
     { label: "Review", run: () => openQueue() });
+  document.addEventListener("g:queue_state", () => {
+    if (_offerToast && !(snap.jobs || []).some((j) => j.state === "interrupted")) { _offerToast(); _offerToast = null; }
+  });
+}
+
+// "RepairDesignPostGPL (Placement)": the step's own name and its stage.
+export function stepWords(id) {
+  if (!id) return "";
+  const st = FS.stagesOf([{ id }])[0];
+  const name = String(id).split(".").pop();
+  return name + (st ? " (" + FS.stageLabel(st) + ")" : "");
 }

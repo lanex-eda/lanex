@@ -2126,6 +2126,13 @@ def h_run_cancel(handler: Any) -> None:
     from ..server.app import get_runner
     body = getattr(handler, "_body", {}) or {}
     jid = body.get("job_id") or getattr(get_runner(), "job_id", None)
+    if jid and str(jid).startswith("term:"):
+        # LanEx follows it but did not start it: its container has no name
+        # LanEx gave it, and killing "a container in this folder" could hit a
+        # viewer (audit G5). The person stops it where they started it.
+        _respond(handler, "This run was started in a terminal, outside LanEx. Stop it there (Ctrl+C in that "
+                          "terminal). LanEx keeps following it until it ends.", 409)
+        return
     j = jobs.scheduler.job(jid) if jid else None
     sweep = False
     if j is not None and j.get("group") and dse.job.active and dse.job.sweep_id == j.get("group"):
@@ -3341,14 +3348,17 @@ def _live_run_meta(tag: Optional[str]) -> Optional[Tuple[Dict[str, Any], str]]:
     if not tag:
         return None
     try:
+        from ..controller import jobs
         from ..server.app import get_runner
-        r = get_runner()
-        rd = r.run_dir
-        meta = r.gui_meta
-        if not rd or not meta or Path(rd).name != tag:
-            return None
-        meta.setdefault("tag", tag)
-        return meta, str(rd)
+        # Every run going (several can, the job queue), the open project's first.
+        for r in [get_runner()] + list(jobs.scheduler._runners.values()):
+            rd = getattr(r, "run_dir", None)
+            meta = getattr(r, "gui_meta", None)
+            if not rd or not meta or Path(rd).name != tag:
+                continue
+            meta.setdefault("tag", tag)
+            return meta, str(rd)
+        return None
     except Exception:
         return None
 
@@ -4517,8 +4527,18 @@ def h_dse_cancel(handler: Any) -> None:
 
 
 def h_dse_status(handler: Any) -> None:
-    from ..controller import dse
-    _respond(handler, dse.job.status())
+    """The sweep's progress. Its points wait in the job queue: which run now
+    and which wait comes from there (``running_tags``, ``queued``)."""
+    from ..controller import dse, jobs
+    st = dse.job.status()
+    if st.get("active") and st.get("sweep_id"):
+        g = jobs.scheduler.group_jobs(st["sweep_id"])
+        tag = lambda j: j.get("tag") or (j.get("spec") or {}).get("tag")  # noqa: E731
+        run = [tag(j) for j in g if j.get("state") in ("starting", "running", "stopping", "paused")]
+        st["running_tags"] = run
+        st["running"] = run[0] if run else None
+        st["queued"] = [tag(j) for j in g if j.get("state") == "queued"] + list(st.get("queued") or [])
+    _respond(handler, st)
 
 
 def h_system_resources(handler: Any) -> None:

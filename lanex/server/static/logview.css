@@ -24,7 +24,8 @@
 .lv-acts a[hidden] { display: none; }
 
 /* The gutter says the level in a glyph, not only a colour. */
-.lv-n[data-g]::before { content: attr(data-g); float: left; margin-left: 4px; font-size: 10px; }
+.lv .lv-n { position: relative; width: 66px; flex-basis: 66px; }
+.lv-n[data-g]::before { content: attr(data-g); position: absolute; left: 5px; font-size: 10px; }
 .lv-row.is-match { background: color-mix(in srgb, var(--met1) 16%, transparent); }
 .lv-t mark { background: color-mix(in srgb, var(--warn) 45%, transparent); color: inherit; border-radius: 2px; }
 body.theme-light .lv-t mark { background: color-mix(in srgb, var(--warn) 35%, transparent); }

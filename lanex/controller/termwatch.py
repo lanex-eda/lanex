@@ -49,9 +49,18 @@ QUIET_CHECK_S = 45.0
 MAX_CHUNK = 4 * 1024 * 1024
 
 
+_LISTENERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {}
+
+
 def _emit(kind: str, body: Dict[str, Any]) -> None:
     from .events import bus
     bus.emit(kind, body)
+    fn = _LISTENERS.get(body.get("job_id") or "")
+    if fn is not None:
+        try:
+            fn(kind, body)
+        except Exception:
+            _log.debug("follower listener failed", exc_info=True)
 
 
 def flow_steps_for(design_dir: str, run_dir: str) -> List[str]:

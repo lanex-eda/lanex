@@ -91,8 +91,7 @@ def plan(platform: Optional[str] = None, *, wsl: Optional[bool] = None, pid: Opt
         return {"how": "", "argvs": [], "note": "This Mac can't be held awake from here (caffeinate is missing)."}
     if platform.startswith("linux"):
         if wsl:
-            return {"how": "windows-launcher", "argvs": [],
-                    "note": "Windows is held awake by LanEx's launcher while it is open."}
+            return {"how": "windows-launcher", "argvs": [], "note": ""}
         argvs: List[List[str]] = []
         tail = ["tail", f"--pid={pid}", "-f", "/dev/null"]
         if which("systemd-inhibit"):
@@ -192,7 +191,8 @@ def state() -> Dict[str, Any]:
         out["how"] = "windows-launcher"
         out["held"] = bool(out.get("hold")) and launcher_polling()
         if out.get("hold") and not out["held"]:
-            out["note"] = "Windows isn't being held awake: LanEx's own window (the launcher) holds it while it is open."
+            out["note"] = ("Not keeping Windows awake: that is done by the LanEx app window (LanEx.exe), "
+                           "which isn't open.")
     else:
         out["held"] = bool(out.get("hold")) and bool(out.get("held_here"))
     return out

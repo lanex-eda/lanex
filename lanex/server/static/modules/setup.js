@@ -929,7 +929,7 @@ export async function requestStop() {
     } finally { _stopAsking = false; }
     if (!ok || !(state.status && state.status.running)) return false;
   }
-  api.cancelRun(state.followJob).catch(() => {});
+  api.cancelRun(state.followJob).catch((e) => toast.show(e.message || "The run could not be stopped.", "warn", 9000));
   return true;
 }
 

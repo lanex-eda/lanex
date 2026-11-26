@@ -2878,6 +2878,10 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     assert.equal(t.text, "1 queued · waiting for memory");
     t = Q.chipText({ paused: true, jobs: [{ id: "c", state: "queued" }, { id: "d", state: "queued" }] });
     assert.equal(t.text, "Queue paused · 2 waiting");
+    t = Q.chipText({ jobs: [run("a", { origin: "terminal" }), run("b", { origin: "terminal" })], eta: {} });
+    assert.equal(t.text, "Running 2 from a terminal");
+    t = Q.chipText({ jobs: [run("a"), run("b", { origin: "terminal" })], eta: {} });
+    assert.equal(t.text, "Running 2 · 1 from a terminal");
     t = Q.chipText({ jobs: [{ id: "i", state: "interrupted" }] });
     assert.equal(t.text, "1 run interrupted");
     assert.equal(t.tone, "warn");

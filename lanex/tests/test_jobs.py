@@ -395,6 +395,29 @@ def test_a_container_still_running_is_followed_again(sched, tmp_path, monkeypatc
     assert [o["name"] for o in s2.snapshot()["orphans"]] == ["lanex-flow-zzz"]
 
 
+def test_a_continued_run_is_not_failed_by_its_cut_step(tmp_path):
+    # Continue reruns the cut step in a new, higher-numbered folder; the cut
+    # folder stays. Verify must not read it as a stopped step (it made a clean
+    # continued spm run read "checks failed" live).
+    from lanex.controller import verify
+    rd = tmp_path / "runs" / "r1"
+    steps = [(1, "verilator-lint", "Verilator.Lint", True), (2, "openroad-repairdesignpostgpl", "OpenROAD.RepairDesignPostGPL", False),
+             (3, "openroad-repairdesignpostgpl", "OpenROAD.RepairDesignPostGPL", True), (4, "misc-reportmanufacturability",
+             "Misc.ReportManufacturability", True)]
+    for n, sl, sid, done in steps:
+        s = rd / f"{n}-{sl}"
+        s.mkdir(parents=True)
+        (s / "config.json").write_text(json.dumps({"meta": {"step": sid}}))
+        (s / "state_in.json").write_text("{}")
+        if done:
+            (s / "state_out.json").write_text("{}")
+            (s / "runtime.txt").write_text("00:00:01.000")
+    (rd / "final").mkdir()
+    (rd / "flow.log").write_text("Starting...\nFlow complete.\n")
+    st = verify._flow_state(verify._Run(rd))
+    assert st["state"] == "complete" and st["stopped_step"] is None
+
+
 def test_resume_info_refuses_a_changed_config(sched, tmp_path):
     a = _proj(tmp_path, "a")
     rd = _clean_run(a, "r1", [(1, "verilator-lint", 1.0)], complete=False)

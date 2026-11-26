@@ -492,18 +492,21 @@ function headHtml(steps, stages) {
 // The live head is built once per run and then only its text changes, so
 // Stop stays under the pointer while the steps race by.
 function paintLive(head, steps, stages) {
-  const key = "live|" + F.tag + "|" + (state.paused ? "p" : "");
+  // A run started in a terminal: LanEx follows it but cannot stop it.
+  const term = String(state.followJob || "").startsWith("term:");
+  const key = "live|" + F.tag + "|" + (state.paused ? "p" : "") + (term ? "|t" : "");
   if (head._key !== key) {
     head._key = key; head._html = null;
     head.innerHTML = "<div class='an-verdict fl-hero is-live'><div class='an-verdict-main'>" +
-      "<div class='an-eyebrow'><span class='fl-live-dot'></span>Running · " + esc(F.tag) + "</div>" +
+      "<div class='an-eyebrow'><span class='fl-live-dot'></span>Running · " + esc(F.tag) + (term ? " · started in a terminal" : "") + "</div>" +
       "<h2 class='an-title fl-h-title'></h2><div class='fl-h-branch'></div><p class='an-lede fl-h-sub'></p>" +
       "<p class='fl-h-slow muted' hidden>This step can take several minutes on bigger designs. The run is still going.</p>" +
       "<div class='fl-bar' role='progressbar' aria-label='Steps done' aria-valuemin='0' aria-valuemax='100'><span></span></div>" +
       "</div><div class='an-verdict-act'>" +
       "<span class='fl-elapsed' id='fl-elapsed'></span>" +
       (state.paused ? "<button class='btn btn-primary' data-fl='resume'>" + icon("play", { size: 14 }) + " Next step</button>" : "") +
-      "<button class='btn btn-warn' data-fl='stop'>" + icon("stop", { size: 13 }) + " Stop</button></div></div>";
+      (term ? "<span class='muted fl-term-note'>Stop it in the terminal you started it from.</span>"
+        : "<button class='btn btn-warn' data-fl='stop'>" + icon("stop", { size: 13 }) + " Stop</button>") + "</div></div>";
   }
   // FS.stepCounts: the same done/total the status bar and title use.
   const nc = FS.stepCounts(steps.map((s) => s.status));
