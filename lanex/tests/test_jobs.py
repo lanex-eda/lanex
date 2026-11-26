@@ -1129,12 +1129,19 @@ def test_queue_events_carry_slim_jobs(tmp_path):
             k.update(state="done", command=big, attempts=[{"at": "x", "how": "start"}] * 5,
                      outcome={"result": "ok", "ok": True, "good": True, "message": "m" * 2000},
                      resources={"threads": {f"V{n}": n for n in range(30)}, "rss_gb": 1.0, "need_gb": 2.0})
+    with s._lock:
+        s.job(s.jobs_of(d)[0]["id"]).update(state="interrupted")      # always carried
     full = s.snapshot()
     slim = s.snapshot(slim=True)
+    assert len(full["jobs"]) == 60
+    # Every job still waiting, going or interrupted, and the newest 8 ended.
+    assert len(slim["jobs"]) == 9 and slim["ended_left_out"] == 51
+    assert any(x["state"] == "interrupted" for x in slim["jobs"])
     per_full = len(json.dumps(full["jobs"])) / 60
-    per_slim = len(json.dumps(slim["jobs"])) / 60
+    per_slim = len(json.dumps(slim["jobs"])) / 9
     assert per_slim < 800 and per_slim < per_full / 4, (per_full, per_slim)
-    j = slim["jobs"][0]
+    assert len(json.dumps(slim)) < len(json.dumps(full)) / 20
+    j = next(x for x in slim["jobs"] if x["state"] == "done")
     assert "command" not in j and "attempts" not in j and j["outcome"]["ok"] is True
     assert j["spec"] == {"tag": j["spec"]["tag"]} and j["resources"] == {"rss_gb": 1.0, "need_gb": 2.0}
     # A waiting job keeps its whole spec (Undo of Remove queues it again).

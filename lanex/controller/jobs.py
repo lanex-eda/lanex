@@ -148,6 +148,8 @@ FIXED_CAP = 16
 CORES_PER_RUN = 4         # cores each run gets before "fits the cores" stops counting (8+ cores)
 KEEP_ENDED = 60           # ended jobs kept per project (the queue is not the run history)
 CONTINUE_QUIET_S = 60     # Continue waits until a run's flow.log has been still this long
+SHOWN_ENDED = frozenset({"done", "failed", "stopped", "skipped"})   # "Finished here" in the queue
+ENDED_IN_EVENT = 8        # the newest of those a queue:changed event carries (the queue lists 8)
 MAX_WAITING = 500
 EMIT_EVERY_S = 0.5
 SAMPLE_EVERY_S = 5.0
@@ -1952,8 +1954,17 @@ class Scheduler:
         facts = self.facts()
         with self._lock:
             jobs = [self.public(j) for j in self._all_jobs()]
+            trimmed = 0
             if slim:
-                jobs = [slim_job(j) for j in jobs]
+                # The event carries what the page draws from it: every job
+                # still waiting, going or interrupted, and the newest ended
+                # ones the queue lists (it shows 8). Each job's own end came
+                # as its queue:job event; GET /api/queue has them all.
+                over = [j for j in jobs if j.get("state") in SHOWN_ENDED]
+                over.sort(key=lambda j: j.get("ended_at") or "", reverse=True)
+                drop = {j["id"] for j in over[ENDED_IN_EVENT:]}
+                trimmed = len(drop)
+                jobs = [slim_job(j) for j in jobs if j["id"] not in drop]
             for f in list(self._followers.values()):
                 if f.origin == "terminal" and f.alive:
                     jobs.append(f.public())
@@ -1970,6 +1981,7 @@ class Scheduler:
             snap = {
                 "jobs": sorted(jobs, key=lambda x: (STATES.index(x.get("state")) if x.get("state") in STATES else 99,
                                                     float(x.get("seq") or 0))),
+                "ended_left_out": trimmed,
                 "running": len(active),
                 "waiting": len(waiting),
                 "terminal": sum(1 for f in self._followers.values() if f.origin == "terminal" and f.alive),
