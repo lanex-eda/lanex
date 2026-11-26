@@ -402,7 +402,9 @@ function refreshSide() {
       orients.map((o) => "<button class='mc-orb" + (p.orientation === o ? " is-on" : "") + "' data-or='" + o + "' role='radio' aria-checked='" + (p.orientation === o) + "'" + (allowed.includes(o) ? "" : " disabled title='Its LEF SYMMETRY doesn&#39;t allow " + o + "'") + ">" +
         "<span class='mc-or-ic is-" + o + "' aria-hidden='true'><i></i></span><b>" + esc(P.ORIENT_WORDS[o]) + "</b><span class='mono'>" + o + "</span></button>").join("") + "</div>" +
     "<p class='cl-foot mc-or-note'>" + (allowed.some((o) => P.ROTATED.has(o)) ? "90° turns (W, E, FW, FE) are allowed: your own power grid decides." :
-      "90° turns are off: the default power grid can't reach a turned block's power pins (PDN-0233). Keys: R turns it 180°, F mirrors it left-right, V top-bottom.") + "</p>" +
+      (g.grid === "lanex" ? "90° turns are off: the grid LanEx adds for this block is laid across its power pins as drawn, and a turned block would get none (PDN-0233)."
+        : "90° turns are off: the default power grid can't reach a turned block's power pins (PDN-0233).") +
+      " Keys: R turns it 180°, F mirrors it left-right, V top-bottom.") + "</p>" +
     "<div class='mc-insp-h'>Checks</div><ul class='mc-checks'>" +
       (mine.length ? mine.map((q) => "<li class='is-" + (q.hard ? "fail" : "warn") + "'><span class='vf-mark is-" + (q.hard ? "fail" : "warn") + "'></span><span>" + esc(q.message) + (q.fix ? " <span class='muted'>" + esc(q.fix) + "</span>" : "") + "</span></li>").join("")
         : "<li class='is-pass'><span class='vf-mark is-pass'></span><span>Inside the core, on the grid, no overlap.</span></li>") +
