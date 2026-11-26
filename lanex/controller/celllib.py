@@ -700,9 +700,13 @@ def _tech_lef_files(pdk: str, scl: str) -> List[Path]:
     return out
 
 
-def parse_lef(text: str, *, shapes: bool = True) -> Dict[str, Any]:
+def parse_lef(text: str, *, shapes: bool = True, obs_rects: bool = True) -> Dict[str, Any]:
     """MACROs (class, size, site, pins with use/direction and rects, OBS) and
-    SITEs from LEF text. Units are microns, as LEF geometry is."""
+    SITEs from LEF text. Units are microns, as LEF geometry is.
+
+    ``obs_rects=False`` keeps pin shapes but records only which layers the
+    OBS blocks (``obs_layers``): an old OpenRAM LEF carries 250,000 blockage
+    rectangles nobody draws."""
     macros: Dict[str, Dict[str, Any]] = {}
     sites: Dict[str, Dict[str, Any]] = {}
     lines = text.splitlines()
@@ -736,7 +740,7 @@ def parse_lef(text: str, *, shapes: bool = True) -> Dict[str, Any]:
                 continue
             if k == "MACRO" and len(toks) >= 2:
                 cur = {"name": toks[1], "class": "", "w": None, "h": None, "site": None,
-                       "origin": [0.0, 0.0], "pins": [], "obs": [], "symmetry": ""}
+                       "origin": [0.0, 0.0], "pins": [], "obs": [], "obs_layers": [], "symmetry": ""}
                 macros[toks[1]] = cur
             elif k == "SITE" and len(toks) >= 2:
                 site = {"name": toks[1]}
@@ -768,7 +772,9 @@ def parse_lef(text: str, *, shapes: bool = True) -> Dict[str, Any]:
                 in_obs = False
             elif k == "LAYER" and len(toks) >= 2:
                 layer = toks[1]
-            elif k == "RECT" and shapes:
+                if layer not in cur["obs_layers"]:
+                    cur["obs_layers"].append(layer)
+            elif k == "RECT" and shapes and obs_rects:
                 vals = [v for v in toks[1:] if re.match(r"^-?[\d.]+$", v)]
                 if len(vals) >= 4:
                     cur["obs"].append([layer] + [float(v) for v in vals[-4:]])
@@ -854,6 +860,164 @@ def _descriptions(pdk: str, scl: str) -> Dict[str, str]:
                 continue
         return out
     return _cached("desc", f"{pdk}/{scl}", files, build)
+
+
+# --------------------------------------------------------------------------- #
+# Plain words for a family the PDK doesn't describe (IHP's and gf180's
+# Verilog carry no description headers), from the family name and, for IHP,
+# its Liberty functions and release notes
+# --------------------------------------------------------------------------- #
+_FAMILY_TEXT = {
+    "antennanp": "Antenna diode: protects a gate from charge built up on a long wire during manufacture.",
+    "antenna": "Antenna diode: protects a gate from charge built up on a long wire during manufacture.",
+    "buf": "Buffer: repeats its input with more drive.",
+    "clkbuf": "Clock buffer: a buffer with balanced rise and fall times, for the clock tree.",
+    "clkinv": "Clock inverter: an inverter with balanced rise and fall times, for the clock tree.",
+    "inv": "Inverter.",
+    "fill": "Filler: keeps the wells and power rails continuous across a gap in a row.",
+    "fillcap": "Filler with decoupling capacitance between the supply rails.",
+    "filltie": "Well tap: ties the wells to the supply rails at a fixed pitch (latch-up rule).",
+    "endcap": "End cap: finishes the wells at both ends of every row.",
+    "tiehi": "Tie high: drives a constant 1.", "tieh": "Tie high: drives a constant 1.",
+    "tielo": "Tie low: drives a constant 0.", "tiel": "Tie low: drives a constant 0.",
+    "dfrbp": "D flip-flop, rising edge, active-low asynchronous reset (RESET_B); outputs Q and Q_N.",
+    "dfrbpq": "D flip-flop, rising edge, active-low asynchronous reset (RESET_B); output Q only.",
+    "dlhq": "Latch, transparent while GATE is high; output Q.",
+    "dlhr": "Latch, transparent while GATE is high, active-low reset; outputs Q and Q_N.",
+    "dlhrq": "Latch, transparent while GATE is high, active-low reset; output Q only.",
+    "dllr": "Latch, transparent while GATE_N is low, active-low reset; outputs Q and Q_N.",
+    "dllrq": "Latch, transparent while GATE_N is low, active-low reset; output Q only.",
+    "dlygate4sd1": "Delay buffer, the shortest of three; used to fix hold time.",
+    "dlygate4sd2": "Delay buffer, the middle of three; used to fix hold time.",
+    "dlygate4sd3": "Delay buffer, the longest of three; used to fix hold time.",
+    "ebufn": "Tri-state buffer: drives its output while TE_B is low, else lets it float.",
+    "einvn": "Tri-state inverter: drives its output while TE_B is low, else lets it float.",
+    "lgcp": "Clock gate: GCLK follows CLK only while GATE is set, without glitches.",
+    "slgcp": "Clock gate with scan enable: GCLK follows CLK while GATE or SCE is set.",
+    "mux2": "2-to-1 multiplexer.", "mux4": "4-to-1 multiplexer.",
+    "sdfrbp": "Scan D flip-flop, rising edge, active-low reset; SCE selects the scan input SCD; outputs Q and Q_N.",
+    "sdfrbpq": "Scan D flip-flop, rising edge, active-low reset; SCE selects the scan input SCD; output Q only.",
+    "sdfbbp": "Scan D flip-flop with set and reset. IHP marks this cell obsolete and not recommended.",
+    "sighold": "Bus keeper: holds a net at its last driven value.",
+    "hold": "Bus keeper: holds a net at its last driven value.",
+    "addf": "Full adder: the sum and carry of three bits.",
+    "addh": "Half adder: the sum and carry of two bits.",
+    "bufz": "Tri-state buffer: drives its output while enabled, else lets it float.",
+    "invz": "Tri-state inverter: drives its output while enabled, else lets it float.",
+    "icgtp": "Clock gate for a rising-edge clock: the gated clock follows CLK only while E (or TE) is set.",
+    "icgtn": "Clock gate for a falling-edge clock: the gated clock follows CLKN only while E (or TE) is set.",
+    "latq": "Latch, transparent while E is high; output Q.",
+    "latrnq": "Latch, transparent while E is high, active-low reset; output Q.",
+    "latsnq": "Latch, transparent while E is high, active-low set; output Q.",
+    "latrsnq": "Latch, transparent while E is high, active-low set and reset; output Q.",
+}
+
+
+def _ff_text(fam: str) -> Optional[str]:
+    """gf180's flip-flop names: [s]dff[n](r|s|rs)nq."""
+    m = re.fullmatch(r"(s?)dff(n?)(rs|r|s)?n?q", fam)
+    if not m:
+        return None
+    scan, neg, rs = m.groups()
+    t = ("Scan D flip-flop" if scan else "D flip-flop") + (", falling edge" if neg else ", rising edge")
+    t += {"r": ", active-low reset", "s": ", active-low set", "rs": ", active-low set and reset"}.get(rs or "", "")
+    if scan:
+        t += "; SE selects the scan input SI"
+    return t + "; output Q."
+
+
+def _aoi_text(fam: str) -> Optional[str]:
+    m = re.fullmatch(r"a(\d+)(oi|o)|o(\d+)(ai|a)|(aoi|oai)(\d+)", fam)
+    if not m:
+        return None
+    if m.group(1):
+        digits, kind = m.group(1), "aoi" if m.group(2) == "oi" else "ao"
+    elif m.group(3):
+        digits, kind = m.group(3), "oai" if m.group(4) == "ai" else "oa"
+    else:
+        digits, kind = m.group(6), m.group(5)
+    inner = "AND" if kind.startswith("a") else "OR"
+    outer = {"aoi": "NOR", "ao": "OR", "oai": "NAND", "oa": "AND"}[kind]
+    name = {"aoi": "AND-OR-invert", "ao": "AND-OR", "oai": "OR-AND-invert", "oa": "OR-AND"}[kind]
+    words = {1: "one", 2: "two", 3: "three", 4: "four"}
+    terms: List[str] = []
+    ds = [int(c) for c in digits]
+    i = 0
+    while i < len(ds):
+        j = i
+        while j < len(ds) and ds[j] == ds[i]:
+            j += 1
+        n, d = j - i, ds[i]
+        if d == 1:
+            terms.append(("one input" if n == 1 else f"{words.get(n, n)} single inputs"))
+        else:
+            terms.append((f"a {d}-input {inner}" if n == 1 else f"{words.get(n, n)} {d}-input {inner}s"))
+        i = j
+    joined = terms[0] if len(terms) == 1 else ", ".join(terms[:-1]) + " and " + terms[-1]
+    return f"{name}: {joined} into a {len(ds)}-input {outer}."
+
+
+def family_text(fam: str) -> str:
+    """A short description of a cell family from its name alone, for a library
+    whose files carry none ("" when the name says nothing certain)."""
+    f = fam.lower()
+    if f in _FAMILY_TEXT:
+        return _FAMILY_TEXT[f]
+    if re.fullmatch(r"decap(_\d+)?", f):
+        return "Decoupling capacitor between the supply rails: fills gaps and steadies the supply."
+    if re.fullmatch(r"dly[a-d]", f):
+        return f"Delay cell ({ {'a': 'shortest', 'b': 'short', 'c': 'long', 'd': 'longest'}[f[-1]] } of four); used to fix hold time."
+    m = re.fullmatch(r"(and|or|nand|nor|xor|xnor)(\d)(b?)", f)
+    if m:
+        g, n, b = m.groups()
+        return f"{n}-input {g.upper()} gate" + (", with one input inverted (the _N pin)." if b else ".")
+    return _ff_text(f) or _aoi_text(f) or ""
+
+
+# Where a cell family's datasheet is, per PDK (checked on one real page each).
+_DOC_URLS = {
+    "sky130": "https://skywater-pdk.readthedocs.io/en/main/contents/libraries/{lib}/cells/{family}/README.html",
+    "gf180mcu": "https://gf180mcu-pdk.readthedocs.io/en/latest/digital/standard_cells/{lib}/cells/{family}/{cell}.html",
+}
+_IHP_PUBLIC = "https://github.com/IHP-GmbH/IHP-Open-PDK/blob/main/ihp-sg13g2/libs.ref/{lib}/doc/{pdf}"
+
+
+def datasheets(pdk: str, scl: str) -> List[Path]:
+    """The PDF datasheets a library ships (IHP: one per corner)."""
+    s = scl_dir(pdk, scl)
+    if s is None or not (s / "doc").is_dir():
+        return []
+    return sorted(p for p in (s / "doc").glob("*.pdf") if p.is_file() and _within(p, s))
+
+
+def datasheet(pdk: str, scl: str, corner: Optional[str] = None) -> Optional[Path]:
+    """The library's datasheet for *corner* (its name, e.g. typ_1p20V_25C), else
+    its typical one."""
+    pdfs = datasheets(pdk or "", scl or "")
+    if not pdfs:
+        return None
+    if corner:
+        hit = [p for p in pdfs if corner.lower() in p.stem.lower()]
+        if hit:
+            return hit[0]
+    typ = [p for p in pdfs if re.search(r"typ|tt", p.stem, re.I)]
+    return (typ or pdfs)[0]
+
+
+def doc_links(pdk: str, scl: str, corner: Optional[str]) -> Dict[str, Any]:
+    """Link patterns the Cells tab fills per cell: ``family`` (an online page
+    per family, {lib} {family} {cell}), ``pdf`` (the library's own datasheet
+    on disk, served by /api/celllib/doc) and ``public`` (that PDF online)."""
+    out: Dict[str, Any] = {"family": None, "pdf": None, "public": None}
+    for key, url in _DOC_URLS.items():
+        if (pdk or "").startswith(key):
+            out["family"] = url
+    ds = datasheet(pdk, scl, corner)
+    if ds is not None:
+        out["pdf"] = ds.stem
+        if (pdk or "").startswith("ihp"):
+            out["public"] = _IHP_PUBLIC.format(lib=scl, pdf=ds.name)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1156,9 +1320,13 @@ def _library(pdk: str, scl: str, design_dir: Optional[str]) -> Dict[str, Any]:
             "swap": matches(name, rl["swaps"]["patterns"]),
         }
         desc = descs.get(fam) or descs.get(name[len(prefix):] if name.startswith(prefix) else name) or ""
+        desc_src = "pdk" if desc else ""
+        if not desc or not isinstance(desc, str):
+            desc = family_text(fam)
+            desc_src = "lanex" if desc else ""
         rows.append({
             "cell": name, "family": fam, "drive": drive, "category": cat,
-            "desc": desc if isinstance(desc, str) else "",
+            "desc": desc if isinstance(desc, str) else "", "desc_src": desc_src,
             # the PDK's own readable formula (sky130 headers: "Y = !((A1 & A2) | B1)");
             # Liberty states the same function in sum-of-products form
             "formula": descs.get("=" + fam) or [],
@@ -1180,6 +1348,7 @@ def _library(pdk: str, scl: str, design_dir: Optional[str]) -> Dict[str, Any]:
         "ok": True, "pdk": pdk, "scl": scl, "prefix": prefix,
         "liberty": str(libp) if libp else None,
         "corner": Path(libp).stem.replace(scl, "").strip("_") if libp else None,
+        "docs": doc_links(pdk, scl, Path(libp).stem.replace(scl, "").strip("_") if libp else None),
         "units": {"time": "ps", "cap": "fF", "leakage": "nW", "area": "µm²", "length": "µm"},
         "lib_units": units,
         "fo4": {"load_ff": load * cs if load else None, "slew_ps": slew * ts if slew else None},
