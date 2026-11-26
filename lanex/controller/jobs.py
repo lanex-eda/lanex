@@ -669,7 +669,6 @@ def _settings_path() -> Path:
     return platform_env.home() / "settings.json"
 
 
-_SETTINGS_LOCK = threading.Lock()
 _HOME_IDS: Dict[str, str] = {}
 _HOME_ID_LOCK = threading.Lock()
 
@@ -715,9 +714,10 @@ def read_setting(key: str, default: Any = None) -> Any:
 def write_setting(key: str, value: Any) -> None:
     from . import platform_env
     p = _settings_path()
-    # Read, change, write under one lock: two settings saved at once (Runs
-    # at once and keep-awake) each kept the other's old value.
-    with _SETTINGS_LOCK:
+    # Read, change, write under the one settings lock of this process (the
+    # installer writes the same file): two saves at once each kept the
+    # other's old value.
+    with platform_env.SETTINGS_LOCK:
         try:
             data = json.loads(p.read_text(encoding="utf-8") or "{}") if p.is_file() else {}
             if not isinstance(data, dict):
