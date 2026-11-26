@@ -55,6 +55,9 @@ const P = {
   minus: "M5 12h14",                                      // zoom-out / collapse
   gear: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4",   // settings (sliders)
   more: "M5 12h.01M12 12h.01M19 12h.01",                 // overflow menu
+  pin: "M9 3h6l-1 6 4 4H6l4-4zM12 13v8",                 // a pinned run (the star is the baseline)
+  archive: "M3 4h18v4H3zM5 8v12h14V8M10 12h4",            // archive a run (kept, hidden)
+  tag: "M3 3h8l10 10-8 8L3 11zM7.5 7.5h.01",              // run tags
 };
 
 export function icon(name, { size = 18, stroke = 1.5 } = {}) {

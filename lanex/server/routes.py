@@ -3250,7 +3250,9 @@ def h_runs_export(handler: Any) -> None:
         table = [["Run", "Design", "Result", "Started"] + names]
         for r in rows:
             m = per.get(r.get("run_dir"), {})
-            table.append([r.get("tag", ""), r.get("design", ""), r.get("result", ""), r.get("started", "")] +
+            res = r.get("result")
+            label = res.get("label") or res.get("state") or "" if isinstance(res, dict) else (res or "")
+            table.append([r.get("tag", ""), r.get("design", ""), label, r.get("started", "")] +
                          [m.get(n, "") for n in names])
         _respond(handler, {"text": runsmeta.excel_csv(table), "mime": "text/csv"})
     except Exception as ex:

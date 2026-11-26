@@ -561,17 +561,19 @@
         <div class="rn-main">
           <div class="rn-panel">
             <div class="rn-tools" role="toolbar" aria-label="Filter runs">
+              <div class="rn-cols-wrap"><button class="rn-view-btn" id="rn-view-btn" aria-haspopup="menu" aria-expanded="false">View</button>
+                <div class="menu rn-views" id="rn-views" role="menu" aria-label="Views" hidden></div></div>
               <div class="rn-seg" role="group" aria-label="Show runs from">
                 <button class="rn-segb runs-scope" data-scope="design">This design</button>
                 <button class="rn-segb runs-scope" data-scope="all" title="Runs of every design you've opened recently">All designs</button>
               </div>
-              <input type="search" id="runs-filter" class="rn-q" placeholder="Search name, setting, note…" aria-label="Search runs"/>
+              <input type="search" id="runs-filter" class="rn-q" placeholder="Search every run: name, setting, tag, note…" aria-label="Search runs"/>
               <div class="rn-seg" role="group" aria-label="Result" id="rn-status"></div>
-              <div class="rn-seg" role="group" aria-label="Origin" id="rn-origin"></div>
-              <div class="rn-seg" role="group" aria-label="PDK" id="rn-pdk"></div>
               <span class="rn-spacer"></span>
-              <div class="rn-cols-wrap"><button class="btn btn-ghost" id="rn-cols-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
-                <div class="rn-cols" id="rn-cols" hidden></div></div>
+              <div class="rn-cols-wrap"><button class="btn btn-ghost" id="rn-filt-btn" aria-haspopup="dialog" aria-expanded="false">Filters</button>
+                <div class="rn-cols rn-filters" id="rn-filters" role="dialog" aria-label="Filters" hidden></div></div>
+              <div class="rn-cols-wrap"><button class="btn btn-ghost" id="rn-cols-btn" aria-haspopup="dialog" aria-expanded="false">Columns</button>
+                <div class="rn-cols" id="rn-cols" role="dialog" aria-label="Columns" hidden></div></div>
             </div>
             <div class="rn-selbar" id="rn-selbar" hidden></div>
             <p class="muted rn-note" id="runs-note" role="status" hidden></p>

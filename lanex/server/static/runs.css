@@ -85,7 +85,9 @@ body.theme-light .rn-segb.is-on .rn-n { color: var(--accent); }
 .rn-selbar b { color: var(--text-strong); margin-right: var(--s-1); }
 
 /* ---------- the table ---------- */
-.rn-wrap { overflow-x: auto; }
+/* The table scrolls in its own box (runs.js fitHeight sets its height), so
+   the head row, the baseline row and the first columns stick to it. */
+.rn-wrap { overflow: auto; overscroll-behavior: contain; }
 .rn-wrap[hidden] { display: none; }
 .rn-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .rn-table th, .rn-table td {
@@ -212,6 +214,87 @@ body.theme-light .rn-viewing { color: var(--accent); border-color: color-mix(in 
 .rn-sweep-sum > td { height: auto; padding: 0 !important; white-space: normal; cursor: default; background: var(--bg-2); }
 .rn-sw-sum { container-type: inline-size; position: sticky; left: 0; max-width: calc(100vw / var(--ll-zoom, 1) - 160px); padding: var(--s-4) var(--s-4) var(--s-4) 44px; }
 .has-side .rn-sw-sum { max-width: calc(100vw / var(--ll-zoom, 1) - 620px); }
+
+/* ---------- views, filters, tags, archive, baseline row (lane 2) ---------- */
+/* View: the saved view this table shows, a dot when it has changed since. */
+.rn-view-btn {
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px; cursor: pointer;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md); color: var(--text-strong); font: inherit; font-size: 14px;
+}
+.rn-view-btn:hover { border-color: var(--accent); }
+.rn-view-btn[aria-expanded="true"] { border-color: var(--met1); box-shadow: 0 0 0 1px var(--accent-soft); }
+.rn-view-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.rn-view-k { font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+.rn-view-n { font-weight: 600; max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rn-view-dot { display: inline-block; width: 6px; height: 6px; border-radius: 1px; background: var(--met1); box-shadow: 0 0 8px var(--accent-glow); }
+.rn-view-btn svg { color: var(--text-muted); }
+.rn-views { left: 0; min-width: 300px; }
+.rn-vi { justify-content: space-between; }
+.rn-vi.is-cur { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--met1); }
+.rn-vi-x { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+#rn-filt-btn.is-on { border-color: color-mix(in srgb, var(--met1) 55%, var(--border)); color: var(--text-strong); }
+.rn-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px; border-radius: 3px;
+  font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--on-accent); background: var(--accent); }
+.rn-filters { min-width: 340px; max-width: min(520px, calc(92vw / var(--ll-zoom, 1))); gap: 6px; }
+.rn-filters .rn-seg { height: 30px; justify-self: start; max-width: 100%; overflow-x: auto; }
+.rn-filters .rn-segb { padding: 0 10px; font-size: 13px; }
+.rn-f-l { margin-top: 6px; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); }
+.rn-f-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rn-f-clear { justify-self: start; margin-top: 8px; }
+/* Tags: neutral chips (colour stays for verdicts and deltas). */
+.rn-tagchip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: var(--r-sm); cursor: default;
+  font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border-strong);
+}
+button.rn-tagchip { cursor: pointer; }
+button.rn-tagchip:hover { border-color: var(--accent); }
+.rn-tagchip.is-on { border-color: var(--met1); background: var(--accent-soft); color: var(--text-strong); }
+.rn-tagchip.is-sm { padding: 0 6px; font-size: 11px; line-height: 18px; }
+.rn-more { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.rn-tagx { display: inline-grid; place-items: center; padding: 0; border: 0; background: none; color: var(--text-muted); cursor: pointer; }
+.rn-tagx:hover { color: var(--fail); }
+.rn-tagadd { height: 26px; min-height: 26px; width: 12ch; padding: 0 8px; font-family: var(--mono); font-size: 12px; }
+.rn-pop {
+  position: absolute; z-index: var(--z-drawer); top: calc(100% + 4px); min-width: 300px; padding: 10px 12px 12px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--sh-3); display: grid; gap: 8px;
+}
+.rn-pop[hidden] { display: none; }
+.rn-barpops { position: relative; height: 0; z-index: 5; }
+.rn-barpops .rn-pop { top: 4px; }
+.rn-tagpop { left: 14px; max-width: 420px; }
+#rn-exportpop { left: auto; right: 90px; min-width: 260px; }
+.rn-taglist { display: grid; gap: 2px; max-height: 260px; overflow: auto; }
+.rn-tagrow { display: flex; align-items: center; gap: 10px; padding: 3px 2px; font-size: 13px; }
+.rn-tagrow label { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; cursor: pointer; }
+.rn-tagrow input { accent-color: var(--accent); }
+.rn-tagrow .linklike { font-size: 12px; }
+/* Columns: the common ones, then every LibreLane metric and setting. */
+.rn-cols { max-width: min(460px, calc(92vw / var(--ll-zoom, 1))); }
+.rn-cols-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rn-cols-top .btn { margin: 0; }
+.rn-cols-q { height: 30px !important; min-height: 30px !important; max-width: none !important; }
+.rn-cols-body { max-height: min(calc(56vh / var(--ll-zoom, 1)), 520px); overflow: auto; display: grid; gap: 6px; padding-right: 4px; }
+.rn-cols-g { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
+.rn-cols-g.is-mono { grid-template-columns: minmax(0, 1fr); }
+.rn-cols-g.is-mono .rn-col-opt span:first-of-type { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.rn-col-opt[hidden] { display: none; }
+.rn-col-u { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.rn-cols-sec summary { cursor: pointer; padding: 6px 2px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); }
+.rn-cols-hint { margin: 2px 0 0; font-size: 12.5px; }
+/* Direction of a metric column: ↑ higher is better, ↓ lower. */
+.rn-dir { font-size: 10px; color: var(--text-muted); opacity: 0.8; }
+.rn-xhead { text-transform: none; letter-spacing: 0; font-size: 11.5px; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: bottom; }
+.rn-setcell { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+.rn-untimed { font-family: var(--sans) !important; font-size: 12.5px !important; font-style: italic; }
+/* An archived run, shown: full contrast, the chip says so. */
+.rn-archchip { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.rn-fixchip { text-transform: none; letter-spacing: 0; font-size: 11px; }
+/* The baseline stays at the top while the list scrolls (a copy in the head). */
+.rn-table thead tr.rn-baserow > td { position: sticky; top: 36px; z-index: 2; background: color-mix(in srgb, var(--warn) 6%, var(--surface)); border-bottom: 2px solid var(--met1); }
+.rn-table thead tr.rn-baserow > td.rn-c-pick, .rn-table thead tr.rn-baserow > td.rn-c-base, .rn-table thead tr.rn-baserow > td.rn-c-name { z-index: 3; }
+.rn-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.rn-sweep:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.rn-kept { visibility: collapse; }
 
 .rn-foot { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 9px 14px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-muted); }
 .rn-foot[hidden] { display: none; }
