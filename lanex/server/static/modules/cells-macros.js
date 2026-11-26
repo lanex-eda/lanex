@@ -377,7 +377,7 @@ function refreshSide() {
   const sum = document.getElementById("mc-sum");
   const placed = AR.pl.filter((p) => p.location).length;
   if (sum) sum.innerHTML = placed + " of " + AR.pl.length + " placed · " +
-    (probs.length ? "<span class='" + (probs.some((p) => p.hard) ? "cl-no" : "cl-warn-t") + "'>" + probs.length + " problem" + (probs.length === 1 ? "" : "s") + "</span>" : "<span class='mc-ok'>no problems</span>") +
+    (probs.length ? "<span class='" + (probs.some((p) => p.hard) ? "mc-bad" : "cl-warn-t") + "'>" + probs.length + " problem" + (probs.length === 1 ? "" : "s") + "</span>" : "<span class='mc-ok'>no problems</span>") +
     (dirty ? " · <span class='cl-warn-t'>not saved</span>" : "");
   const p = AR.pl.find((q) => q.name === AR.sel);
   if (!p) {

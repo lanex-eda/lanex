@@ -103,7 +103,7 @@ function wireMine(host, names) {
       const imp = v && hit.length ? M.exclusionImpact(cur, cur.concat([v]), C.lib) : { blocks: [], warns: [] };
       prev.innerHTML = !v ? "" : hit.length
         ? "Catches " + hit.length + " cell" + (hit.length === 1 ? "" : "s") + ": " + cellLinks(hit, 12) +
-          (imp.blocks.length ? "<div class='cl-no cr-guard'>…including " + esc(imp.blocks.map((b) => b.text).join("; ")) + ". The run would stop, so LanEx won't save it.</div>" : "") +
+          (imp.blocks.length ? "<div class='cr-guard is-block'>…including " + esc(imp.blocks.map((b) => b.text).join("; ")) + ". The run would stop, so LanEx won't save it.</div>" : "") +
           (imp.warns.length ? "<div class='cl-warn-t cr-guard'>…including " + esc(imp.warns.map((b) => b.text).join("; ")) + ".</div>" : "")
         : "<span class='cl-warn-t'>Matches no cell in " + esc(C.scl) + ".</span> It would still be saved, and apply if you switch library.";
     };

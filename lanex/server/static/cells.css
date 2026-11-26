@@ -548,3 +548,5 @@ body.theme-light .cl-doc { color: var(--accent); }
 .cl-guard li { display: flex; gap: 8px; align-items: flex-start; }
 .cr-guard { margin-top: 4px; }
 .mc-insp-mod { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cr-guard.is-block { color: var(--fail); font-weight: 500; }
+.mc-bad { color: var(--fail); font-weight: 500; }
