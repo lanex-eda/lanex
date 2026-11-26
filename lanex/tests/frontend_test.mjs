@@ -822,8 +822,13 @@ check("compare + DSE never index the metric/config table by tag (N1 regression)"
 
 check("compare: a delta says how far a number moved, and whether that is better", () => {
   const up = { higher_is_better: true, direction_known: true }, down = { higher_is_better: false, direction_known: true };
-  assert.deepEqual(cmp.deltaOf(4.1, 2.362, up, "ns"), { text: "+1.74 ns", cls: "is-better" });
-  assert.deepEqual(cmp.deltaOf(10367.1, 8769, down, "µm²"), { text: "+18 %", cls: "is-worse" });
+  // The one delta (metricfmt.delta): Δ always, Δ% only where a ratio means
+  // something (never slack); the unit is in the row label, once.
+  const ws = cmp.deltaOf(4.1, 2.362, up, "ns");
+  assert.equal(ws.text, "+1.74"); assert.equal(ws.cls, "is-better");
+  const area = cmp.deltaOf(10367.1, 8769, down, "µm²");
+  assert.equal(area.text, "+1,598 +18%"); assert.equal(area.cls, "is-worse");
+  assert.equal(cmp.deltaOf(0.001553, 0.001528, down, "", "power__total").text, "+0.025 +1.6%", "power: the row's prefix, and a percent");
   assert.equal(cmp.deltaOf(5, 5, down).text, "same");
   assert.equal(cmp.deltaOf(1226, 842, null).cls, "", "no known direction: no colour");
   assert.equal(cmp.deltaOf(1226, 842, { higher_is_better: true, direction_known: false }).cls, "", "an unknown direction is never coloured");
@@ -833,7 +838,7 @@ check("compare: a delta says how far a number moved, and whether that is better"
   // The delta rides in the cell, after the value; the exact value stays in the title.
   const cell = cmp.summaryCellHtml({ value: 1234.7, unit: "µm" }, cmp.deltaOf(1234.7, 1000, down, "µm"));
   assert.match(cell, /title='1234\.7'/);
-  assert.match(cell, /class='cmp-d is-worse'>\+23 %</);
+  assert.match(cell, /class='cmp-d is-worse' title='[^']*worse than the reference \(lower is better\)'>\+235 \+23%</);
 });
 
 // ------------------------------------------------ sweeps (audit G11, 4.7)
@@ -1071,7 +1076,7 @@ check("compare: a summary cell shows the rounded value but titles the raw one", 
   // The exported, pure cell builder (the tape-out side-by-side grid).
   const cell = cmp.summaryCellHtml({ value: 1234.7, unit: "µm", status: "pass" });
   assert.match(cell, /title='1234\.7'/, "the exact value is not one hover away");
-  assert.match(cell, />1,235 µm</, "the rounded, grouped display is missing");
+  assert.match(cell, />1,235 <small>µm<\/small></, "the rounded, grouped display is missing");
   assert.match(cell, /cmp-num pass/, "pass/fail status class dropped");
   // An absent row stays the em-dash — never a fabricated 0, never a bare title.
   assert.equal(cmp.summaryCellHtml(null), "<td>—</td>");

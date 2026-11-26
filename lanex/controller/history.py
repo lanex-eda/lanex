@@ -1706,6 +1706,7 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
         metrics = (view.get("metrics") or {}).get("values") or {}
         for k, v in metrics.items():
             metric_union.setdefault(k, {})[col] = v
+        renders = sorted((Path(run_dir) / "final" / "render").glob("*.png")) if (Path(run_dir) / "final" / "render").is_dir() else []
         runs.append({
             "col": col,
             "tag": tag,
@@ -1713,21 +1714,38 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
             "run_dir": run_dir,
             "success": _success_from_metrics(metrics, run_dir=Path(run_dir)),
             "summary": view.get("summary") or [],
+            # Compare's layout row: the final render, and the die to draw it
+            # at one scale with the others.
+            "render": bool(renders),
+            "die_bbox": metrics.get("design__die__bbox"),
+            "librelane_version": ((config_by_col[col].get("meta") or {}).get("librelane_version")
+                                  if isinstance(config_by_col[col].get("meta"), dict) else None),
         })
 
     cols = [r["col"] for r in runs]
 
     # Config diff: only keys whose value differs across the runs (or is absent
-    # in some). Compared by JSON repr to avoid type/ordering false-negatives.
+    # in some). Compared by JSON repr to avoid type/ordering false-negatives,
+    # after each run's own folders are written as <run>, <design> and <pdk>:
+    # two run folders (or a run imported from another PC) always differ in
+    # those, which is not what "which settings changed" means. A path that
+    # still differs (another SDC file) is a real difference, and is listed in
+    # ``config_paths`` so the page can fold it apart.
     all_keys = set()
     for cfg in config_by_col.values():
         all_keys.update(cfg.keys())
+    prefixes = {c: _runsmeta._prefixes(Path(c), config_by_col.get(c, {})) for c in cols}
     config_diff: Dict[str, Dict[str, Any]] = {}
+    config_paths: List[str] = []
     for key in sorted(all_keys):
+        if key == "meta":
+            continue
         vals = {c: config_by_col.get(c, {}).get(key) for c in cols}
-        reprs = {json.dumps(_jsonify(v), sort_keys=True) for v in vals.values()}
+        reprs = {json.dumps(_jsonify(_runsmeta._norm(v, prefixes[c])), sort_keys=True) for c, v in vals.items()}
         if len(reprs) > 1:
             config_diff[key] = vals
+            if any(_runsmeta.is_path_value(v) for v in vals.values() if v is not None) or key in ("DESIGN_DIR", "PDK_ROOT", "RUN_TAG"):
+                config_paths.append(key)
 
     # Key-config block: the most decision-relevant vars (clock, utilisation,
     # synth strategy, …) shown for EVERY run — not just the ones that differ —
@@ -1773,6 +1791,7 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
     return {
         "runs": runs,
         "config_diff": config_diff,
+        "config_paths": config_paths,
         "key_config": key_config,
         "metric_table": metric_union,
         "metric_meta": metric_meta,

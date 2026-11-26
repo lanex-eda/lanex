@@ -3260,6 +3260,28 @@ def h_runs_export(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_compare_image(handler: Any) -> None:
+    """Compare's layout row: a run's final render (``final/render/*.png``),
+    by its folder, for runs of any design LanEx knows. GET ``?run_dir=``."""
+    from ..controller import runsmeta
+    try:
+        run = runsmeta.check_run_dir(_query_param(handler.path, "run_dir"), known=_runs_known_designs())
+    except ValueError as ex:
+        _respond(handler, str(ex), 404)
+        return
+    pngs = sorted((run / "final" / "render").glob("*.png")) if (run / "final" / "render").is_dir() else []
+    if not pngs:
+        _respond(handler, "this run has no rendered layout (it ended before the final render)", 404)
+        return
+    try:
+        if pngs[0].stat().st_size > 12_000_000:
+            _respond(handler, "the render is too big to show here", 413)
+            return
+        handler._send_bytes(pngs[0].read_bytes(), 200, "image/png")
+    except OSError as ex:
+        _respond(handler, str(ex), 500)
+
+
 def serve_view(spec: str) -> Optional[Dict[str, Any]]:
     if "/" in spec:
         tag, fmt = spec.split("/", 1)
@@ -5322,6 +5344,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/runs-changed", h_runs_changed),
     ("/api/runs-keys", h_runs_keys),
     ("/api/runs-export", h_runs_export),
+    ("/api/compare-image", h_compare_image),
     ("/api/known-designs", h_known_designs),
     ("/api/run-step-log", h_run_step_log),
     ("/api/run-files", h_run_files),
@@ -5449,7 +5472,7 @@ _GET_ROUTES = {
     "/api/reports/drc", "/api/reports/lvs", "/api/fs/roots", "/api/fs/list", "/api/walk-sources",
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
     "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
-    "/api/runs-keys",
+    "/api/runs-keys", "/api/compare-image",
 }
 # A route in none of the sets keeps the old answer-anything behaviour, so a
 # route added elsewhere never breaks at run time; the test names it instead.
