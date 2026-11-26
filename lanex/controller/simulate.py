@@ -393,6 +393,28 @@ def sim_verdict(rc: int, timed_out: bool, wave: Any, cancelled: bool) -> Dict[st
 # after an optional "[time]" and "TEST"), as Verilator's regression and
 # OpenTitan's dvsim read them. "No error found" or "pass 3 of 10" are not.
 _VERDICT_LINE_RX = re.compile(r"^\s*(?:\[\s*\d+\s*\]\s*)?(?:TEST\s+|ALL TESTS\s+)?(PASS(?:ED)?|FAIL(?:ED|URE)?)\b")
+# A summary's failure count: "FAIL: 0", "FAILED = 2 of 10", "PASS: 12 FAIL: 0".
+# The number must end the count ("FAIL: 0 != 1" reports a mismatch, not a count).
+_FAIL_COUNT_RX = re.compile(r"\bFAIL(?:ED|URES?|S)?\s*[:=]\s*(\d+)(?=\s*$|\s*[,;/|)]|\s+(?:of|tests?|checks?|cases?|vectors?|PASS)\b)")
+# "0 FAIL", "3 FAILED" at the start of a line.
+_COUNT_FAIL_RX = re.compile(r"^\s*(?:\[\s*\d+\s*\]\s*)?(?:TEST\s+|ALL TESTS\s+)?(\d+)\s+FAIL(?:ED|URES?|S)?\b")
+
+
+def _verdict_of(text: str) -> Optional[str]:
+    """``"PASS"``, ``"FAIL"`` or None for one line of a bench's output. Only a
+    FAIL marker that reports a failure counts: a summary that counts the
+    failures decides by its count (``FAIL: 0`` and ``0 FAIL`` are passes,
+    ``PASS: 9 FAIL: 1`` a failure); otherwise the leading PASS or FAIL does."""
+    vm = _VERDICT_LINE_RX.match(text)
+    if vm:
+        cm = _FAIL_COUNT_RX.search(text)
+        if cm:
+            return "FAIL" if int(cm.group(1)) else "PASS"
+        return "FAIL" if vm.group(1).startswith("FAIL") else "PASS"
+    cm = _COUNT_FAIL_RX.match(text)
+    if cm:
+        return "FAIL" if int(cm.group(1)) else "PASS"
+    return None
 _FINISH_RX = re.compile(r"\$finish called at (\d+) \((\d+\s*[munpf]?s)\)|Verilog \$finish|- Verilator: \$finish at ([\d.]+)\s*([munpf]?s)\b"
                         r"|simulation finished @([\d.]+)\s*([munpf]?s)\b")
 _STOP_RX = re.compile(r"\$stop called at (\d+)|Verilog \$stop\b|simulation stopped by --stop-time @([\d.]+)\s*([munpf]?s)")
@@ -494,9 +516,8 @@ def judge(lines: Sequence[str], *, rc: int, timed_out: bool = False, cancelled: 
             if "error" in m.group(6) or "failure" in m.group(6):
                 stamped = stamped or (l, t)
             msg = m.group(7)
-            vm = _VERDICT_LINE_RX.match(msg)
-            if vm:
-                word = vm.group(1)
+            word = _verdict_of(msg)
+            if word:
                 if word.startswith("FAIL"):
                     out["fails"] += 1
                     first_fail = first_fail or (l, t)
@@ -507,9 +528,8 @@ def judge(lines: Sequence[str], *, rc: int, timed_out: bool = False, cancelled: 
         if l.startswith("%Error") and "Verilog $stop" not in l and engine == "verilator":
             stamped = stamped or (l, {"end": True})
             continue
-        vm = _VERDICT_LINE_RX.match(l)
-        if vm:
-            word = vm.group(1)
+        word = _verdict_of(l)
+        if word:
             if word.startswith("FAIL"):
                 out["fails"] += 1
                 first_fail = first_fail or (l, _time_in(l))
@@ -519,14 +539,14 @@ def judge(lines: Sequence[str], *, rc: int, timed_out: bool = False, cancelled: 
         # GHDL's report lines: "tb.vhd:30:5:@95ns:(report note): PASS: ..."
         gm = re.match(r"^[^:\s]+:\d+:\d+:@([\d.]+)\s*([munpf]?s):\(report note\):\s*(.*)$", l)
         if gm:
-            vm = _VERDICT_LINE_RX.match(gm.group(3))
-            if vm:
-                if vm.group(1).startswith("FAIL"):
+            word = _verdict_of(gm.group(3))
+            if word:
+                if word.startswith("FAIL"):
                     out["fails"] += 1
                     first_fail = first_fail or (l, {"value": float(gm.group(1)), "unit": gm.group(2)})
                 else:
                     out["passes"] += 1
-                verdict_word, verdict_line = vm.group(1), l
+                verdict_word, verdict_line = word, l
     stop_hit = next((l for l in upto if _STOP_RX.search(l)), None)
     if timed_out:
         out["state"] = "timeout"

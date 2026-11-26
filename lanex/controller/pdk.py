@@ -62,7 +62,13 @@ def variant_incomplete(variant_dir: Path) -> bool:
     """True when ``<root>/<variant>`` points into a version that never finished.
 
     ciel enables a variant as ``<root>/<variant>`` ->
-    ``<root>/ciel/<family>/versions/<hash>/<variant>``."""
+    ``<root>/ciel/<family>/versions/<hash>/<variant>``.
+
+    Two signs, either one enough: LanEx's own marker (an install it started
+    and that never finished), and a variant folder without ciel's ``SOURCES``
+    file. ciel writes ``SOURCES`` into each variant only after every archive
+    has unpacked (ciel manage.py fetch), so a fetch killed mid-unpack in a
+    terminal, which carries no LanEx marker, is caught too."""
     try:
         target = Path(variant_dir).resolve()
     except Exception:
@@ -70,7 +76,12 @@ def variant_incomplete(variant_dir: Path) -> bool:
     vdir = target.parent
     if vdir.parent.name != "versions":
         return False
-    return version_dir_incomplete(vdir)
+    if version_dir_incomplete(vdir):
+        return True
+    try:
+        return target.is_dir() and not (target / "SOURCES").is_file()
+    except OSError:
+        return False
 
 
 def _candidate_pdk_roots() -> List[Path]:

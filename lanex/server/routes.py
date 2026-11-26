@@ -6867,6 +6867,15 @@ _GET_ROUTES = {
     # Layout (lane 3)
     "/api/layout/nets", "/api/layout/net", "/api/layout/analysis", "/api/layout/viewer-status",
 }
+# System routes for the Tools page (doctor, storage and clean-up, per-variant
+# PDK removal, WSL memory, network, skip this version): server/routes_system.py.
+from . import routes_system as _routes_system  # noqa: E402
+
+# A path another handler already serves (lane 1's /api/power/hold) keeps it.
+ROUTES.extend(r for r in _routes_system.ROUTES if r[0] not in {p for p, _ in ROUTES})
+_GET_ROUTES |= _routes_system.GET_ROUTES
+_POST_ROUTES |= _routes_system.POST_ROUTES
+_BOTH_ROUTES |= _routes_system.BOTH_ROUTES
 # A route in none of the sets keeps the old answer-anything behaviour, so a
 # route added elsewhere never breaks at run time; the test names it instead.
 ROUTE_METHODS: Dict[str, Tuple[str, ...]] = {

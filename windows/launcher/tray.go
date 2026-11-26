@@ -40,7 +40,11 @@ type tray struct {
 
 	restartMu sync.Mutex
 	restarts  []time.Time // recent automatic restarts, to give up on a loop
+
+	sw *startWin // the "Starting LanEx" window, until the app window shows
 }
+
+func (t *tray) setStatusTip(s string) { systray.SetTooltip(s) }
 
 // serverProc is one wsl.exe client and the moment it exits.
 type serverProc struct {
@@ -54,9 +58,14 @@ func watchProc(cmd *exec.Cmd) *serverProc {
 	return p
 }
 
-func runTray(server *exec.Cmd) {
-	t := &tray{stopped: make(chan struct{})}
+func runTray(server *exec.Cmd, sw *startWin) {
+	t := &tray{stopped: make(chan struct{}), sw: sw}
 	t.cur.Store(watchProc(server))
+	quitDuringStart = func() {
+		logf("Quit chosen on the start window")
+		t.quitting.Store(true)
+		systray.Quit()
+	}
 	// systray.Run owns the main goroutine (it needs the Win32 message loop on the
 	// thread that created the window) and only returns after systray.Quit().
 	systray.Run(t.onReady, t.onExit)
@@ -88,11 +97,31 @@ func (t *tray) onReady() {
 	// reinstall Ubuntu. Zero cost until clicked.
 	shell := systray.AddMenuItem("Open LanEx shell",
 		"A terminal inside LanEx's environment, in your projects folder")
+	// Works when the server won't start, unlike the app's own button (diag.go).
+	diag := systray.AddMenuItem("Copy diagnostics",
+		"Copy Windows, WSL and LanEx facts for a bug report (user name and proxy removed)")
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit LanEx", "Stop LanEx and shut its environment down")
+	setTrayTip = func(s string) { systray.SetTooltip(s) }
 
 	go t.watchServer()
 	go t.waitReady(open)
+	go func() {
+		for range diag.ClickedCh {
+			systray.SetTooltip(appName + " — collecting diagnostics…")
+			path, err := copyDiagnostics()
+			if port := int(t.port.Load()); port > 0 {
+				systray.SetTooltip(fmt.Sprintf("%s — running on port %d", appName, port))
+			}
+			if err != nil {
+				showError("LanEx could not copy the diagnostics: " + err.Error() +
+					(map[bool]string{true: "\n\nThey were saved to:\n" + path, false: ""})[path != ""])
+				continue
+			}
+			showInfo("Diagnostics copied. Paste them into your bug report.\n\n" +
+				"Your user name and any proxy address were left out. They were also saved to:\n" + path)
+		}
+	}()
 
 	go func() {
 		for {
@@ -131,17 +160,26 @@ func (t *tray) onReady() {
 // waitReady flips the tray from "starting…" to "running", or explains why not.
 func (t *tray) waitReady(open *systray.MenuItem) {
 	first := t.cur.Load()
-	port, ok := waitForHealth(startupTimeout, first.exited)
+	// The start window shows "still starting" after 45 s; LanEx gives up only
+	// after startBudget (a cold VM after a restart can take minutes).
+	port, ok := waitForHealth(startBudget, first.exited)
 	if ok {
 		t.port.Store(int64(port))
 		systray.SetTooltip(fmt.Sprintf("%s — running on port %d", appName, port))
 		logf("server ready on port %d", port)
+		t.sw.step(3)
 		open.Enable()
+		onAppWindowShown = func() { t.sw.done() }
 		if err := openAppWindow(port); err != nil {
+			t.sw.done()
 			showError(fmt.Sprintf("LanEx is ready at http://127.0.0.1:%d/ but its "+
 				"window could not be opened.\n\n%v", port, err))
 		}
+		// The window normally shows within a second; never leave the start
+		// window up for long once the server answers.
+		go func() { time.Sleep(15 * time.Second); t.sw.done() }()
 		go t.watchWindows(port)
+		go t.watchPower()
 		return
 	}
 	if t.quitting.Load() {
@@ -149,20 +187,20 @@ func (t *tray) waitReady(open *systray.MenuItem) {
 	}
 	select {
 	case <-first.exited:
-		// The process died; watchServer owns that dialog. Two message boxes for
-		// one failure is worse than none.
+		// The process died; watchServer owns that page. Two for one failure is
+		// worse than none.
 		return
 	default:
 	}
-	// Still alive but not answering after 90 s. Stop only this owned appliance;
-	// never tell the user to shut down every WSL distribution on the machine.
-	logf("server did not answer /api/health within %s", startupTimeout)
+	// Still alive but not answering. Stop only this owned appliance; never
+	// tell the user to shut down every WSL distribution on the machine.
+	logf("server did not answer /api/health within %s", startBudget)
 	t.quitting.Store(true)
 	t.stopServer()
-	showError("LanEx could not start.\n\n" +
-		"Windows could not reach the LanEx health check. Retry once; if it keeps " +
-		"failing, use Repair so LanEx can diagnose its own WSL networking without " +
-		"stopping your other WSL environments.\n\nDetails are in:\n" + logPath())
+	handleStartChoice(t.sw.fail(startFail{kind: failTimeout, title: "LanEx did not start",
+		body: fmt.Sprintf("Windows could not reach LanEx's server after %d minutes. Your projects are "+
+			"safe; nothing was changed.\n\nTry again. If it fails again, run Repair LanEx: it keeps "+
+			"your projects and your other WSL distributions.", int(startBudget.Minutes()))}))
 	systray.Quit()
 }
 
@@ -186,9 +224,14 @@ func (t *tray) watchServer() {
 		// watchWindows is what turns a closed window into a quit.
 		if t.port.Load() == 0 {
 			// waitReady is still waiting on this process; it returns on exited.
-			showError("LanEx stopped before it finished starting.\n\n" +
-				"Try again. If it keeps failing, run LanEx Setup and choose Repair. " +
-				"Your projects and other WSL environments are preserved.\n\nDetails are in:\n" + logPath())
+			body := "LanEx's server ended before it finished starting."
+			if tail := lastLogLines(3); tail != "" {
+				body += " The last lines of its log:\n\n" + tail
+			}
+			body += "\n\nTry again. If it keeps failing, run Repair LanEx: it keeps your projects " +
+				"and your other WSL environments."
+			handleStartChoice(t.sw.fail(startFail{kind: failExited, title: "LanEx stopped while starting",
+				body: body}))
 			close(t.stopped)
 			systray.Quit()
 			return
@@ -241,7 +284,7 @@ func (t *tray) restart() bool {
 		cmd, err = startKeepalive()
 	} else {
 		logf("starting the server again")
-		cmd, err = startServer()
+		cmd, err = startServer(nil)
 	}
 	if err != nil {
 		logf("restart failed: %v", err)

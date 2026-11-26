@@ -250,6 +250,12 @@ Source: "..\setup\run-streamed.ps1"; Flags: dontcopy
 ; The data-only worker remains available to the uninstaller for owner/marker
 ; validation, verified export, resume cleanup, and explicit removal.
 Source: "..\setup\setup.ps1"; DestDir: "{app}"; DestName: "setup-worker.ps1"; Flags: ignoreversion
+; The Windows network snapshot (proxy per download site, company certificates):
+; Setup runs it before the download, LanEx.exe and the app at later starts.
+; network-apply.py writes the result into the distro (provision.sh).
+Source: "..\setup\network.ps1"; Flags: dontcopy
+Source: "..\setup\network.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\provision\network-apply.py"; Flags: dontcopy
 Source: "..\setup\constraints.txt"; Flags: dontcopy
 Source: "..\setup\requirements.lock"; Flags: dontcopy
 Source: "..\setup\build-manifest.json"; Flags: dontcopy
@@ -350,6 +356,14 @@ var
   SummaryPanel: TPanel;
   SummaryDivider: TBevel;
   SummaryDownloadLabel, SummaryDiskLabel, SummaryStatusLabel: TLabel;
+  // "Memory for Linux": the one optional setting on the Configure page. 0 GB
+  // (the first item) writes nothing; WSL then gives Linux half of the PC.
+  WslMemoryLabel, WslMemoryHint: TLabel;
+  WslMemoryCombo: TNewComboBox;
+  WslMemoryValues: array of Integer;
+  WslMemoryChoiceGB: Integer;
+  ProxyDetectedValue: Boolean;
+  NetworkSnapshotDir: String;
   DesktopShortcutCheckbox: TNewCheckBox;
   ProgressContainer: TPanel;
   ProgressPhaseLabel: TLabel;
@@ -1020,20 +1034,84 @@ begin
   Result := RunLogged(FileName, Params, ResultCode);
 end;
 
+// WindowsProxyInUse: a proxy Windows uses for this person (environment, manual
+// or an automatic setup script). A cheap registry read for the Configure page;
+// network.ps1 resolves the real per-site answer before the download.
+function WindowsProxyInUse: Boolean;
+var
+  Value: String;
+  Enabled: Cardinal;
+begin
+  Result := (GetEnv('HTTP_PROXY') <> '') or (GetEnv('HTTPS_PROXY') <> '') or
+     (GetEnv('http_proxy') <> '') or (GetEnv('https_proxy') <> '');
+  if Result then Exit;
+  if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+       'AutoConfigURL', Value) and (Value <> '') then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := RegQueryDWordValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+       'ProxyEnable', Enabled) and (Enabled = 1) and
+     RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+       'ProxyServer', Value) and (Value <> '');
+end;
+
+// ProxyFailureHint adds what network.ps1 found wrong with the network (a proxy
+// that asks for a sign-in, a certificate Windows does not trust either) to a
+// failure dialog. The snapshot holds no proxy address and no password.
 function ProxyFailureHint: String;
 var
-  PacUrl: String;
+  Lines: TArrayOfString;
+  I: Integer;
 begin
   Result := '';
-  if (GetEnv('HTTP_PROXY') <> '') or (GetEnv('HTTPS_PROXY') <> '') or
-     (GetEnv('http_proxy') <> '') or (GetEnv('https_proxy') <> '') then
+  if NetworkSnapshotDir = '' then Exit;
+  if not LoadStringsFromFile(NetworkSnapshotDir + '\network-problems.txt', Lines) then Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+    if Trim(Lines[I]) <> '' then
+      Result := Result + #13#10#13#10 + Trim(Lines[I]);
+end;
+
+// TakeNetworkSnapshot asks Windows for its proxy (per download site, PAC and
+// WPAD included) and the root certificates the download sites' TLS chains end
+// in (setup\network.ps1), so LanEx's Linux can use them (provision.sh's
+// network_settings). Never fatal: without it Linux keeps its own settings.
+procedure TakeNetworkSnapshot;
+var
+  Script, Output, Problems: String;
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  NetworkSnapshotDir := ExpandConstant('{localappdata}\LanEx\state');
+  ForceDirectories(NetworkSnapshotDir);
+  ExtractTemporaryFile('network.ps1');
+  Script := ExpandConstant('{tmp}\network.ps1');
+  if not PowerShellCapture('& ' + PSQuote(Script) + ' -OutDir ' + PSQuote(NetworkSnapshotDir), Output) then
+  begin
+    LogLine('network settings from Windows could not be read (Linux keeps its own): ' + Output);
     Exit;
-  if RegQueryStringValue(HKCU,
-       'Software\Microsoft\Windows\CurrentVersion\Internet Settings',
-       'AutoConfigURL', PacUrl) and (PacUrl <> '') then
-    Result := #13#10#13#10 + 'Windows is configured with an automatic proxy (PAC) file. '
-      + 'Linux command-line downloads cannot use a PAC URL directly; ask your administrator '
-      + 'for an explicit HTTPS proxy URL. The PAC address and proxy credentials are not logged.';
+  end;
+  Problems := '';
+  StringChangeEx(Output, #13#10, #10, True);
+  SetArrayLength(Lines, 0);
+  while Output <> '' do
+  begin
+    I := Pos(#10, Output);
+    if I = 0 then I := Length(Output) + 1;
+    SetArrayLength(Lines, GetArrayLength(Lines) + 1);
+    Lines[GetArrayLength(Lines) - 1] := Copy(Output, 1, I - 1);
+    Delete(Output, 1, I);
+  end;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    LogLine(Lines[I]);
+    if Pos('network problem: ', Lines[I]) = 1 then
+      Problems := Problems + Copy(Lines[I], 18, Length(Lines[I])) + #13#10
+    else if Pos('network: ', Lines[I]) = 1 then
+      AppendLiveLine('  ' + Lines[I]);
+  end;
+  SaveStringToFile(NetworkSnapshotDir + '\network-problems.txt', Problems, False);
 end;
 
 // LogTail returns the last Count lines of install.log, for failure dialogs: the
@@ -1043,6 +1121,7 @@ function LogTail(Count: Integer): String;
 var
   Lines: TArrayOfString;
   I, First: Integer;
+  L: String;
 begin
   Result := '';
   if not LoadStringsFromFile(LogFile, Lines) then
@@ -1050,11 +1129,19 @@ begin
   First := GetArrayLength(Lines) - Count;
   if First < 0 then
     First := 0;
-  // The machine-readable lines (the preflight JSON, progress events) say
-  // nothing to a person reading an error; the log file keeps them.
+  // The machine-readable lines (the preflight JSON, progress events, the
+  // readiness report, one JSON line of several KB) say nothing to a person
+  // reading an error, and a long one pushed the dialog's Retry button off a
+  // 768-pixel screen; the log file keeps them. Long lines are cut.
   for I := First to GetArrayLength(Lines) - 1 do
-    if (Pos('preflight: {', Lines[I]) <> 1) and (Pos('@@LANEX:', Lines[I]) <> 1) then
-      Result := Result + StripNulls(Lines[I]) + #13#10;
+  begin
+    L := StripNulls(Lines[I]);
+    if (Pos('preflight: {', L) = 1) or (Pos('@@LANEX:', L) = 1) or (Pos('{', TrimLeft(L)) = 1) then
+      Continue;
+    if Length(L) > 160 then
+      L := Copy(L, 1, 157) + '...';
+    Result := Result + L + #13#10;
+  end;
 end;
 
 // Where a person reports a failure Setup cannot fix by itself. The template
@@ -1729,18 +1816,102 @@ begin
   CalculateEstimatesFast;
 end;
 
+// The PC's memory in whole GB, from the preflight's answer ("31.9" -> 31).
+function PcMemoryGB: Integer;
+var
+  S: String;
+  P: Integer;
+begin
+  S := Trim(MemoryGBValue);
+  P := Pos('.', S);
+  if P > 0 then S := Copy(S, 1, P - 1);
+  P := Pos(',', S);
+  if P > 0 then S := Copy(S, 1, P - 1);
+  Result := StrToIntDef(S, 0);
+end;
+
+// What the person's .wslconfig already says for [wsl2] memory, or '' (read only).
+function ExistingWslMemory: String;
+var
+  Raw: AnsiString;
+  Text, Line, Key: String;
+  InSection: Boolean;
+  P: Integer;
+begin
+  Result := '';
+  if not LoadStringFromFile(ExpandConstant('{%USERPROFILE}\.wslconfig'), Raw) then Exit;
+  Text := StripNulls(String(Raw)) + #10;
+  StringChangeEx(Text, #13, '', True);
+  InSection := False;
+  while Text <> '' do
+  begin
+    P := Pos(#10, Text);
+    Line := Trim(Copy(Text, 1, P - 1));
+    Delete(Text, 1, P);
+    if (Line <> '') and (Line[1] = '[') then
+      InSection := CompareText(Line, '[wsl2]') = 0
+    else if InSection and (Pos('=', Line) > 0) then
+    begin
+      Key := Lowercase(Trim(Copy(Line, 1, Pos('=', Line) - 1)));
+      if Key = 'memory' then
+      begin
+        Result := Trim(Copy(Line, Pos('=', Line) + 1, Length(Line)));
+        P := Pos('#', Result);
+        if P > 0 then Result := Trim(Copy(Result, 1, P - 1));
+        Exit;
+      end;
+    end;
+  end;
+end;
+
+procedure FillWslMemoryChoices;
+var
+  Total, GB, N: Integer;
+  Existing: String;
+begin
+  Total := PcMemoryGB;
+  Existing := ExistingWslMemory;
+  WslMemoryCombo.Items.Clear;
+  SetArrayLength(WslMemoryValues, 0);
+  if Existing <> '' then
+    WslMemoryCombo.Items.Add('Keep your setting (' + Existing + ')')
+  else if Total > 0 then
+    WslMemoryCombo.Items.Add('Windows decides (about ' + IntToStr(Total div 2) + ' GB, half of this PC)')
+  else
+    WslMemoryCombo.Items.Add('Windows decides (half of this PC)');
+  N := 1;
+  SetArrayLength(WslMemoryValues, 1);
+  WslMemoryValues[0] := 0;
+  GB := 4;
+  while (Total >= 8) and (GB <= Total - 4) do
+  begin
+    WslMemoryCombo.Items.Add(IntToStr(GB) + ' GB');
+    SetArrayLength(WslMemoryValues, N + 1);
+    WslMemoryValues[N] := GB;
+    N := N + 1;
+    GB := GB + 2;
+  end;
+  WslMemoryCombo.ItemIndex := 0;
+  WslMemoryChoiceGB := 0;
+end;
+
+procedure OnWslMemoryChange(Sender: TObject);
+begin
+  if (WslMemoryCombo.ItemIndex >= 0) and (WslMemoryCombo.ItemIndex < GetArrayLength(WslMemoryValues)) then
+    WslMemoryChoiceGB := WslMemoryValues[WslMemoryCombo.ItemIndex]
+  else
+    WslMemoryChoiceGB := 0;
+end;
+
 procedure OnProfileOptionChange(Sender: TObject);
 begin
   if ProfileRadioRecommended.Checked then
   begin
     ProfileDescLabel.Caption :=
-      'Recommended Profile Overview:'#13#10#13#10 +
       '• Container engine: Docker'#13#10 +
       '• Flow && Visualization: Matched LibreLane container image, GDS3D'#13#10 +
       '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
-      '• Technology: SkyWater 130 nm (sky130A) starter libraries'#13#10 +
-      '• Turnkey flow: Tools, viewers and SKY130A. Ready to design.'#13#10 +
-      '  (Docker, all supported tools, simulation, linting, waveforms, and layout).';
+      '• Technology: SkyWater 130 nm (sky130A) starter libraries';
     ProfileDescLabel.Visible := True;
     CustomCheckListBox.Visible := False;
     SharedHelperLabel.Visible := True;
@@ -1749,12 +1920,10 @@ begin
   else if ProfileRadioComplete.Checked then
   begin
     ProfileDescLabel.Caption :=
-      'Complete Profile Overview:'#13#10#13#10 +
       '• Container engine: Docker'#13#10 +
       '• Flow && Visualization: Matched LibreLane container image, GDS3D'#13#10 +
       '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
-      '• Technology: SKY130A, SKY130B, gf180mcuD, and ihp-sg13g2 with all published libraries'#13#10 +
-      '• Complete flow: All supported tools and PDKs. Largest download.';
+      '• Technology: SKY130A, SKY130B, gf180mcuD, and ihp-sg13g2 with all published libraries';
     ProfileDescLabel.Visible := True;
     CustomCheckListBox.Visible := False;
     SharedHelperLabel.Visible := True;
@@ -1763,7 +1932,6 @@ begin
   else if ProfileRadioMinimal.Checked then
   begin
     ProfileDescLabel.Caption :=
-      'Minimal Profile Overview:'#13#10#13#10 +
       '• Installs the isolated LanEx application core and Python cockpit only.'#13#10 +
       '• Fastest installation with the smallest download and disk footprint.'#13#10 +
       '• LanEx application only; tools and PDKs can be installed later on demand.';
@@ -2032,13 +2200,48 @@ begin
   SummaryStatusLabel.Caption := 'Checking space...';
   SummaryStatusLabel.Font.Style := [fsBold];
 
+  // Memory for Linux: optional, with a default that writes nothing.
+  WslMemoryLabel := TLabel.Create(WizardForm);
+  WslMemoryLabel.Parent := ConfigurePage.Surface;
+  WslMemoryLabel.Left := ScaleX(4);
+  WslMemoryLabel.Top := SummaryPanel.Top - ScaleY(62);
+  WslMemoryLabel.Caption := 'Memory for &Linux (WSL):';
+  WslMemoryLabel.Anchors := [akLeft, akBottom];
+
+  WslMemoryCombo := TNewComboBox.Create(WizardForm);
+  WslMemoryCombo.Parent := ConfigurePage.Surface;
+  WslMemoryCombo.Left := WslMemoryLabel.Left + WslMemoryLabel.Width + ScaleX(8);
+  WslMemoryCombo.Top := WslMemoryLabel.Top - ScaleY(3);
+  WslMemoryCombo.Width := ConfigurePage.Surface.ClientWidth - WslMemoryCombo.Left - ScaleX(8);
+  WslMemoryCombo.Anchors := [akLeft, akRight, akBottom];
+  WslMemoryCombo.Style := csDropDownList;
+  WslMemoryCombo.OnChange := @OnWslMemoryChange;
+  WslMemoryLabel.FocusControl := WslMemoryCombo;
+  FillWslMemoryChoices;
+
+  WslMemoryHint := TLabel.Create(WizardForm);
+  WslMemoryHint.Parent := ConfigurePage.Surface;
+  WslMemoryHint.Left := ScaleX(4);
+  WslMemoryHint.Top := WslMemoryCombo.Top + WslMemoryCombo.Height + ScaleY(2);
+  WslMemoryHint.Width := ConfigurePage.Surface.ClientWidth - ScaleX(8);
+  WslMemoryHint.AutoSize := False;
+  WslMemoryHint.WordWrap := True;
+  WslMemoryHint.Height := SummaryPanel.Top - WslMemoryHint.Top;
+  WslMemoryHint.Anchors := [akLeft, akRight, akBottom];
+  WslMemoryHint.Font.Color := clGrayText;
+  ProxyDetectedValue := WindowsProxyInUse;
+  WslMemoryHint.Caption := 'Shared by every WSL distribution on this PC; it applies the next time WSL starts.';
+  if ProxyDetectedValue then
+    WslMemoryHint.Caption := WslMemoryHint.Caption + ' This PC uses a proxy: LanEx will use it inside its '
+      + 'own Linux too. Nothing else on this PC changes.';
+
   // Dynamic middle area:
   ProfileDescLabel := TLabel.Create(WizardForm);
   ProfileDescLabel.Parent := ConfigurePage.Surface;
   ProfileDescLabel.Left := ScaleX(8);
   ProfileDescLabel.Top := ScaleY(122);
   ProfileDescLabel.Width := ConfigurePage.Surface.ClientWidth - ScaleX(16);
-  ProfileDescLabel.Height := SummaryPanel.Top - ScaleY(126);
+  ProfileDescLabel.Height := WslMemoryCombo.Top - ScaleY(126);
   ProfileDescLabel.AutoSize := False;
   ProfileDescLabel.WordWrap := True;
   ProfileDescLabel.Anchors := [akLeft, akTop, akRight, akBottom];
@@ -2048,7 +2251,7 @@ begin
   CustomCheckListBox.Left := ScaleX(0);
   CustomCheckListBox.Top := ScaleY(84);
   CustomCheckListBox.Width := ConfigurePage.Surface.ClientWidth;
-  CustomCheckListBox.Height := SummaryPanel.Top - ScaleY(88);
+  CustomCheckListBox.Height := WslMemoryCombo.Top - ScaleY(90);
   CustomCheckListBox.Anchors := [akLeft, akTop, akRight, akBottom];
   CustomCheckListBox.Visible := False;
   CustomCheckListBox.OnClickCheck := @OnCustomCheck;
@@ -3039,6 +3242,45 @@ begin
   end;
 end;
 
+// NetworkEnvParams hands provision.sh the network helper and Windows' snapshot
+// (both read inside the distro through /mnt). Empty parts are left out, so an
+// older snapshot-less path behaves exactly as before.
+function NetworkEnvParams: String;
+var
+  Applier: String;
+begin
+  Result := '';
+  ExtractTemporaryFile('network-apply.py');
+  Applier := ExpandConstant('{tmp}\network-apply.py');
+  Result := 'LANEX_NETWORK_APPLY="' + WindowsToWslPath(Applier) + '" ';
+  if (NetworkSnapshotDir <> '') and FileExists(NetworkSnapshotDir + '\network.json') then
+  begin
+    Result := Result + 'LANEX_NETWORK_FILE="' + WindowsToWslPath(NetworkSnapshotDir + '\network.json') + '" ';
+    if FileExists(NetworkSnapshotDir + '\network-ca.pem') then
+      Result := Result + 'LANEX_NETWORK_CERTS="' + WindowsToWslPath(NetworkSnapshotDir + '\network-ca.pem') + '" ';
+  end;
+end;
+
+// ApplyWslMemoryChoice writes the Configure page's "Memory for Linux" into the
+// person's .wslconfig, through LanEx itself (controller/wslconfig.py: one line
+// changed, everything else kept, a backup first). Never fatal and never
+// a WSL shutdown (that would stop the person's other distributions): it applies the next time WSL starts.
+procedure ApplyWslMemoryChoice;
+var
+  Code: Integer;
+begin
+  // Silent installs: /WSLMEMORY=<GB> (whole GB; anything else writes nothing).
+  if WizardSilent then
+    WslMemoryChoiceGB := StrToIntDef(ExpandConstant('{param:WSLMEMORY|0}'), 0);
+  if (WslMemoryChoiceGB < 2) or ((PcMemoryGB > 0) and (WslMemoryChoiceGB > PcMemoryGB)) then Exit;
+  if RunLogged(WslExe, '-d ' + DistroNameValue + ' -u {#AppUser} -- /home/{#AppUser}/.local/bin/lanex --set-wsl-memory '
+      + IntToStr(WslMemoryChoiceGB), Code) and (Code = 0) then
+    AppendLiveLine('  Memory for Linux set to ' + IntToStr(WslMemoryChoiceGB)
+      + ' GB in your .wslconfig. It applies the next time WSL starts.')
+  else
+    AppendLiveLine('  Memory for Linux was not changed (see the log); you can set it later in LanEx -> Tools.');
+end;
+
 function ProvisionDistro: String;
 var
   ScriptPath, InstallPath, WheelPath, ConstraintPath, LockPath, ManifestPath, LinuxPath, LinuxInstall,
@@ -3078,6 +3320,7 @@ begin
     + 'LANEX_PIP_LOCK="' + WindowsToWslPath(LockPath) + '" '
     + 'LANEX_BUILD_MANIFEST="' + LinuxManifest + '" LANEX_SETUP_CHOICES="' + LinuxChoices + '" '
     + 'LANEX_UPDATE_MODE="' + UpdateModeValue + '" '
+    + NetworkEnvParams
     + 'bash "' + LinuxPath + '" base';
   repeat
     SetPhase(4, 6, 'Preparing the base LanEx environment...');
@@ -3158,7 +3401,8 @@ begin
   LinuxChoices := WindowsToWslPath(StateFile);
   Params := '-d ' + DistroNameValue + ' -u root -- env '
     + 'LANEX_USER="lanex" LANEX_BUILD_MANIFEST="' + LinuxManifest + '" '
-    + 'LANEX_SETUP_CHOICES="' + LinuxChoices + '" COLUMNS=120 LINES=40 TERM=dumb bash "' + LinuxScript + '" finalize';
+    + 'LANEX_SETUP_CHOICES="' + LinuxChoices + '" ' + NetworkEnvParams
+    + 'COLUMNS=120 LINES=40 TERM=dumb bash "' + LinuxScript + '" finalize';
   repeat
     SetPhase(6, 6, 'Installing and verifying the selected tools, image, and PDKs...');
     if RunLogged(WslExe, Params, Code) and (Code = 0) then
@@ -3634,6 +3878,11 @@ begin
     end;
   until False;
 
+  // What Windows knows about this network (proxy per site, company
+  // certificates), for LanEx's Linux: apt, Docker and pip run there, not here.
+  SetPhase(1, 6, 'Reading this PC''s network settings...');
+  TakeNetworkSnapshot;
+
   // Download and import — skipped when the appliance distro is already registered.
   if not DistroExists then
   begin
@@ -3790,6 +4039,7 @@ begin
     CompleteUpdateCheckpoint(True);
     Exit;
   end;
+  ApplyWslMemoryChoice;
   // NOTE: Rollback checkpoint is committed in CurStepChanged(ssPostInstall) ONLY after Windows files are verified!
   if ProgressBar <> nil then
     ProgressBar.Position := 100;

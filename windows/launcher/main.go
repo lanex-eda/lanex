@@ -76,6 +76,9 @@ const (
 )
 
 func main() {
+	if len(os.Args) == 4 && os.Args[1] == "--preview-start-window" {
+		os.Exit(previewStartWindow(os.Args[2], os.Args[3]))
+	}
 	if err := loadApplianceConfig(); err != nil {
 		logf("launcher ownership/readiness validation failed: %v", err)
 		showError("LanEx is not ready to launch.\n\n" + err.Error() +
@@ -90,55 +93,120 @@ func main() {
 		// mostly covers anyway.
 		logf("single-instance check failed: %v", err)
 	}
+	// "Try again" on the start window starts a new LanEx while this one is
+	// still closing: wait for it to let go of the instance.
+	if !first && len(os.Args) > 1 && os.Args[1] == "--wait-instance" {
+		for i := 0; i < 40 && !first; i++ {
+			// Our own handle keeps the name alive: let go of it before asking again.
+			if instanceMutex != 0 {
+				windows.CloseHandle(instanceMutex)
+				instanceMutex = 0
+			}
+			time.Sleep(250 * time.Millisecond)
+			first, _ = acquireSingleInstance()
+		}
+	}
 	if !first {
 		secondInstance()
 		return
 	}
 
+	// The "Starting LanEx" window (startwin.go): shows itself if this takes
+	// longer than a moment, and carries every failure below.
+	sw := startWindowBegin()
+	// What Windows knows about the network, for LanEx's Linux (network.ps1).
+	// In the background: it never delays the start.
+	go refreshNetworkSnapshot()
+
 	present, err := distroPresent()
 	if err != nil {
 		// loadApplianceConfig already found the registration in the registry, so
 		// this is WSL itself failing (service stuck, an update half-applied).
-		showError(fmt.Sprintf("Windows Subsystem for Linux is not responding, so LanEx cannot "+
-			"start.\n\n%v\n\nRestart Windows, then open LanEx again. If it keeps happening, "+
-			"run Repair LanEx from the Start menu; it keeps your projects and PDKs."+
-			"\n\nDetails are in:\n%s", err, logPath()))
+		handleStartChoice(sw.fail(startFail{kind: failWSL,
+			title: "Windows' Linux (WSL) is not responding",
+			body: fmt.Sprintf("LanEx cannot start because WSL did not answer (%v).\n\n"+
+				"Restart Windows, then open LanEx again. If it keeps happening, run Repair LanEx "+
+				"from the Start menu; it keeps your projects, your PDKs and your other WSL distributions.", err)}))
 		os.Exit(1)
 	}
 	if !present {
 		// Only reachable if the appliance was removed behind Setup's back
 		// (`wsl --unregister` on LanEx's recorded distro). Setup's Repair
-		// re-imports it under the recorded name and folder, so the cached Setup
-		// is offered first; the download page only when that copy is gone.
-		if setup := cachedSetupPath(); fileExists(setup) {
-			if askYesNo("LanEx's environment is missing: Windows no longer lists it.\n\n" +
-				"Repair LanEx sets it up again. Projects in your LanEx-Projects folder are " +
-				"untouched.\n\nDetails are in:\n" + logPath() + "\n\nRun Repair now?") {
-				if err := exec.Command(setup, "/REPAIR=1").Start(); err != nil {
-					logf("could not start Repair: %v", err)
-					showError("LanEx could not start Repair.\n\n" + err.Error() +
-						"\n\nRun Repair LanEx from the Start menu, or install LanEx again from:\n" + releasesURL)
-				}
-			}
-			os.Exit(1)
-		}
-		if askYesNo("LanEx's environment is missing: Windows no longer lists it.\n\n" +
-			"Install LanEx again to restore it. Projects in your LanEx-Projects folder are " +
-			"untouched.\n\nDetails are in:\n" + logPath() + "\n\nOpen the download page now?") {
-			openURL(releasesURL)
-		}
+		// re-imports it under the recorded name and folder.
+		handleStartChoice(sw.fail(startFail{kind: failMissing,
+			title: "LanEx's environment is missing",
+			body: "Windows no longer lists LanEx's Linux environment, so LanEx cannot start.\n\n" +
+				"Repair LanEx sets it up again. Projects in your LanEx-Projects folder are untouched, " +
+				"and your other WSL distributions are not changed."}))
 		os.Exit(1)
 	}
 
-	server, err := startServer()
+	server, err := startServer(sw)
 	if err != nil {
-		showError(fmt.Sprintf("LanEx could not start its environment.\n\n%v\n\n"+
-			"Try again. If it keeps failing, run Repair LanEx from the Start menu. "+
-			"Repair leaves your projects and other WSL environments untouched."+
-			"\n\nDetails are in:\n%s", err, logPath()))
+		handleStartChoice(sw.fail(startFail{kind: failStart,
+			title: "LanEx could not start its environment",
+			body: fmt.Sprintf("%v\n\nTry again. If it keeps failing, run Repair LanEx: it leaves your "+
+				"projects and other WSL environments untouched.", err)}))
 		os.Exit(1)
 	}
-	runTray(server)
+	runTray(server, sw)
+}
+
+// handleStartChoice does what the person chose on the start window's failure
+// page. The caller exits afterwards.
+func handleStartChoice(action int) {
+	switch action {
+	case actTryAgain:
+		exe, err := os.Executable()
+		if err == nil {
+			err = exec.Command(exe, "--wait-instance").Start()
+		}
+		if err != nil {
+			logf("could not start LanEx again: %v", err)
+		}
+	case actRepair:
+		if setup := cachedSetupPath(); fileExists(setup) {
+			if err := exec.Command(setup, "/REPAIR=1").Start(); err != nil {
+				logf("could not start Repair: %v", err)
+				showError("LanEx could not start Repair.\n\n" + err.Error() +
+					"\n\nRun Repair LanEx from the Start menu, or install LanEx again from:\n" + releasesURL)
+			}
+			return
+		}
+		openURL(releasesURL)
+	}
+}
+
+// refreshNetworkSnapshot runs network.ps1 (installed next to LanEx.exe) into
+// %LOCALAPPDATA%\LanEx\state. The server applies a changed snapshot to the
+// distro by itself (controller/netsettings.py). Bounded to 45 s.
+func refreshNetworkSnapshot() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	script := filepath.Join(filepath.Dir(exe), "network.ps1")
+	if !fileExists(script) {
+		return
+	}
+	out := filepath.Join(os.Getenv("LOCALAPPDATA"), installDir, "state")
+	cmd := hiddenCmd(filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-OutDir", out)
+	if err := cmd.Start(); err != nil {
+		logf("network snapshot: %v", err)
+		return
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			logf("network snapshot: %v", err)
+		}
+	case <-time.After(45 * time.Second):
+		_ = cmd.Process.Kill()
+		logf("network snapshot: Windows did not answer within 45 s")
+	}
 }
 
 // secondInstance handles a click on the icon while LanEx is already running:

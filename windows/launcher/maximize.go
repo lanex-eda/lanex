@@ -49,6 +49,10 @@ const (
 	maximizePoll    = 100 * time.Millisecond
 )
 
+// onAppWindowShown runs once the LanEx app window is on screen (the start
+// window closes then).
+var onAppWindowShown func()
+
 // enumMu serializes EnumWindows so the single callback below can collect into
 // one shared map. The callback is created once: syscall.NewCallback slots are
 // never freed, and the poll loop would otherwise use one per tick.
@@ -100,6 +104,9 @@ func maximizeNewAppWindow(before map[windows.HWND]string, port int) {
 			}
 			if zoomed, _, _ := procIsZoomed.Call(uintptr(h)); zoomed == 0 {
 				procShowWindow.Call(uintptr(h), swMaximize)
+			}
+			if f := onAppWindowShown; f != nil {
+				f()
 			}
 			return
 		}

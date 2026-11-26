@@ -325,6 +325,13 @@ jobs:
         env:
           LANEX_REQUESTED_VERSION: ${{ inputs.candidate_version }}
 
+      # G22: a release must never send the Unix one-liner to main. Every
+      # installer in a tagged tree carries the tag (stamp_release_ref.py).
+      - name: Release ref in the Unix installers
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: python scripts/stamp_release_ref.py --check-artifact scripts --tag $env:GITHUB_REF_NAME
+
       - name: Bind exact candidate payload and manifest inputs
         shell: pwsh
         env:

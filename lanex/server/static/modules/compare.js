@@ -295,12 +295,17 @@ function paintHeads(root) {
 
 // How far a number moved from the reference: the shared delta
 // (metricfmt.delta). `meta` is the metric's metric_meta entry; `key` names the
-// metric when known (else `unit` stands for its kind).
-export function deltaOf(v, ref, meta, unit = "", key = null) {
+// metric when known (else `unit` stands for its kind). `scale` is the row's
+// (MF.scaleOf), so a power or voltage delta reads in the unit its row is
+// labelled with, never in the reference value's own prefix.
+export function deltaOf(v, ref, meta, unit = "", key = null, scale = null) {
   if (typeof v !== "number" || typeof ref !== "number" || !Number.isFinite(v) || !Number.isFinite(ref)) return null;
   const k = key || (unit === "ns" ? "timing__setup__ws" : unit === "µm²" ? "design__die__area" : unit === "µm" ? "route__wirelength" : unit === "mW" || unit === "W" ? "power__total" : "");
+  // A summary row in mW without a metric key: its numbers are already mW.
+  if (!key && unit === "mW") { v /= 1000; ref /= 1000; scale = { div: 1e-3, unit: "mW" }; }
   const known = meta && meta.direction_known !== false && typeof meta.higher_is_better === "boolean";
-  const dl = MF.delta(k, v, ref, null, { dir: known ? (meta.higher_is_better ? 1 : -1) : 0 });
+  const fx = key ? MF.fixedDirection(key) : null;
+  const dl = MF.delta(k, v, ref, null, { scale, dir: fx != null ? fx : known ? (meta.higher_is_better ? 1 : -1) : 0 });
   if (!dl) return null;
   if (dl.same) return { text: "same", cls: "is-same", dl };
   return { text: dl.text, cls: dl.cls, dl };
@@ -373,7 +378,7 @@ function summaryHtml(data, cols) {
         const bv = raw && base ? raw[ref.col] : null;
         let d = null;
         if (i && row && base) {
-          d = typeof rv === "number" && typeof bv === "number" ? deltaOf(rv, bv, meta[key], "", key) : deltaOf(row.value, base.value, meta[row.key], row.unit);
+          d = typeof rv === "number" && typeof bv === "number" ? deltaOf(rv, bv, meta[key], "", key, scale) : deltaOf(row.value, base.value, meta[row.key], row.unit);
           if (d && d.dl && d.dl.dir === 0 && key) d.cls = "";
         }
         return summaryCellHtml(row, d, raw && row ? { key, value: rv, scale } : null, i === 0);
@@ -513,7 +518,7 @@ function paintMetrics(out, data, cols, filter) {
     const cells = cols.map((c, i) => {
       if (!sub && g && !g.self) return "<td class='" + (i === 0 ? "is-ref" : "") + "'></td>";
       const v = per[c.col];
-      const d = i ? deltaOf(v, per[ref.col], m, "", k) : null;
+      const d = i ? deltaOf(v, per[ref.col], m, "", k, scale) : null;
       if (d && d.dl && !dir) d.cls = "";
       const s = v === undefined || v === null ? null : metricShown(k, v, scale);
       return "<td class='" + (i === 0 ? "is-ref" : "") + "'" + fmt.titleAttr(v) + "><span class='cmp-v'>" + esc(!s ? "—" : s.text) + "</span>" +

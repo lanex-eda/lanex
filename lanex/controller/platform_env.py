@@ -809,8 +809,10 @@ def diagnose_network_failure(output: str = "", *,
         remediation = "Refresh the package index with bounded retries, preserving downloaded package caches."
     elif "407" in low or "proxy authentication required" in low:
         category = "proxy-auth"
-        summary = "The configured proxy requires authentication."
-        remediation = "Provide an explicit HTTP(S) proxy URL or ask the administrator for shell proxy settings; PAC files are not shell proxy URLs."
+        summary = "The network's proxy asks for a sign-in that LanEx's Linux tools can't do."
+        remediation = ("apt, Docker and pip cannot sign in to a proxy, and LanEx never stores passwords. "
+                       "Ask your IT team to let the download sites through without a sign-in, or run a "
+                       "sign-in helper such as px on Windows and use it as the proxy.")
     elif "429" in low or "too many requests" in low or "rate limit" in low:
         category, retryable = "rate-limit", True
         summary = "The remote service rate-limited the request."
@@ -929,6 +931,11 @@ def wsl_windows_home() -> Optional[str]:
     """
     if not is_wsl():
         return None
+    # The Windows launcher hands it over through WSLENV (USERPROFILE/p), which
+    # works even where WSL's interop is off (systemd can unregister it).
+    env_home = os.environ.get("USERPROFILE", "")
+    if env_home.startswith("/mnt/") and Path(env_home).is_dir():
+        return env_home
     try:
         import subprocess
         out = subprocess.run(
@@ -1008,6 +1015,14 @@ def network_status() -> dict:
         "category": diagnosis["category"] if diagnosis else None,
         "remediation": diagnosis["remediation"] if diagnosis else None,
     }
+
+
+# One lock for every read-change-write of $LANEX_HOME/settings.json in this
+# process (installer's PDK folder, the job queue's settings): two saves at
+# once must not lose one. Hold it across the read and the write.
+import threading as _threading  # noqa: E402
+
+SETTINGS_LOCK = _threading.RLock()
 
 
 def atomic_write_text(path, text: str, *, encoding: str = "utf-8") -> None:

@@ -1229,22 +1229,27 @@ def _loc(v: Any) -> Optional[List[float]]:
 def straps(model: Dict[str, Any], axis: str) -> List[Tuple[str, float, float]]:
     """``(net, lo, hi)`` bands of the core grid's straps: axis ``"h"`` gives the
     horizontal straps (their y extent), ``"v"`` the vertical ones (x). VDD
-    first, ground one width plus spacing along (``-starts_with POWER``)."""
+    first, ground one width plus spacing along (``-starts_with POWER``).
+
+    pdngen's offset is the power strap's *centre line*, so each strap is
+    centre ± width/2: the SRAM template's DEF has met5 VPWR at 26.73-28.33
+    (core 10.88 + offset 16.65 = 27.53, its centre) and VGND at 30.03-31.63."""
     core = (model.get("core") or {}).get("box")
     p = (model.get("pdn") or {}).get(axis) or {}
     if not core or not p.get("pitch"):
         return []
     lo, hi = (core[1], core[3]) if axis == "h" else (core[0], core[2])
+    half = p["w"] / 2
     out = []
     k = 0
     while k < 2000:
-        a = lo + p["off"] + k * p["pitch"]
-        if a > hi:
+        c = lo + p["off"] + k * p["pitch"]
+        if c > hi:
             break
-        b = a + p["w"] + p["s"]
-        out.append(("power", a, a + p["w"]))
-        if b + p["w"] <= hi + 1e-6:
-            out.append(("ground", b, b + p["w"]))
+        g = c + p["w"] + p["s"]
+        out.append(("power", c - half, c + half))
+        if g + half <= hi + 1e-6:
+            out.append(("ground", g - half, g + half))
         k += 1
     return out
 

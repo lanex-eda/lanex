@@ -1538,7 +1538,8 @@ check("analytics: counts stay integers, units come from the metric", () => {
 });
 
 check("analytics: OpenSTA's 1e30 'no path' sentinel and +inf are never spelled out", () => {
-  assert.equal(AM.show("timing__setup_r2r__ws", 1e30).text, "+1.00e+30");
+  // F3 (review R3): "no path", the words OpenSTA's 1e30 stands for, not "+1.00e+30 ns".
+  assert.equal(AM.show("timing__setup_r2r__ws", 1e30).text, "no path");
   assert.equal(AM.show("timing__setup_r2r__ws", "Infinity").text, "\u221e");
   assert.equal(AM.num(null), "\u2014", "absent stays an em-dash, never 0");
 });
@@ -3729,6 +3730,224 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
     const fc = readFileSync(resolve(MOD, "floorplan-canvas.js"), "utf8");
     assert.match(fc, /from "\.\/macro-place\.js"/);
     assert.match(readFileSync(resolve(MOD, "cells-macros.js"), "utf8"), /createFloorplanCanvas\(/);
+  });
+}
+
+// ------------------------------------------------ fix lane F3: results read like the tools' reports
+{
+  const VMf = await import(toUrl(resolve(MOD, "verify-model.js")));
+  const SMf = await import(toUrl(resolve(MOD, "studymodel.js")));
+  const done = { step_count: 70, steps_done: 70, steps_failed: 0 };
+  check("F3 verdict: an input-to-output path timed with no clock on the registers is 'Timing was never checked'", () => {
+    const nc = { clock_port: "clock", registers: 24, unclocked: 24, io_paths: true, port_missing: true };
+    const rep = { verdict: { state: "incomplete", missing_core: ["setup", "hold"], skipped_core: [], blocker_ids: [], warning_ids: [], total: 20 },
+      flow_state: { state: "complete" }, run_verdict: { state: "incomplete", label: "Timing not checked: no clock", no_clock: true },
+      checks: [{ id: "setup", name: "Setup violations", status: "not_run", no_clock: nc }, { id: "hold", name: "Hold violations", status: "not_run" }] };
+    const cp = VMf.verdictCopy(rep);
+    assert.equal(cp.title, "Timing was never checked");
+    assert.match(cp.sub, /only the paths from an input straight to an output/);
+    assert.match(cp.sub, /24 flip-flop clock pins with no clock/);
+    assert.match(cp.sub, /CLOCK_PORT is "clock", a port the top module doesn't have/);
+    // Studies: never "met timing", the point reads "Not timed: no clock".
+    const run = { ...done, verdict: { state: "incomplete", no_clock: true }, key_metrics: { timing__setup__ws: 4.39, timing__hold__ws: 4.2 } };
+    const key = SMf.pointKey({ run });
+    assert.equal(key, "failed");
+    assert.equal(SMf.metTiming(key, run), false);
+    assert.equal(SMf.pointWords(key, { run }).word, "Not timed: no clock");
+  });
+  check("F3 verdict: some flip-flops with no clock is a warning with the count, never plain Clean or 'met timing'", () => {
+    const rep = { verdict: { state: "ready", missing_core: [], skipped_core: [], blocker_ids: [], warning_ids: ["setup"], total: 20 },
+      flow_state: { state: "complete" }, run_verdict: { state: "warning", label: "Finished: 8 flip-flop clock pins not timed", unclocked: 8 },
+      checks: [{ id: "setup", name: "Setup violations", status: "warn", unclocked: 8, unclocked_warn: true, gate_note: "TIMING_VIOLATION_CORNERS = *tt*" }] };
+    const cp = VMf.verdictCopy(rep);
+    assert.equal(cp.tone, "warn");
+    assert.equal(cp.title, "Finished: 8 flip-flop clock pins not timed");
+    assert.match(cp.sub, /^8 flip-flop clock pins have no clock/);
+    assert.doesNotMatch(cp.sub, /TIMING_VIOLATION_CORNERS/);
+    const run = { ...done, verdict: { state: "warning", unclocked: 8 }, key_metrics: { timing__setup__ws: 4.39, timing__hold__ws: 0.2 } };
+    const key = SMf.pointKey({ run });
+    assert.equal(key, "warnings");
+    assert.equal(SMf.metTiming(key, run), false);
+    const clean = { ...done, verdict: { state: "passed" }, key_metrics: { timing__setup__ws: 4.39, timing__hold__ws: 0.2 } };
+    assert.equal(SMf.metTiming(SMf.pointKey({ run: clean }), clean), true, "a clocked clean run still met timing");
+  });
+
+  const MFf = await import(toUrl(resolve(MOD, "metricfmt.js")));
+  const CMPf = await import(toUrl(resolve(MOD, "compare.js")));
+  const AMf = await import(toUrl(resolve(MOD, "analytics-model.js")));
+  const MPf = await import(toUrl(resolve(MOD, "macro-place.js")));
+  // The number a delta text stands for, in base units, given the unit it reads in.
+  const FACTOR = { W: 1, mW: 1e-3, "µW": 1e-6, nW: 1e-9, pW: 1e-12, V: 1, mV: 1e-3, ns: 1, "µm²": 1, "µm": 1, "": 1 };
+  const valueOf = (txt, unit) => Number(txt.replace("−", "-").replace(/,/g, "").replace(/[^\d.+-].*$/, "")) * FACTOR[unit];
+  check("F3 compare: a power delta reads in its row's prefix (0.500 mW -> 2.000 mW is +1.500, not +1,500.0)", () => {
+    const k = "power__total", vals = [0.0005, 0.002];
+    const scale = MFf.scaleOf(k, vals);
+    assert.equal(scale.unit, "mW");
+    const d = CMPf.deltaOf(0.002, 0.0005, { higher_is_better: false, direction_known: true }, "", k, scale);
+    assert.equal(d.text, "+1.500 +300%");
+    assert.equal(d.cls, "is-worse");
+    // A summary row in mW with no metric key: its numbers are already mW.
+    assert.equal(CMPf.deltaOf(2, 0.5, null, "mW").dl.absText, "+1.500");
+    // Without a row scale, the prefix of the larger value, never the reference's.
+    const bare = MFf.delta(k, 0.002, 0.0005, null);
+    assert.equal(bare.unit, "mW");
+    assert.equal(bare.absText, "+1.500");
+  });
+  check("F3 compare: an IR-drop delta reads in mV under its mV label (never +1.00e-4)", () => {
+    const k = "ir__drop__worst", scale = MFf.scaleOf(k, [0.0015, 0.0016]);
+    assert.equal(scale.unit, "mV");
+    assert.equal(MFf.showAt(k, 0.0016, scale).text, "1.6");
+    const d = CMPf.deltaOf(0.0016, 0.0015, null, "", k, scale);
+    assert.equal(d.dl.absText, "+0.1");
+    assert.equal(d.dl.unit, "mV");
+  });
+  check("F3 compare + runs: every unit's delta is in the unit its row or column is labelled with", () => {
+    // [key, reference, value]: the units Compare and Runs show.
+    const cases = [
+      ["timing__setup__ws", 0.52, 0.31], ["timing__hold__tns", -0.2, 0], ["clock__skew__worst_setup", 0.012, 0.03],
+      ["power__total", 0.0005, 0.002], ["power__internal__total", 3.2e-6, 4.1e-6], ["power__leakage__total", 2e-9, 2.6e-9],
+      ["ir__drop__worst", 0.0015, 0.0016], ["design_powergrid__drop__worst__net:VPWR", 0.0003, 0.0005],
+      ["design_powergrid__voltage__worst__net:VPWR", 1.7996, 1.7851], ["design_powergrid__drop__average__net:VPWR", 1.79997, 1.7801],
+      ["design_powergrid__drop__average__net:VGND", 0.000308, 0.000412],
+      ["design__die__area", 10000, 12100], ["design__instance__area", 523.4, 610.2], ["route__wirelength", 4210, 3980],
+      ["design__instance__count", 324, 410], ["timing__setup_vio__count", 0, 102],
+    ];
+    for (const [k, ref, v] of cases) {
+      // Compare: the row's scale; the label is scale.unit or show(k, 1).unit.
+      const scale = MFf.scaleOf(k, [ref, v]);
+      const label = scale ? scale.unit : MFf.show(k, 1).unit;
+      const dc = MFf.delta(k, v, ref, null, { scale });
+      assert.equal(dc.unit, label, k + " in Compare");
+      assert.ok(Math.abs(valueOf(dc.absText, dc.unit) - (v - ref)) <= Math.abs(v - ref) * 0.01 + 1e-12, k + ": " + dc.absText + " " + dc.unit);
+      // Every cell of the row is in that unit too.
+      if (scale) assert.equal(MFf.showAt(k, v, scale).unit, label, k + " cell");
+      // Runs: power columns pass their scale; the rest are labelled show(k, 1).unit.
+      const runsScale = MFf.unitOf(MFf.parseKey(k).base) === "W" ? scale : null;
+      const runsLabel = runsScale ? runsScale.unit : MFf.show(k, 1).unit;
+      const dr = MFf.delta(k, v, ref, null, { scale: runsScale });
+      assert.equal(dr.unit, runsLabel, k + " in Runs");
+      assert.ok(Math.abs(valueOf(dr.absText, dr.unit) - (v - ref)) <= Math.abs(v - ref) * 0.01 + 1e-12, k + " Runs: " + dr.absText + " " + dr.unit);
+    }
+    // Utilisation: percentage points, under a % label.
+    assert.equal(MFf.delta("design__instance__utilization", 0.62, 0.55, null).absText, "+7.0 pt");
+    assert.equal(MFf.delta("runtime", 95, 50, null).absText, "+45 s");
+  });
+  check("F3 metricfmt: OpenSTA's 1e30 slack is 'no path', never '+1.00e+30 ns', and has no delta", () => {
+    const s = MFf.show("timing__setup_r2r__ws", 1e30);
+    assert.equal(s.text, "no path");
+    assert.equal(s.unit, "");
+    assert.equal(MFf.showText("timing__hold_r2r__ws__corner:max_ss_100C_1v60", 1e30), "no path");
+    assert.equal(MFf.delta("timing__setup_r2r__ws", 1e30, 4.1, null), null);
+    assert.equal(MFf.delta("timing__setup_r2r__ws", 1e30, 1e30, null).same, true);
+    assert.equal(MFf.show("timing__setup__ws", 4.1).text, "+4.100");
+  });
+  check("F3 directions: drop__average is a voltage, so higher is better on a power net and lower on ground", () => {
+    const meta = { design_powergrid__drop__average: { higher_is_better: false, direction_known: true } };
+    assert.equal(MFf.direction("design_powergrid__drop__average__net:VPWR__corner:nom_tt_025C_1v80", meta), 1);
+    assert.equal(MFf.direction("design_powergrid__drop__average__net:VGND__corner:nom_tt_025C_1v80", meta), -1);
+    assert.equal(MFf.direction("design_powergrid__drop__average", meta), 0);
+    const m = new Map([["design_powergrid__drop__average", { higher_is_better: false }]]);
+    assert.equal(AMf.directionOf(m, "design_powergrid__drop__average__net:vccd1"), 1);
+    assert.equal(AMf.directionOf(m, "design_powergrid__drop__average__net:VSS"), -1);
+    // Compare colours it the same way (VPWR's average voltage fell: worse).
+    const d = CMPf.deltaOf(1.7801, 1.79997, meta.design_powergrid__drop__average, "", "design_powergrid__drop__average__net:VPWR",
+      MFf.scaleOf("design_powergrid__drop__average__net:VPWR", [1.7801, 1.79997]));
+    assert.equal(d.cls, "is-worse");
+    assert.equal(MFf.direction("design_powergrid__drop__worst", meta), 0, "other metrics keep the registry's word");
+  });
+  check("F3 violations: LibreLane's corner sum says so, with the worst corner's own count", () => {
+    const m = { timing__setup_vio__count: 102, "timing__setup_vio__count__corner:max_ss_100C_1v60": 36,
+      "timing__setup_vio__count__corner:nom_ss_100C_1v60": 31, "timing__setup_vio__count__corner:min_ss_100C_1v60": 35 };
+    const cs = MFf.cornerSum(m, "timing__setup_vio__count");
+    assert.deepEqual(cs, { total: 102, n: 3, worst: 36, corner: "max_ss_100C_1v60" });
+    assert.equal(MFf.cornerSumWords(cs), "summed over 3 corners; 36 in the worst corner");
+    assert.equal(MFf.cornerSum(m, "design__max_slew_violation__count"), null, "slew is LibreLane's max, not a sum");
+    const c = { id: "setup", value: 102, metric: "timing__setup_vio__count", corners: [
+      { corner: "max_ss_100C_1v60", value: 36, gating: true }, { corner: "nom_ss_100C_1v60", value: 31, gating: true }, { corner: "min_ss_100C_1v60", value: 35, gating: true }] };
+    assert.equal(VMf.vioCountText(c), "102 violating (summed over 3 corners; 36 in the worst corner)");
+    const warnOnly = { ...c, corners: c.corners.map((r, i) => ({ ...r, gating: i === 0 })) };
+    assert.equal(VMf.vioCountText(warnOnly), "102 violating (summed over 3 corners; 36 in the worst corner, 36 in checked corners)");
+    assert.equal(VMf.vioCountText({ ...c, value: 0, corners: c.corners.map((r) => ({ ...r, value: 0 })) }), "0 violating");
+  });
+  check("F3 macros: a power strap is its offset ± width/2, as the SRAM template's DEF has it", () => {
+    const model = { core: { box: [5.52, 10.88, 694.14, 587.52] },
+      pdn: { vlayer: "met4", hlayer: "met5", v: { w: 1.6, s: 1.7, pitch: 153.6, off: 16.32 }, h: { w: 1.6, s: 1.7, pitch: 153.18, off: 16.65 } },
+      macros: { tiny: { ok: true, w: 20, h: 8, prects: [["VPWR", "power", "met4", 1, 0, 2, 8], ["VGND", "ground", "met4", 3, 0, 4, 8]] } } };
+    const near = (a, b) => Math.abs(a - b) < 1e-6;
+    const h = MPf.straps(model, "h");
+    assert.ok(h[0][0] === "power" && near(h[0][1], 26.73) && near(h[0][2], 28.33), JSON.stringify(h[0]));
+    assert.ok(h[1][0] === "ground" && near(h[1][1], 30.03) && near(h[1][2], 31.63), JSON.stringify(h[1]));
+    assert.ok(near((h[2][1] + h[2][2]) / 2, 180.71));
+    const v = MPf.straps(model, "v");
+    assert.ok(near((v[0][1] + v[0][2]) / 2, 21.84) && near((v[1][1] + v[1][2]) / 2, 25.14));
+    const c = MPf.crossings(model, { macro: "tiny", name: "u", location: [300, 28.35], orientation: "N" });
+    assert.deepEqual([c.power, c.ground], [0, 1]);
+  });
+}
+
+// ---- Tools: LanEx and this computer (toolsys.js, audit plan 5a/5c/5e) ----
+{
+  const sys = await import(toUrl(resolve(MOD, "toolsys.js")));
+  check("toolsys: sizes are 1000-based like Docker and the disk", () => {
+    assert.equal(sys.fmtBytes(7_524_000_000), "7.5 GB");
+    assert.equal(sys.fmtBytes(512_000_000), "512 MB");
+    assert.equal(sys.fmtBytes(1.2e9, { approx: true }), "about 1.2 GB");
+    assert.equal(sys.fmtBytes(null), "");
+  });
+  check("toolsys: the storage bar names every part in words and numbers, and warns when the disk is low", () => {
+    const ok = sys.storageBarHtml({ drive: "C:", total: 476e9, free: 88.4e9,
+      parts: [{ key: "image", label: "Tool image", bytes: 7.5e9 }, { key: "pdks", label: "PDKs", bytes: 9.6e9 }, { key: "runs", label: "Runs", bytes: 0 }] });
+    assert.match(ok, /88\.4 GB<\/b> free on C:/);
+    assert.match(ok, /LanEx uses <b>17\.1 GB<\/b>/);
+    assert.match(ok, /Tool image <b>7\.5 GB<\/b>/);
+    assert.ok(!/is-runs/.test(ok), "an empty part is left out");
+    assert.match(ok, /role='img' aria-label='C:: 88\.4 GB free of 476 GB; LanEx uses 17\.1 GB'/);
+    assert.ok(!/is-low|is-critical/.test(ok));
+    const low = sys.storageBarHtml({ drive: "C:", total: 256e9, free: 9e9, parts: [] });
+    assert.match(low, /tl-store is-low/);
+    assert.match(low, /needs about 10 GB/);
+    const crit = sys.storageBarHtml({ drive: "C:", total: 256e9, free: 3e9, parts: [] });
+    assert.match(crit, /tl-store is-critical/);
+    assert.match(crit, /data-status='broken'/);
+  });
+  check("toolsys: a status tile is a tl-tile with a word for its state, never colour alone", () => {
+    const h = sys.sysTileHtml({ id: "tl-sys-x", eyebrow: "Network", status: "update", stateText: "Docker not using it",
+      big: "Company proxy", rows: [["Proxy", "<span>p:8080</span>"]], actions: "<button>Check again</button>" });
+    assert.match(h, /class='tl-tile tl-sys-tile is-update'/);
+    assert.match(h, /tl-state is-update'><i><\/i>Docker not using it/);
+    assert.match(h, /<dt>Proxy<\/dt><dd><span>p:8080<\/span><\/dd>/);
+  });
+  check("toolsys: clean-up rows say what goes and how much it frees; an image in use can't be removed", () => {
+    const h = sys.cleanupRowsHtml([
+      { kind: "image", name: "LibreLane 3.0.3 image", ref: "ghcr.io/librelane/librelane:3.0.3", bytes: 1.2e9, in_use: false },
+      { kind: "image", name: "Untagged LibreLane image (abc)", ref: "x", bytes: 2e9, in_use: true },
+      { kind: "pdk-version", name: "Old sky130 version 0fe599b", variants: ["sky130A", "sky130B"], bytes: null }]);
+    assert.match(h, /LibreLane 3\.0\.3 image/);
+    assert.match(h, /1\.2 GB<span class='muted'> of its own/);
+    assert.match(h, /data-clean='1' disabled/);
+    assert.match(h, /sky130A, sky130B/);
+    assert.match(h, /measuring…/);
+  });
+  check("toolsys: the doctor's disk, memory and network problems reach the verdict band", () => {
+    assert.deepEqual(sys.sysAttention(), []);
+    const src = readFileSync(resolve(MOD, "toolsys.js"), "utf8");
+    assert.match(src, /disk: "tl-sys-storage", memory: "tl-sys-memory", network: "tl-sys-network"/);
+    const tools = readFileSync(resolve(MOD, "tools.js"), "utf8");
+    assert.match(tools, /\}\)\.concat\(sysAttention\(\)\);/);
+    assert.match(tools, /!el\.closest\("#tools-system"\)/);
+  });
+  const ub = await import(toUrl(resolve(MOD, "updatebanner.js")));
+  check("update: a version skipped on Tools keeps the banner quiet; a newer one shows", () => {
+    const s = { newer: true, skipped: true, latest: { version: "1.1.0" } };
+    assert.equal(ub.shouldShow(s, ""), false);
+    assert.equal(ub.shouldShow({ ...s, skipped: false }, ""), true);
+    assert.equal(ub.shouldShow({ ...s, skipped: false }, "1.1.0"), false);
+  });
+  check("tools: one PDK variant can be removed on its own, the family as a whole stays one item", () => {
+    const tools = readFileSync(resolve(MOD, "tools.js"), "utf8");
+    assert.match(tools, /"Remove " \+ key \+ " only…", "pdk-remove-variant-btn"/);
+    assert.match(tools, /api\.removePdkVariant\(pdk\)/);
+    assert.ok(!/can only be removed together/.test(tools));
   });
 }
 

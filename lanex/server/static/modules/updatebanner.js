@@ -22,7 +22,9 @@ export function lastStatus() { return _last; }
 
 // Show the card for this status? Not when the person dismissed this version.
 export function shouldShow(s, dismissed) {
-  return !!(s && s.newer && s.latest && s.latest.version && s.latest.version !== dismissed);
+  // `skipped`: "Skip this version" on Tools (kept on the server, so every
+  // window and the Tools tile agree).
+  return !!(s && s.newer && !s.skipped && s.latest && s.latest.version && s.latest.version !== dismissed);
 }
 
 export function bannerHtml(s) {
@@ -66,7 +68,11 @@ async function onClick(e) {
   const what = b.dataset.ub;
   if (what === "close") { _closed = true; paint(_last); }
   else if (what === "dismiss") {
-    if (_last && _last.latest) safeStorage.set(DISMISS_KEY, _last.latest.version);
+    if (_last && _last.latest) {
+      safeStorage.set(DISMISS_KEY, _last.latest.version);
+      // The same "skip this version" the Tools tile shows and can undo.
+      try { _last = await api.updateSkip(_last.latest.version); } catch (_e) { /* the local dismiss holds */ }
+    }
     paint(_last);
     document.dispatchEvent(new CustomEvent("g:update_status", { detail: _last }));
   } else if (what === "settings") {

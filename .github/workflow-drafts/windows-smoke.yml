@@ -1,0 +1,210 @@
+# DRAFT, NOT ENABLED. GitHub only runs workflows in .github/workflows/; this
+# file sits in .github/workflow-drafts/ until the owner decides to enable it
+# (AGENTS.md: enabling a workflow needs the owner's OK). To enable: move it to
+# .github/workflows/windows-smoke.yml.
+#
+# A real install of LanEx-Setup.exe on a GitHub-hosted Windows runner.
+# windows-2025 images ship WSL 2 (3.0.5 in image 20261116), so Setup can import
+# and provision its distro there. What this cannot cover: turning WSL on, the
+# restart and resume, Windows 10, real sleep, Smart App Control. Those stay on
+# the Hyper-V VMs (installer-workspace/work/vm).
+#
+# Nested virtualization on hosted runners is "technically possible, not
+# officially supported", and about 1-2% of jobs that start WSL 2 freeze with
+# step timeouts not firing (actions/runner-images#14938). So: a job-level
+# timeout, manual or nightly runs only, and never a required check.
+#
+# Legs:
+#   1. Minimal install, data preservation (a stock Ubuntu distro must be left
+#      exactly as it was), lanex doctor, the server reached from Windows,
+#      silent uninstall.
+#   2. Company proxy: a logging CONNECT proxy on the runner, set as the
+#      Windows (WinINET) proxy; Setup must reach the download sites through
+#      it from inside Linux (apt, pip) and Docker must pull through it.
+
+name: Windows smoke (draft)
+
+on:
+  workflow_dispatch:
+    inputs:
+      setup_run_id:
+        description: windows-installer.yml run whose LanEx-Setup.exe to test
+        required: true
+  schedule:
+    - cron: "30 3 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  install:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the Setup EXE
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $run = '${{ inputs.setup_run_id }}'
+          if (-not $run) { $run = (gh run list --workflow windows-installer.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId') }
+          gh run download $run --dir setup-artifact
+          $exe = Get-ChildItem setup-artifact -Recurse -Filter LanEx-Setup.exe | Select-Object -First 1
+          if (-not $exe) { throw 'no LanEx-Setup.exe in that run' }
+          Copy-Item $exe.FullName "$env:RUNNER_TEMP\LanEx-Setup.exe"
+      - name: WSL on this runner
+        shell: pwsh
+        run: |
+          $env:WSL_UTF8 = '1'
+          wsl --version
+          wsl -l -v
+      - name: A distro of the user's own, with a marker LanEx must not touch
+        uses: Vampire/setup-wsl@v5
+        with:
+          distribution: Ubuntu-24.04
+          use-cache: false
+      - name: Write the marker
+        shell: pwsh
+        run: |
+          wsl -d Ubuntu-24.04 -- bash -c "echo keep-me > /root/keep.txt && sha256sum /root/keep.txt" | Tee-Object "$env:RUNNER_TEMP\keep.before"
+      - name: Install LanEx (Minimal, silent)
+        shell: pwsh
+        run: |
+          $p = Start-Process "$env:RUNNER_TEMP\LanEx-Setup.exe" -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/PROFILE=minimal',
+            '/DESKTOPSHORTCUT=0', "/LOG=$env:RUNNER_TEMP\setup.log")
+          if ($p.ExitCode -ne 0) { throw "Setup exited $($p.ExitCode)" }
+          $env:WSL_UTF8 = '1'
+          (wsl -l -q) | Select-String -SimpleMatch 'lanex' | Should -Not -BeNullOrEmpty
+      - name: lanex doctor inside the distro
+        shell: pwsh
+        run: |
+          wsl -d lanex -u lanex -- /home/lanex/.local/bin/lanex --version
+          wsl -d lanex -u lanex -- /home/lanex/.local/bin/lanex doctor --offline
+          wsl -d lanex -u lanex -- /home/lanex/.local/bin/lanex doctor --json --offline > "$env:RUNNER_TEMP\doctor.json"
+          $r = Get-Content "$env:RUNNER_TEMP\doctor.json" -Raw | ConvertFrom-Json
+          $r.checks.Count | Should -Be 12
+          # Minimal: no image and no PDK are expected problems; nothing else may fail.
+          $bad = $r.checks | Where-Object { $_.status -eq 'fail' -and $_.id -notin @('image', 'pdks', 'engine') }
+          $bad | Should -BeNullOrEmpty
+      - name: The server answers from Windows (localhost forwarding)
+        shell: pwsh
+        run: |
+          $job = Start-Job { wsl -d lanex -u lanex -- bash -ic 'lanex --no-browser --port 8799' }
+          $ok = $false
+          foreach ($i in 1..90) {
+            try { Invoke-RestMethod http://127.0.0.1:8799/api/health -TimeoutSec 2 | Out-Null; $ok = $true; break } catch { Start-Sleep 1 }
+          }
+          Stop-Job $job
+          if (-not $ok) { throw 'LanEx did not answer from Windows' }
+      - name: Uninstall (silent) and the user's distro is unchanged
+        shell: pwsh
+        run: |
+          $u = Get-ChildItem "$env:LOCALAPPDATA\Programs\LanEx" -Filter 'unins*.exe' | Select-Object -First 1
+          Start-Process $u.FullName -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES'
+          wsl -d Ubuntu-24.04 -- bash -c "sha256sum /root/keep.txt" | Tee-Object "$env:RUNNER_TEMP\keep.after"
+          (Get-Content "$env:RUNNER_TEMP\keep.after") | Should -Be (Get-Content "$env:RUNNER_TEMP\keep.before")
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-logs
+          path: |
+            ${{ runner.temp }}\setup.log
+            ${{ runner.temp }}\doctor.json
+            ~\AppData\Local\LanEx\logs\
+
+  proxy:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download the Setup EXE
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $run = '${{ inputs.setup_run_id }}'
+          if (-not $run) { $run = (gh run list --workflow windows-installer.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId') }
+          gh run download $run --dir setup-artifact
+          Copy-Item (Get-ChildItem setup-artifact -Recurse -Filter LanEx-Setup.exe | Select-Object -First 1).FullName "$env:RUNNER_TEMP\LanEx-Setup.exe"
+      - name: A logging CONNECT proxy, set as the Windows proxy (the runner is disposable)
+        shell: pwsh
+        run: |
+          # A tiny stdlib CONNECT proxy that logs each tunnel's host.
+          @'
+          import socket, threading, sys
+          log = open(sys.argv[1], "a", buffering=1)
+          def pipe(a, b):
+              try:
+                  while (d := a.recv(65536)):
+                      b.sendall(d)
+              except OSError:
+                  pass
+              finally:
+                  a.close(); b.close()
+          def handle(c):
+              head = b""
+              while b"\r\n\r\n" not in head:
+                  d = c.recv(4096)
+                  if not d: return c.close()
+                  head += d
+              line = head.split(b"\r\n", 1)[0].decode()
+              method, target, _ = line.split(" ", 2)
+              log.write(line + "\n")
+              if method != "CONNECT":
+                  c.sendall(b"HTTP/1.1 405 CONNECT only\r\n\r\n"); return c.close()
+              host, port = target.rsplit(":", 1)
+              u = socket.create_connection((host, int(port)), timeout=20)
+              c.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+              threading.Thread(target=pipe, args=(c, u), daemon=True).start()
+              pipe(u, c)
+          s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          s.bind(("0.0.0.0", 3128)); s.listen(64)
+          while True:
+              c, _ = s.accept(); threading.Thread(target=handle, args=(c,), daemon=True).start()
+          '@ | Set-Content "$env:RUNNER_TEMP\proxy.py"
+          Start-Process python -ArgumentList "$env:RUNNER_TEMP\proxy.py", "$env:RUNNER_TEMP\proxy.log" -WindowStyle Hidden
+          New-NetFirewallRule -DisplayName 'LanEx smoke proxy' -Direction Inbound -LocalPort 3128 -Protocol TCP -Action Allow | Out-Null
+          # The address WSL's NAT network reaches Windows on.
+          $ip = (Get-NetIPAddress -InterfaceAlias 'vEthernet (WSL*)' -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
+          if (-not $ip) { $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' } | Select-Object -First 1).IPAddress }
+          $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+          Set-ItemProperty $k ProxyEnable 1
+          Set-ItemProperty $k ProxyServer "$($ip):3128"
+          Set-ItemProperty $k ProxyOverride '<local>'
+      - name: Install LanEx (Docker, no image, no PDK; silent) through the proxy
+        shell: pwsh
+        run: |
+          '{"schema":1,"profile":"custom","engine":"docker","image":false,"nativeTools":[],"pdks":[],"libraries":{}}' |
+            Set-Content -Encoding ascii "$env:RUNNER_TEMP\choices.json"
+          $p = Start-Process "$env:RUNNER_TEMP\LanEx-Setup.exe" -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/SELECTIONS=$env:RUNNER_TEMP\choices.json",
+            '/DESKTOPSHORTCUT=0', "/LOG=$env:RUNNER_TEMP\setup.log")
+          if ($p.ExitCode -ne 0) { throw "Setup exited $($p.ExitCode)" }
+      - name: Linux and Docker used the proxy
+        shell: pwsh
+        run: |
+          $log = Get-Content "$env:RUNNER_TEMP\proxy.log"
+          $log | Select-String 'CONNECT snapshot.ubuntu.com:443' | Should -Not -BeNullOrEmpty
+          $log | Select-String 'CONNECT pypi.org:443|CONNECT files.pythonhosted.org:443' | Should -Not -BeNullOrEmpty
+          wsl -d lanex -u root -- cat /etc/lanex/proxy.env
+          wsl -d lanex -u root -- cat /etc/apt/apt.conf.d/90lanex-proxy
+          wsl -d lanex -u root -- cat /etc/systemd/system/docker.service.d/90-lanex-proxy.conf
+          wsl -d lanex -u lanex -- sg docker -c 'docker pull hello-world'
+          (Get-Content "$env:RUNNER_TEMP\proxy.log") | Select-String 'CONNECT registry-1.docker.io:443' | Should -Not -BeNullOrEmpty
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-proxy-logs
+          path: |
+            ${{ runner.temp }}\setup.log
+            ${{ runner.temp }}\proxy.log
+            ~\AppData\Local\LanEx\logs\
+            ~\AppData\Local\LanEx\state\network.json

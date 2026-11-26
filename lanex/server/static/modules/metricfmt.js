@@ -114,6 +114,13 @@ export function unitOf(base) {
   return "";
 }
 
+// A drop (IR drop, ground bounce) is millivolt-scale. `design_powergrid__
+// drop__average` holds OpenROAD's *average voltage* (1.79997 on VPWR, see its
+// IR report), so it is a voltage, never converted as if it were a drop.
+const isDrop = (base) => /drop/.test(base) && base !== "design_powergrid__drop__average";
+// OpenSTA writes about 1e30 for a slack with no path to time.
+const NO_PATH = 1e12;
+
 // One value formatted for display in its natural unit.
 // -> { text, unit, title } (title = the exact raw value for hover).
 // `compact` (tables): areas and lengths of 100 or more as whole numbers.
@@ -128,14 +135,12 @@ export function show(key, v, { compact = false } = {}) {
   }
   if (u === "W") { const r = si(v, "W"); return { text: r.text, unit: r.unit, title: title + " W" }; }
   if (u === "V") {
-    // Drops and ground bounce are millivolt-scale; supply voltages read better
-    // in V. `design_powergrid__drop__average` holds OpenROAD's *average
-    // voltage* (1.79997 on VPWR, see its IR report), so it is shown as a
-    // voltage, never converted as if it were a drop.
-    const isDrop = /drop/.test(base) && base !== "design_powergrid__drop__average";
-    if (isDrop || Math.abs(v) < 0.1) return { text: sig(v * 1000, 4), unit: "mV", title: title + " V" };
+    // Drops and ground bounce are millivolt-scale; supply voltages read better in V.
+    if (isDrop(base) || Math.abs(v) < 0.1) return { text: sig(v * 1000, 4), unit: "mV", title: title + " V" };
     return { text: sig(v, 6), unit: "V", title: title + " V" };
   }
+  // A reg-to-reg slack of 1e30 is OpenSTA's "no path", not a number of ns.
+  if (u === "ns" && Math.abs(v) >= NO_PATH) return { text: "no path", unit: "", title: title + " (OpenSTA: no path to time)" };
   if (u === "ratio") return { text: fixed(v * 100, 1, false), unit: "%", title: title + " (ratio)" };
   if (u === "ns") return { text: signed(v, compact ? 2 : 3), unit: "ns", title: title + " ns" };
   if (compact && (u === "µm²" || u === "µm") && Math.abs(v) >= 100 && Math.abs(v) < 1e12) {
@@ -150,13 +155,16 @@ export function showText(key, v, opts) {
   return s.unit && s.text !== "—" ? s.text + " " + s.unit : s.text;
 }
 
-// One prefix for a column or row of power values (a table reads down one
-// unit, not mW in one row and µW in the next): the prefix of the largest
-// value. `null` for metrics whose unit has no prefix to choose.
+// One prefix for a column or row of power or voltage values (a table reads
+// down one unit, not mW in one row and µW in the next): the prefix of the
+// largest power; mV for a drop, or for voltages all under 0.1 V, else V (as
+// show() picks for one value). `null` for metrics whose unit has no prefix.
 export function scaleOf(key, values) {
-  const u = unitOf(parseKey(key).base);
-  if (u !== "W") return null;
+  const base = parseKey(key).base;
+  const u = unitOf(base);
+  if (u !== "W" && u !== "V") return null;
   const a = Math.max(0, ...values.filter(isNum).map(Math.abs));
+  if (u === "V") return isDrop(base) || a < 0.1 ? { div: 1e-3, unit: "mV" } : { div: 1, unit: "V" };
   const [div, pre] = stepFor(a);
   return { div, unit: pre + u };
 }
@@ -165,6 +173,7 @@ export function scaleOf(key, values) {
 export function showAt(key, v, scale, opts) {
   if (!scale || !isNum(v)) return show(key, v, opts);
   const x = v / scale.div;
+  if (/V$/.test(scale.unit)) return { text: sig(x, scale.unit === "mV" ? 4 : 6), unit: scale.unit, title: String(v) + " V" };
   return { text: fixed(x, digitsFor(Math.abs(x)), false), unit: scale.unit, title: String(v) + " W" };
 }
 
@@ -182,6 +191,34 @@ export function signed(v, d = 3) {
   if (v === 0) return fixed(0, d, false);
   return (v > 0 ? "+" : "−") + fixed(Math.abs(v), d, false);
 }
+
+// ---------- corner sums ---------------------------------------------------------------
+// LibreLane adds the timing violation counts of every corner up (its registry's
+// sum_aggregator): 102 = 36 + 31 + 35 failing endpoints in three corners of a
+// 65-endpoint design. Never read the total as "how many paths fail".
+const SUMMED = new Set(["timing__setup_vio__count", "timing__hold_vio__count",
+  "timing__setup_r2r_vio__count", "timing__hold_r2r_vio__count"]);
+export const isCornerSum = (key) => SUMMED.has(parseKey(key).base) && !parseKey(key).mods.corner;
+// -> { total, n, worst, corner } from a run's metrics, or null when the
+// metric isn't a corner sum or the run has no per-corner values.
+export function cornerSum(metrics, key) {
+  if (!metrics || !isCornerSum(key)) return null;
+  const pre = key + "__corner:";
+  let n = 0, worst = null, corner = "";
+  for (const [k, v] of Object.entries(metrics)) {
+    if (!k.startsWith(pre) || !isNum(v)) continue;
+    n += 1;
+    if (worst === null || v > worst) { worst = v; corner = k.slice(pre.length); }
+  }
+  return n ? { total: metrics[key], n, worst, corner } : null;
+}
+// "summed over 3 corners; 36 in the worst corner" (empty with one corner).
+export function cornerSumWords(cs) {
+  if (!cs || cs.n < 2) return "";
+  return "summed over " + cs.n + " corners; " + num(cs.worst) + " in the worst corner";
+}
+// The hover words for a summed count, without the numbers.
+export const CORNER_SUM_NOTE = "LibreLane adds this count up over every corner, so an endpoint that fails in two corners counts twice.";
 
 // ---------- direction and change ----------------------------------------------------
 // One reading of "better or worse" for Runs, Compare, Analytics and the sweep
@@ -209,8 +246,23 @@ const REGISTRY = {
   route__wirelength: -1, route__drc_errors: -1, magic__drc_error__count: -1,
   design__lvs_error__count: -1, antenna__violating__nets: -1, antenna__violating__pins: -1,
 };
+// A direction LanEx knows better than the registry, which beats it: or null.
+// `design_powergrid__drop__average` holds OpenROAD's average *voltage* of a
+// net (1.79997 on VPWR, 0.0003 on VGND), which LibreLane registers as
+// lower-is-better like a drop. On a power net a higher voltage is the smaller
+// drop (better); on a ground net lower is better; with no net, no direction.
+const POWER_NET = /^(vpwr|vdd|vcc|vccd|vdda|vccio|pwr)/i, GROUND_NET = /^(vgnd|gnd|vss|vssd|vssa|vssio)/i;
+export function fixedDirection(key) {
+  const { base, mods } = parseKey(key);
+  if (base !== "design_powergrid__drop__average") return null;
+  const net = mods.net || "";
+  return POWER_NET.test(net) ? 1 : GROUND_NET.test(net) ? -1 : 0;
+}
+
 // +1 higher is better, -1 lower is better, 0 not known (no colour).
 export function direction(key, meta) {
+  const fx = fixedDirection(key);
+  if (fx != null) return fx;
   const look = (k) => {
     const m = meta && meta[k];
     if (!m) return null;
@@ -230,17 +282,25 @@ export function direction(key, meta) {
 // runtime, counts of 100 or more; never slack, where a reference near zero
 // makes a percentage meaningless). "same" within 0.05 % of the reference,
 // and at least 5 ps of slack or a second of runtime. `cls` is is-better /
-// is-worse only when the direction is known; `scale` (from scaleOf) keeps a
-// power delta in its row's prefix.
+// is-worse only when the direction is known. The text carries no unit: it is
+// in the unit the row or column is labelled with, `out.unit`. Pass that
+// row's `scale` (from scaleOf) for power and voltages; without one, power
+// takes the prefix of the larger of the two values and a voltage the unit
+// show(key, 1) labels it with (mV for a drop, else V).
 export function delta(key, v, ref, meta, { scale = null, dir = null } = {}) {
   if (!isNum(v) || !isNum(ref)) return null;
   const base = parseKey(key).base;
   const u = key === "runtime" ? "s" : unitOf(base);
+  const dd = dir == null ? direction(key, meta) : dir;
+  // OpenSTA's "no path" (1e30) is not a slack: no difference to it means anything.
+  if (u === "ns" && (Math.abs(v) >= NO_PATH || Math.abs(ref) >= NO_PATH)) {
+    return v === ref ? { abs: 0, pct: null, absText: "same", pctText: "", text: "same", cls: "is-same", same: true, dir: dd, unit: "" } : null;
+  }
   const d = v - ref;
   const floor = u === "ns" ? 0.005 : u === "s" ? 1 : 1e-12;
   const same = Math.abs(d) <= Math.max(Math.abs(ref) * 5e-4, floor);
-  const dd = dir == null ? direction(key, meta) : dir;
-  const out = { abs: d, pct: null, absText: "same", pctText: "", text: "same", cls: "is-same", same, dir: dd };
+  const out = { abs: d, pct: null, absText: "same", pctText: "", text: "same", cls: "is-same", same, dir: dd,
+    unit: u === "ratio" ? "pt" : u === "s" ? "" : u };
   if (same) return out;
   const sign = d > 0 ? "+" : "−";
   const a = Math.abs(d);
@@ -248,9 +308,14 @@ export function delta(key, v, ref, meta, { scale = null, dir = null } = {}) {
   if (u === "ns") absText = sign + fixed(a, a < 0.1 ? 3 : 2, false);
   else if (u === "ratio") absText = sign + fixed(a * 100, 1, false) + " pt";
   else if (u === "W") {
-    const st = scale || (() => { const [div, pre] = stepFor(Math.abs(ref) || a); return { div, unit: pre + "W" }; })();
+    const st = scale && /W$/.test(scale.unit) ? scale : scaleOf(key, [v, ref]);
     const x = a / st.div;
     absText = sign + fixed(x, digitsFor(x), false);
+    out.unit = st.unit;
+  } else if (u === "V") {
+    const st = scale && /V$/.test(scale.unit) ? scale : isDrop(base) ? { div: 1e-3, unit: "mV" } : { div: 1, unit: "V" };
+    absText = sign + sig(a / st.div, 4);
+    out.unit = st.unit;
   } else if (u === "s") absText = sign + durText(a);
   else if (u === "µm²" || u === "µm") absText = sign + (a >= 100 ? fixed(Math.round(a), 0, true) : num(a));
   else absText = sign + num(Number(a.toPrecision(4)));
