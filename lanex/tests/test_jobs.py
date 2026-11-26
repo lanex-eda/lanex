@@ -208,6 +208,10 @@ def sched(tmp_path):
         tag = jobs.reserve_tag(job["design_dir"], (job.get("spec") or {}).get("tag"))
         s.note_tag(job["id"], tag)
         launched.append({"job": job["id"], "share": share, **kw})
+        # As the real runner does: the run's gui-run.json names its job.
+        rd = Path(job["design_dir"]) / "runs" / tag
+        if job.get("kind") != "continue" and not (rd / "gui-run.json").exists():
+            (rd / "gui-run.json").write_text(json.dumps({"job_id": job["id"]}))
         runner.start(tag=tag)
         return {"ok": True, "started": True, "tag": tag}, 200
 
@@ -349,6 +353,9 @@ def test_queue_survives_a_restart_and_offers_continue(sched, tmp_path, monkeypat
     (rd / "3-openroad-floorplan").mkdir()
     (rd / "3-openroad-floorplan" / "state_in.json").write_text("{}")
     (rd / "flow.log").write_text("Starting...\n")
+    old = time.time() - 120          # nothing has written it for two minutes
+    import os
+    os.utime(rd / "flow.log", (old, old))
     queued = sched.add(a, {})
     # A new server: new boot id, a scheduler that reads the file.
     monkeypatch.setattr("lanex.controller.events.BOOT_ID", "ffffffff")
@@ -469,7 +476,7 @@ def test_resume_info_refuses_a_changed_config(sched, tmp_path):
     a = _proj(tmp_path, "a")
     rd = _clean_run(a, "r1", [(1, "verilator-lint", 1.0)], complete=False)
     cfg = a / "config.json"
-    (rd / "gui-run.json").write_text(json.dumps({"config_file": str(cfg), "config_hash": "0" * 64}))
+    (rd / "gui-run.json").write_text(json.dumps({"job_id": "j-x", "config_file": str(cfg), "config_hash": "0" * 64}))
     j = {"id": "j-x", "design_dir": str(a), "tag": "r1", "run_dir": str(rd), "spec": {}}
     sched._flow_steps = lambda job: ["Verilator.Lint", "Yosys.Synthesis"]
     info = sched.resume_info(j)

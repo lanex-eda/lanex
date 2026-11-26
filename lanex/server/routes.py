@@ -4680,6 +4680,10 @@ def _launch_point(job: Dict[str, Any], runner: Any, share: Optional[Dict[str, An
     the point's ``gui-run.json`` (``sweep``) and the exact CLI command."""
     spec = dict(job.get("spec") or {})
     design_dir = job["design_dir"]
+    # A point's planned name comes from the queue file: the same check as a
+    # Run click, so it can't make a folder outside runs/.
+    if _bad_tag(spec.get("tag")):
+        return _bad_tag(spec.get("tag")), 400
     config_file = _config_file_for(design_dir)
     if config_file is None:
         return "This project has no config file any more.", 400
@@ -4749,7 +4753,7 @@ def _job_launcher(job: Dict[str, Any], runner: Any, share: Optional[Dict[str, An
     reserve = None
     if job.get("kind") == "continue":
         tag = spec.get("tag")
-        if not tag or not (Path(dd) / "runs" / tag).is_dir():
+        if not tag or _bad_tag(tag) or not (Path(dd) / "runs" / tag).is_dir():
             return "The run folder to continue is not there any more.", 409
         cont = jobs._gui_meta(str(Path(dd) / "runs" / tag)) or {}
         jobs.scheduler.note_tag(job["id"], tag)

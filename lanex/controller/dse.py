@@ -561,7 +561,7 @@ _SHORT = {
 
 
 def _slug(v: Any) -> str:
-    out = "".join(c if (c.isalnum() or c in ".-") else "_" for c in str(v).strip())
+    out = "".join(c if ((c.isascii() and c.isalnum()) or c in ".-") else "_" for c in str(v).strip())
     return out.strip("_") or "x"
 
 

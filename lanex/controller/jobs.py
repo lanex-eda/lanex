@@ -52,6 +52,14 @@ Job (one entry of ``queue.json`` ``jobs``, and of ``GET /api/queue`` ``jobs``)
 ``resume``        (interrupted jobs) ``{from_step, done_steps, total, state,
                   drift: [..], reason}``: where Continue starts
 ``attempts``      ``[{at, how: "start"|"continue", from_step}]``
+``resume_pending`` (step by step) Next step was pressed and waits for a slot;
+                  kept in the file, so a restart makes it ``interrupted``
+
+The file carries ``owner`` (this LanEx home's id, :func:`home_id`). A queue
+file without it, or another home's, is read paused with a notice, and the runs
+it lists as going are checked (followed again only when their container really
+works in this project, else ``interrupted``): a queue that came with a project
+never starts or stops anything without a click.
 
 States
 ------
@@ -139,6 +147,7 @@ AUTO_CAP = 8
 FIXED_CAP = 16
 CORES_PER_RUN = 4         # cores each run gets before "fits the cores" stops counting (8+ cores)
 KEEP_ENDED = 60           # ended jobs kept per project (the queue is not the run history)
+CONTINUE_QUIET_S = 60     # Continue waits until a run's flow.log has been still this long
 MAX_WAITING = 500
 EMIT_EVERY_S = 0.5
 SAMPLE_EVERY_S = 5.0
@@ -172,12 +181,24 @@ def slug(step_id: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(step_id or "").lower()).strip("-")
 
 
+_GOOD_TAG = re.compile(r"[A-Za-z0-9._-]{1,120}")
+
+
+def good_tag(tag: Any) -> bool:
+    """A run name that stays one folder inside ``runs/`` (no ``/``, not
+    ``.``/``..``, not an option)."""
+    t = str(tag or "")
+    return bool(_GOOD_TAG.fullmatch(t)) and t not in (".", "..") and not t.startswith("-")
+
+
 def reserve_tag(design_dir: Any, tag: Optional[str] = None) -> str:
     """Make the run folder now (``mkdir``), so two starts in the same second
     never share one. LibreLane treats an existing empty folder as a new run
     (flow.py), so the reservation is invisible to it. A given *tag* that is
     taken gets ``-2``, ``-3``."""
     from . import platform_env
+    if tag and not good_tag(tag):
+        raise ValueError(f"The run name {str(tag)[:60]!r} can't be used: letters, digits and . _ - only.")
     runs = Path(str(design_dir)) / "runs"
     runs.mkdir(parents=True, exist_ok=True)
     base = tag or platform_env.new_run_tag(runs)
@@ -586,6 +607,24 @@ def remove_container(name: str) -> bool:
         return False
 
 
+def _works_in(container: Optional[Dict[str, Any]], design_dir: Any) -> bool:
+    """A listed flow container (``flow_containers``) whose working folder is
+    this project: LibreLane runs its container with ``-w <the project>``."""
+    if not container or not container.get("workdir"):
+        return False
+    return design_key(container["workdir"]) == design_key(design_dir)
+
+
+def job_container_alive(job: Dict[str, Any]) -> bool:
+    """The container a job names is a live LanEx flow container working in
+    the job's own project. A queue file can name any container, so nothing
+    is stopped or followed on its name alone."""
+    name = job.get("container")
+    if not name:
+        return False
+    return any(c.get("name") == name and _works_in(c, job.get("design_dir")) for c in flow_containers())
+
+
 def container_memory(name: str, cache: Dict[str, Any]) -> Optional[Dict[str, float]]:
     """``{rss_gb, peak_gb}`` of a running container: its cgroup's
     ``memory.current`` and ``memory.peak`` (cgroup v2), else ``docker stats``."""
@@ -630,6 +669,40 @@ def _settings_path() -> Path:
     return platform_env.home() / "settings.json"
 
 
+_SETTINGS_LOCK = threading.Lock()
+_HOME_IDS: Dict[str, str] = {}
+_HOME_ID_LOCK = threading.Lock()
+
+
+def home_id() -> str:
+    """This LanEx home's own id (``$LANEX_HOME/queue-owner-id``, made once).
+    Every queue file LanEx writes carries it (``owner``): a queue that comes
+    with a project from somewhere else (another PC, another LanEx, a zip) is
+    recognised and never starts anything by itself."""
+    from . import platform_env
+    h = platform_env.home()
+    key = str(h)
+    with _HOME_ID_LOCK:
+        hit = _HOME_IDS.get(key)
+        if hit:
+            return hit
+        p = h / "queue-owner-id"
+        val = ""
+        try:
+            val = p.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+        if not re.fullmatch(r"[0-9a-f]{32}", val):
+            val = secrets.token_hex(16)
+            try:
+                h.mkdir(parents=True, exist_ok=True)
+                platform_env.atomic_write_text(p, val + "\n")
+            except OSError:
+                _log.debug("could not keep the queue owner id", exc_info=True)
+        _HOME_IDS[key] = val
+        return val
+
+
 def read_setting(key: str, default: Any = None) -> Any:
     try:
         p = _settings_path()
@@ -642,18 +715,21 @@ def read_setting(key: str, default: Any = None) -> Any:
 def write_setting(key: str, value: Any) -> None:
     from . import platform_env
     p = _settings_path()
-    try:
-        data = json.loads(p.read_text(encoding="utf-8") or "{}") if p.is_file() else {}
-        if not isinstance(data, dict):
+    # Read, change, write under one lock: two settings saved at once (Runs
+    # at once and keep-awake) each kept the other's old value.
+    with _SETTINGS_LOCK:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8") or "{}") if p.is_file() else {}
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
             data = {}
-    except Exception:
-        data = {}
-    if value is None:
-        data.pop(key, None)
-    else:
-        data[key] = value
-    p.parent.mkdir(parents=True, exist_ok=True)
-    platform_env.atomic_write_text(p, json.dumps(data, indent=2) + "\n")
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
+        p.parent.mkdir(parents=True, exist_ok=True)
+        platform_env.atomic_write_text(p, json.dumps(data, indent=2) + "\n")
 
 
 def parallel_setting() -> Any:
@@ -738,6 +814,7 @@ class Scheduler:
                         q["stop_after_current"] = bool(data.get("stop_after_current"))
                         for j in q["jobs"]:
                             j["design_dir"] = key
+                        self._adopt(q, data)
                 except Exception:
                     # Kept aside, never deleted: the person may want it.
                     try:
@@ -747,6 +824,29 @@ class Scheduler:
                     q["notice"] = "The queue file could not be read; it was kept aside and the queue starts empty."
             self._queues[key] = q
             return q
+
+    FOREIGN_NOTICE = ("This project's queue was written by another LanEx (another PC, another user, or an "
+                      "older LanEx), so it is paused and nothing in it starts by itself. Check the runs "
+                      "waiting in it, then press Resume.")
+
+    def _adopt(self, q: Dict[str, Any], data: Dict[str, Any]) -> None:
+        """A queue file just read. One this LanEx home wrote (``owner``) is
+        used as it is. Any other (it came with the project, or LanEx before
+        queues were stamped) is paused with a notice when it holds anything
+        that could start, so no run starts without a click. Runs it lists as
+        going from an earlier boot are checked on the next tick: followed
+        again only when their container really is working in this project,
+        else interrupted (a listed "running" job never holds a slot)."""
+        from .events import BOOT_ID
+        own = isinstance(data.get("owner"), str) and data.get("owner") == home_id()
+        pending = [j for j in q["jobs"] if j.get("state") in LIVE | {"queued"}]
+        if not own and pending:
+            q["paused"] = True
+            q["foreign"] = True
+            q["notice"] = self.FOREIGN_NOTICE
+        if any(j.get("boot") != BOOT_ID and (j.get("state") in LIVE or j.get("resume_pending"))
+               for j in q["jobs"]):
+            q["_recover"] = True
 
     def _save(self, key: str) -> None:
         if not self.persist:
@@ -761,7 +861,7 @@ class Scheduler:
                 if not Path(key).is_dir():
                     return
                 p.parent.mkdir(parents=True, exist_ok=True)
-            doc = {"version": 1, "paused": q.get("paused", False),
+            doc = {"version": 1, "owner": home_id(), "paused": q.get("paused", False),
                    "stop_after_current": q.get("stop_after_current", False),
                    "jobs": [self._persistable(j) for j in q["jobs"]]}
             platform_env.atomic_write_text(p, json.dumps(doc, indent=2, default=str) + "\n")
@@ -899,7 +999,7 @@ class Scheduler:
             return "Local-tools runs go one at a time (LibreLane runs them inside LanEx)"
         peak = design_peak(key)
         same = [a for a in active if a["design_dir"] == key]
-        if peak.get("gb") is None and same and not job.get("_resume_pending"):
+        if peak.get("gb") is None and same and not job.get("resume_pending"):
             return (f"First runs of {Path(key).name}: one at a time until LanEx knows how much "
                     "memory it needs")
         if active and facts.get("free_gb") is not None:
@@ -1122,9 +1222,9 @@ class Scheduler:
             try:
                 o = self._outcome_reader(rd) or {}
                 j["outcome"] = {**(j.get("outcome") or {}), **{k: o.get(k) for k in
-                                ("ok", "good", "kind", "stage", "step", "reason") if k in o}}
+                                ("ok", "good", "kind", "stage", "step", "reason", "verdict") if k in o}}
                 if j["state"] == "done":
-                    j["reason"] = "Finished · " + str(o.get("label") or ("checks passed" if o.get("ok") else (o.get("reason") or "with problems")))
+                    j["reason"] = "Finished · " + done_words(j.get("spec") or {}, o)
                 elif o.get("stage"):
                     j["reason"] = f"Failed at {o.get('stage')}" + (f": {o.get('reason')}" if o.get("reason") else "")
             except Exception:
@@ -1155,6 +1255,14 @@ class Scheduler:
         publish. Called every second by the service thread."""
         with self._lock:
             ending = [j for j in self._all_jobs() if j.get("_finalize")]
+            recover = [k for k, q in self._queues.items() if q.pop("_recover", False)]
+        if recover:
+            # A queue first read after start-up (a project opened later) that
+            # lists runs going from an earlier boot.
+            try:
+                self.recover_all(recover)
+            except Exception:
+                _log.exception("queue recovery failed")
         for j in ending:
             self._finalize(j)
         self._sample()
@@ -1191,7 +1299,7 @@ class Scheduler:
                         break
             if pick is None:
                 return
-            if pick.get("_resume_pending"):
+            if pick.get("resume_pending"):
                 self._resume_now(pick)
             else:
                 self._launch(pick, share_k=len(active) + 1)
@@ -1308,8 +1416,11 @@ class Scheduler:
     def remove(self, *, job_id: Optional[str] = None, group: Optional[str] = None,
                finished: bool = False, reason: str = "Removed from the queue") -> List[str]:
         """Take waiting jobs out of the queue (and ended ones, with
-        *finished*). A running job is never removed: stop it first."""
+        *finished*). A running job is never removed: stop it first. A
+        step-by-step run waiting for a slot for its next step has a run going
+        (its folder, its runner): it is stopped, never just dropped."""
         gone: List[str] = []
+        step_runs: List[str] = []
         with self._lock:
             for key, q in self._queues.items():
                 keep = []
@@ -1318,7 +1429,9 @@ class Scheduler:
                     if finished and j.get("state") in ENDED:
                         gone.append(j["id"])
                         continue
-                    if hit and j.get("state") == "queued":
+                    if hit and j.get("state") == "queued" and j.get("resume_pending"):
+                        step_runs.append(j["id"])
+                    elif hit and j.get("state") == "queued":
                         gone.append(j["id"])
                         j["state"] = "skipped"
                         j["reason"] = reason
@@ -1332,6 +1445,8 @@ class Scheduler:
                     self._save(key)
             self._dirty = True
             self._cv.notify_all()
+        for jid in step_runs:
+            gone += self.stop(jid)
         return gone
 
     def skip_group(self, group: str, reason: str) -> List[str]:
@@ -1366,6 +1481,8 @@ class Scheduler:
                 q["paused"] = bool(paused)
                 if not paused:
                     q["stop_after_current"] = False
+                    if q.pop("foreign", None):       # Resume is the click a foreign queue waited for
+                        q.pop("notice", None)
                 self._save(q["design_dir"])
             self._dirty = True
             self._cv.notify_all()
@@ -1385,22 +1502,44 @@ class Scheduler:
             targets = [j for j in self._all_jobs() if (everything and j.get("state") in LIVE | {"queued"})
                        or (job_id and j["id"] == job_id)]
         for j in targets:
-            if j.get("state") == "queued":
+            # A step-by-step run waiting for a slot for its next step is a run
+            # between two steps (paused), not a job that never started.
+            step_wait = j.get("state") == "queued" and bool(j.get("resume_pending"))
+            if j.get("state") == "queued" and not step_wait:
                 self.remove(job_id=j["id"], reason="Stopped before it started")
                 out.append(j["id"])
                 continue
             r = self._runners.get(j["id"])
-            if r is not None and j.get("state") in LIVE:
+            if r is not None and (j.get("state") in LIVE or step_wait):
                 with self._lock:
+                    j.pop("resume_pending", None)
+                    if step_wait:
+                        j["state"] = "paused"           # holds no slot while it ends
                     if j["state"] != "paused":
                         j["state"] = "stopping"
                         j["reason"] = "Stopping…"
+                    self._save(j["design_dir"])
                     self._changed(j)
                 threading.Thread(target=r.cancel, daemon=True, name="lanex.jobs.stop").start()
                 out.append(j["id"])
+            elif step_wait:
+                # Its runner is gone (recovery turns these into interrupted
+                # runs, so this is a guard): end it as stopped, folder kept.
+                with self._lock:
+                    j.pop("resume_pending", None)
+                    j["state"] = "stopped"
+                    j["reason"] = "Stopped by you"
+                    j["ended_at"] = now_iso()
+                    j["outcome"] = {"result": "cancelled"}
+                    self._save(j["design_dir"])
+                    self._changed(j)
+                out.append(j["id"])
             elif j.get("state") in LIVE and j.get("container"):
                 # Reattached after a restart: no runner, only its container.
-                remove_container(j["container"])
+                # Removed only when it is listed as a LanEx flow container
+                # working in this job's project (never a name from a file).
+                if job_container_alive(j):
+                    remove_container(j["container"])
                 f = self._followers.get(j["id"])
                 if f is not None:
                     f.stop()
@@ -1427,7 +1566,7 @@ class Scheduler:
                 raise KeyError("That run is not paused between steps.")
             cap = self.capacity(facts, design_dir=j["design_dir"])
             active = self._active()
-            j["_resume_pending"] = True
+            j["resume_pending"] = True
             why = self._wait_reason(j, facts, cap, active, 0)
             if why and why != "Queue paused":
                 j["state"] = "queued"
@@ -1441,8 +1580,15 @@ class Scheduler:
 
     def _resume_now(self, j: Dict[str, Any]) -> None:
         r = self._runners.get(j["id"])
+        if r is None:
+            # The run's runner is gone (LanEx restarted between two steps):
+            # its next step can't be sent, so it is an interrupted run.
+            with self._lock:
+                j.pop("resume_pending", None)
+            self._mark_interrupted(j)
+            return
         with self._lock:
-            j.pop("_resume_pending", None)
+            j.pop("resume_pending", None)
             j["state"] = "running"
             j["reason"] = ""
             self._save(j["design_dir"])
@@ -1481,14 +1627,19 @@ class Scheduler:
                 continue
             with self._lock:
                 q = self.queue_of(d)
-                stale = [j for j in q["jobs"] if j.get("state") in LIVE and j.get("boot") != BOOT_ID]
+                q.pop("_recover", None)
+                stale = [j for j in q["jobs"] if j.get("boot") != BOOT_ID and
+                         (j.get("state") in LIVE or (j.get("state") == "queued" and j.get("resume_pending")))]
             if not stale:
                 continue
             if conts is None:
                 conts = {c["name"]: c for c in flow_containers()}
             for j in stale:
                 name = j.get("container")
-                if name and name in conts and j.get("state") != "paused":
+                # Followed again only when that container really works in this
+                # project: a queue file can name any container.
+                if name and _works_in(conts.get(name), j["design_dir"]) and j.get("state") != "paused" \
+                        and not j.get("resume_pending"):
                     self._reattach(j)
                     found["reattached"] += 1
                 else:
@@ -1577,21 +1728,46 @@ class Scheduler:
             out["reason"] = "It had finished: its log ends with Flow complete."
             out["complete"] = True
             return out
+        meta = _gui_meta(rd)
+        # The folder must be this job's own (a queue file can name any folder).
+        owners = {meta.get("job_id")} | {a.get("job_id") for a in (meta.get("attempts") or [])
+                                         if isinstance(a, dict)}
+        spec = j.get("spec") or {}
+        if j.get("id") not in owners and not (spec.get("_continue_of") and spec["_continue_of"] in owners):
+            out["reason"] = ("Its run folder isn't this run's own (another run, or one LanEx didn't start, "
+                             "wrote it), so LanEx won't continue in it.")
+            return out
         steps = self._flow_steps(j)
         last = prog["last_done"][1] if prog["last_done"] else None
-        nxt = step_after(steps, last) if steps else None
+        only = spec.get("only") or None
+        if only:
+            # "Only one step": it continues as that same step, from its own
+            # starting state, or it is done.
+            if last and (slug(only) == last or re.sub(r"-\d+$", "", last) == slug(only)):
+                out["reason"] = "It had finished the one step it was asked to run."
+                out["complete"] = True
+                return out
+            nxt, state = only, spec.get("initial_state") or None
+            out["keep"] = {"only": only}
+        elif last is None:
+            # Nothing finished in this folder yet: it starts again where the
+            # job itself started (its own -i state, start and stop).
+            nxt = spec.get("frm") or (steps[0] if steps else None)
+            state = spec.get("initial_state") or None
+        else:
+            nxt = step_after(steps, last) if steps else None
+            state = prog["state_out"]
         out["from_step"] = nxt
-        out["state"] = prog["state_out"]
-        spec = j.get("spec") or {}
+        out["state"] = state
         if spec.get("to") and nxt and steps and spec["to"] in steps and nxt in steps \
                 and steps.index(nxt) > steps.index(spec["to"]):
             out["reason"] = "It had reached the stage it was asked to stop at."
             out["complete"] = True
             return out
-        if prog["state_out"]:
+        if state:
             try:
                 from . import branch
-                miss = branch.missing_paths(Path(prog["state_out"]))
+                miss = branch.missing_paths(Path(state))
                 if miss:
                     out["reason"] = "The files it needs to continue are gone (" + ", ".join(miss[:2]) + ")."
                     return out
@@ -1599,8 +1775,13 @@ class Scheduler:
                 pass
         try:
             from . import branch
-            meta = json.loads((Path(rd) / "gui-run.json").read_text(encoding="utf-8"))
-            out["drift"] = branch.version_drift(meta) or []
+            # LibreLane, the image and the PDK the run was made with, read the
+            # way the fix sheet reads them (gui-run.json's toolchain and
+            # resolved.json), against what a run started now would use.
+            out["drift"] = branch.version_drift(branch.run_info(Path(rd))) or []
+        except Exception:
+            _log.debug("version check for Continue failed", exc_info=True)
+        try:
             cfg = meta.get("config_file")
             if cfg and meta.get("config_hash"):
                 now_hash = _hash_file(cfg)
@@ -1609,7 +1790,9 @@ class Scheduler:
         except Exception:
             pass
         if out["drift"]:
-            out["reason"] = "The tools changed since it started, so it can't continue in place."
+            what = "; ".join(f"{d.get('label')} {d.get('was')} then, {d.get('now')} now" for d in out["drift"])
+            out["reason"] = (f"The tools changed since it started ({what}), so it can't continue in place: "
+                             "one run would mix the two. Run it again from the start instead.")
             return out
         if out.get("config_changed"):
             out["reason"] = (f"{out['config_changed']} changed after this run started, so continuing in place "
@@ -1620,6 +1803,34 @@ class Scheduler:
             return out
         out["can_continue"] = True
         return out
+
+    def _still_going(self, j: Dict[str, Any]) -> Optional[str]:
+        """Whether an interrupted run may in fact still be going (a slow or
+        failing engine at start-up marks every run interrupted): "container"
+        when its own container is alive, else why Continue must wait, or None."""
+        try:
+            conts = flow_containers()
+        except Exception:
+            conts = []
+        if j.get("container") and any(c.get("name") == j["container"] and _works_in(c, j["design_dir"])
+                                      for c in conts):
+            return "container"
+        with self._lock:
+            mine = {x.get("container") for x in self._all_jobs() if x.get("state") in LIVE and x.get("container")}
+        other = [c for c in conts if _works_in(c, j["design_dir"]) and c.get("name") not in mine]
+        if other:
+            return (f"A LanEx run container ({other[0]['name']}) is still working in "
+                    f"{Path(j['design_dir']).name}, so this run may still be going. Wait for it to end or "
+                    "stop it from the queue, then Continue.")
+        rd = j.get("run_dir") or (str(Path(j["design_dir"]) / "runs" / j["tag"]) if j.get("tag") else None)
+        try:
+            age = time.time() - (Path(rd) / "flow.log").stat().st_mtime if rd else None
+        except OSError:
+            age = None
+        if age is not None and age < CONTINUE_QUIET_S:
+            return (f"Its flow.log changed {int(max(0, age))} s ago, so something may still be writing this "
+                    "run. Wait a minute, then Continue.")
+        return None
 
     def _flow_steps(self, j: Dict[str, Any]) -> List[str]:
         try:
@@ -1668,9 +1879,18 @@ class Scheduler:
         info = self.resume_info(j)
         if not info.get("can_continue"):
             raise ValueError(info.get("reason") or "This run can't continue in place.")
+        alive = self._still_going(j)
+        if alive == "container":
+            # Its container is still working: follow it again instead.
+            self._reattach(j)
+            return {"ok": True, "state": "running", "reattached": True,
+                    "reason": "It is still running in its container: LanEx follows it again."}
+        if alive:
+            raise ValueError(alive)
         spec = dict(j.get("spec") or {})
-        spec.update({"tag": j.get("tag"), "frm": info["from_step"], "checks_ack": True,
-                     "only": None, "_continue_of": j["id"]})
+        keep = info.get("keep") or {}
+        spec.update({"tag": j.get("tag"), "frm": None if keep.get("only") else info["from_step"],
+                     "checks_ack": True, "only": keep.get("only"), "_continue_of": j["id"]})
         nj = self.add(j["design_dir"], spec, kind="continue", group=j.get("group"),
                       label=f"Continue {j.get('tag')} from {info['from_step']}", position="next",
                       origin=j.get("origin"))
@@ -1864,6 +2084,28 @@ class Scheduler:
                     return True
         f = [x for x in self._followers.values() if design_key(x.run_dir) == k]
         return bool(f)
+
+
+def done_words(spec: Dict[str, Any], o: Dict[str, Any]) -> str:
+    """How a finished job went, for the queue row: "checks passed" only for a
+    whole flow Verify passed (``good``). A run of part of the flow says what
+    ran; a flow that finished with problems says so. Pure."""
+    if o.get("label"):
+        return str(o["label"])
+    part = None
+    if spec.get("only"):
+        part = f"only {spec['only']} ran"
+    elif spec.get("to"):
+        part = f"ran up to {spec['to']}"
+    if part:
+        return part if o.get("ok") else part + ", with problems" + (f": {o['reason']}" if o.get("reason") else "")
+    if o.get("good"):
+        return "checks passed"
+    if o.get("ok"):
+        if o.get("verdict") == "warning":
+            return "with warnings (see Verify)"
+        return "not every check passed (see Verify)"
+    return str(o.get("reason") or "with problems")
 
 
 def label_for(spec: Dict[str, Any], kind: str) -> str:
