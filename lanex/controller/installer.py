@@ -43,7 +43,7 @@ import threading
 import time
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .events import bus
 
@@ -4078,11 +4078,26 @@ def _read_settings() -> Dict[str, Any]:
 
 
 def _write_settings(data: Dict[str, Any]) -> None:
-    p = _settings_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(p)
+    """Write settings.json through a temp file of its own plus ``os.replace``
+    (a fixed ``.json.tmp`` name let two writers trample each other's file)."""
+    from . import platform_env
+
+    with platform_env.SETTINGS_LOCK:
+        p = _settings_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        platform_env.atomic_write_text(p, json.dumps(data, indent=2) + "\n")
+
+
+def _update_settings(change: Callable[[Dict[str, Any]], None]) -> None:
+    """Read settings.json, apply *change*, write it back, all under the one
+    settings lock, so a save elsewhere in the server (the job queue's
+    settings) between our read and our write is never lost."""
+    from . import platform_env
+
+    with platform_env.SETTINGS_LOCK:
+        data = _read_settings()
+        change(data)
+        _write_settings(data)
 
 
 def saved_pdk_root() -> str:
@@ -4123,11 +4138,9 @@ def set_pdk_root(value: Optional[str]) -> Dict[str, Any]:
     from . import platform_env
 
     raw = (value or "").strip()
-    data = _read_settings()
     if not raw:
-        data.pop("pdk_root", None)
         try:
-            _write_settings(data)
+            _update_settings(lambda d: d.pop("pdk_root", None))
         except Exception as ex:
             return {"ok": False, "reason": f"could not save the setting: {ex}"}
         os.environ.pop("PDK_ROOT", None)
@@ -4142,9 +4155,8 @@ def set_pdk_root(value: Optional[str]) -> Dict[str, Any]:
         return {"ok": False, "reason": f"LanEx could not create {path}: {ex}"}
     if not os.access(path, os.W_OK):
         return {"ok": False, "reason": f"{path} is not writable by you, so PDKs can't be installed there."}
-    data["pdk_root"] = path
     try:
-        _write_settings(data)
+        _update_settings(lambda d: d.__setitem__("pdk_root", path))
     except Exception as ex:
         return {"ok": False, "reason": f"could not save the setting: {ex}"}
     os.environ["PDK_ROOT"] = path

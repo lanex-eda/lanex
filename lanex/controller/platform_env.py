@@ -1017,6 +1017,14 @@ def network_status() -> dict:
     }
 
 
+# One lock for every read-change-write of $LANEX_HOME/settings.json in this
+# process (installer's PDK folder, the job queue's settings): two saves at
+# once must not lose one. Hold it across the read and the write.
+import threading as _threading  # noqa: E402
+
+SETTINGS_LOCK = _threading.RLock()
+
+
 def atomic_write_text(path, text: str, *, encoding: str = "utf-8") -> None:
     """Write *text* to *path* atomically (temp file + ``os.replace``).
 

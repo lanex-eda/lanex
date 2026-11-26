@@ -461,3 +461,23 @@ def test_doctor_finds_gds3d_where_setup_puts_it(monkeypatch):
     monkeypatch.setattr(platform_env, "resolve_user_bin", lambda n, alts=None, path=None: None)
     r = doctor.check_tools({})
     assert r["status"] == "info" and "GDS3D" in r["summary"]
+
+
+def test_settings_saves_at_once_lose_nothing(home):
+    """installer's settings.json read-change-write holds platform_env.SETTINGS_LOCK
+    and writes through its own temp file + os.replace (security review)."""
+    import threading
+
+    from lanex.controller import installer
+
+    def save(i):
+        installer._update_settings(lambda d: d.__setitem__(f"k{i}", i))
+
+    threads = [threading.Thread(target=save, args=(i,)) for i in range(40)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    data = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    assert all(data.get(f"k{i}") == i for i in range(40))
+    assert not list(home.glob("settings.json*.tmp"))       # no temp file left behind
