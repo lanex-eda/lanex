@@ -159,7 +159,7 @@ def test_wait_job_returns_after_the_peak_is_written(tmp_path, monkeypatch):
     slow = []
 
     def reader(rd):
-        time.sleep(0.3)                 # reading the folder takes a while
+        time.sleep(1.3)                 # reading the folder takes a while (past wait_job's 1 s wake-up)
         slow.append(rd)
         return {"ok": True, "good": True}
     s.set_outcome_reader(reader)
@@ -169,14 +169,20 @@ def test_wait_job_returns_after_the_peak_is_written(tmp_path, monkeypatch):
     runners[jid].finish()
     import threading
     got = {}
-    t = threading.Thread(target=lambda: got.update(j=s.wait_job(jid, timeout=10)))
+    gui = d / "runs" / r["tag"] / "gui-run.json"
+
+    def waiter():
+        got["j"] = s.wait_job(jid, timeout=10)
+        got["meta"] = json.loads(gui.read_text())      # what the sweep reads the moment it returns
+    t = threading.Thread(target=waiter)
     t.start()
     time.sleep(0.05)
-    s.tick()
-    t.join(5)
-    meta = json.loads((d / "runs" / r["tag"] / "gui-run.json").read_text())
+    tk = threading.Thread(target=s.tick)              # the scheduler's own thread
+    tk.start()
+    t.join(8)
+    tk.join(8)
     assert got["j"]["state"] == "done" and slow
-    assert meta["resources"]["peak_gb"] == 1.7, "the peak is in gui-run.json when wait_job returns"
+    assert (got["meta"].get("resources") or {}).get("peak_gb") == 1.7, "the peak is in gui-run.json when wait_job returns"
     # The sweep's stamp then keeps it.
     dse.stamp_run(d / "runs" / r["tag"], "s1", {"X": "1"})
     meta = json.loads((d / "runs" / r["tag"] / "gui-run.json").read_text())
