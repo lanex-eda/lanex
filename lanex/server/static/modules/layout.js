@@ -181,6 +181,15 @@ export async function revealHighlight(h, run) {
   await showPath(hl, { from: "link" });
 }
 
+// "How to read a chip" from the command palette: the lesson on the run on screen.
+export async function startReadingLesson() {
+  await new Promise((r) => setTimeout(r, 0));
+  if (_loading) await _loading; else await renderLayout();
+  if (S.openP) await S.openP;
+  if (!S.info) { toast.show("There's no layout on screen yet. Run the flow once, then try again.", "info"); return; }
+  startReading();
+}
+
 // ------------------------------------------------------------------ runs
 // The run is the app's (context.js): Runs, the run bar on any results page and
 // a finished run all change it, and this page follows.
@@ -1850,7 +1859,7 @@ function ovlSectionHtml() {
     "<div class='lx-key-scale'><canvas class='lx-heat-hist' width='480' height='36' aria-hidden='true'></canvas>" +
     "<div class='lx-ramp' style='background:" + rampGradient(rampName(), light) + "'></div>" +
     "<div class='lx-ramp-t'><span>0</span><span>" + fmtNum(top / 2) + "</span><span>" + fmtNum(top) + " " + esc(m.unit || "") + "</span></div></div>" +
-    (m.unit === "%" ? "<p class='lx-key-over'><i class='lx-hatch'></i>" + esc(overWords) + "</p>" : "") +
+    (m.unit === "%" ? "<p class='lx-key-over'><i class='lx-hatch' style='background-color:" + rampCss(rampName(), 1, light) + "'></i>" + esc(overWords) + "</p>" : "") +
     "<p class='lx-key-sum'>Max <b>" + fmtNum(m.max, 1) + " " + esc(m.unit || "") + "</b> · " + (m.over || 0) + " of " + m.tiles + " tiles over 100 %</p>" +
     "<label class='lx-slider'><span>Show from</span><output id='lx-heat-floorv'>" + (S.heatFloor ? "≥ " + S.heatFloor + " %" : "everything") + "</output>" +
     "<input type='range' id='lx-heat-floor' min='0' max='" + Math.round(top) + "' step='5' value='" + S.heatFloor + "' style='--p:" + (S.heatFloor / top * 100) + "%' aria-label='Show only tiles at or above'/></label>" +
