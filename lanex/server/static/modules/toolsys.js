@@ -17,19 +17,15 @@ import { toast } from "./toast.js";
 import { confirmDialog, customDialog } from "./dialog.js";
 import { icon } from "./icons.js";
 import { prefOn } from "./prefs.js";
-import { when } from "./metricfmt.js";
+import { when, bytes } from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
 // ------------------------------------------------------------------ format
+// The one size formatter (metricfmt.bytes), "about" for an estimate.
 export function fmtBytes(n, { approx = false } = {}) {
   if (n == null || !isFinite(n)) return "";
-  const a = approx ? "about " : "";
-  if (n >= 1e12) return a + (n / 1e12).toFixed(1) + " TB";
-  if (n >= 1e9) return a + (n >= 100e9 ? Math.round(n / 1e9) : (n / 1e9).toFixed(1)) + " GB";
-  if (n >= 1e6) return a + Math.round(n / 1e6) + " MB";
-  if (n >= 1e3) return a + Math.round(n / 1e3) + " kB";
-  return a + Math.round(n) + " B";
+  return (approx ? "about " : "") + bytes(n);
 }
 
 export function whenText(t) {
