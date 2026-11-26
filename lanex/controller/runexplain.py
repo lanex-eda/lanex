@@ -149,10 +149,15 @@ def help_text(run: "verify._Run", out: Dict[str, Any], card: Dict[str, Any], tai
 
 
 def _warnings(run_dir: Path, base_dir: Optional[Path], cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    lines = _lines(run_dir / "warning.log")
+    # One warning per record, not per line: a multi-line record ("Setup
+    # violations found in the following corners:" then "* corner" lines) is
+    # one warning (runwarnings.read_records, the same count Verify shows).
+    from . import runwarnings
+    lines = [r["text"] for r in runwarnings.read_records(run_dir)]
     base_codes = None
     if base_dir is not None:
-        base_codes = {m.group(1) for ln in _lines(base_dir / "warning.log") for m in [_CODE_RX.search(ln)] if m}
+        base_codes = {m.group(1) for ln in (r["text"] for r in runwarnings.read_records(base_dir))
+                      for m in [_CODE_RX.search(ln)] if m}
     groups: Dict[str, Dict[str, Any]] = {}
     other = 0
     for ln in lines:
@@ -269,6 +274,19 @@ def _outcome(run_dir: Path) -> Optional[str]:
         return None
 
 
+def _console_error(run_dir: Path) -> Optional[str]:
+    """The error block a failing run printed on its console, as the run engine
+    kept it in ``gui-run.json`` ``outcome.error_text`` (runner.error_block)."""
+    try:
+        doc = json.loads((run_dir / "gui-run.json").read_text(encoding="utf-8"))
+        out = doc.get("outcome") if isinstance(doc, dict) else None
+        if isinstance(out, dict) and out.get("result") == "error":
+            return str(out.get("error_text") or out.get("error") or "") or None
+    except Exception:
+        pass
+    return None
+
+
 def explain_run(run_dir: str | Path, base_dir: Optional[str | Path] = None) -> Dict[str, Any]:
     """Outcome, reason, fixes and warnings for one run (see module doc)."""
     run_dir = Path(run_dir)
@@ -278,7 +296,14 @@ def explain_run(run_dir: str | Path, base_dir: Optional[str | Path] = None) -> D
     cfg = run.cfg or {}
     outcome = _outcome(run_dir)
     state = fs.get("state")
-    if state == "complete":
+    console_error = _console_error(run_dir) if outcome == "error" else None
+    if state == "complete" and console_error:
+        # LibreLane exited with an error that only its console showed (e.g. a
+        # SETUP_VIOLATION_CORNERS wildcard that matches no corner) although the
+        # folder looks finished: the run failed, with the console's words.
+        kind = "halted"
+        fs = {**fs, "error_log": (fs.get("error_log") or []) + console_error.splitlines()[:30]}
+    elif state == "complete":
         kind = "clean"
     elif state in ("deferred_errors", "complete_with_errors"):
         kind = "checks-failed"
@@ -365,7 +390,9 @@ def _halted_card(run: "verify._Run", run_dir: Path, step: Dict[str, Any], out: D
                          "the log's last lines on the clipboard, for a forum post or an issue." % (tool, sid or step["dir"]))
         lead = (first or {}).get("text") or (errors[0] if errors else "")
         if lead:
-            card["evidence"] = [lead] + [e for e in errors if e != lead][:2]
+            # error.log repeats the step log's line without "ERROR ": once is enough.
+            same = lambda e: e.replace("[ERROR ", "[").strip() == lead.replace("[ERROR ", "[").strip()  # noqa: E731
+            card["evidence"] = [lead] + [e for e in errors if not same(e)][:2]
     if not card.get("evidence") and errors and len(errors) < len(out["errors"]):
         # error.log wrapped the tool's line in LibreLane's own: show the tool's.
         hit = [e for e in errors if problems._CODE_RX.search(e) or "ERROR" in e or "Error" in e]

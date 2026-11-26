@@ -273,3 +273,30 @@ body.theme-light .fl-prob-more { color: var(--accent); }
 .dx-pl-t small { font: 11.5px var(--mono); color: var(--text-muted); overflow-wrap: anywhere; }
 .dx-checkers { margin: var(--s-4) 0 0; }
 .dx-drc .dx-fixes { margin-top: var(--s-4); }
+
+/* ---------- the failure card's extras (problems.js): how sure each fix is,
+ * the card's terms, the code chip that opens Help's error index, notes ---------- */
+.px-sure {
+  display: inline-flex; align-items: center; gap: 5px; margin-right: 8px; vertical-align: 1px;
+  font: 600 10.5px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap;
+}
+.px-sure .vf-mark { width: 10px; height: 10px; }
+.px-sure .vf-mark.is-warn::after, .px-sure .vf-mark.is-info::after, .px-sure .vf-mark.is-pass::after { content: none; }
+.px-sure.is-fixes { color: var(--pass); }
+.px-sure.is-likely { color: var(--warn); }
+.px-sure.is-try { color: var(--text-muted); }
+body.theme-light .px-sure.is-fixes { color: color-mix(in srgb, var(--pass) 75%, #000); }
+body.theme-light .px-sure.is-likely { color: color-mix(in srgb, var(--warn) 70%, #000); }
+
+.px-terms { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: var(--s-3); }
+.px-terms-k { font: 500 10.5px var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-muted); }
+.px-term {
+  padding: 1px 8px; font-size: 12.5px; color: var(--text); cursor: help;
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent); border: 1px solid var(--border); border-radius: 3px;
+}
+.px-term:hover, .px-term:focus-visible { border-color: var(--met1); color: var(--text-strong); outline: none; }
+button.px-code { cursor: pointer; display: inline-flex; align-items: center; gap: 3px; }
+button.px-code:hover { border-color: var(--fail); color: var(--text-strong); }
+button.px-code:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.px-notes { margin: var(--s-3) 0 0; padding-left: 18px; font-size: 13px; line-height: 1.5; color: var(--text-muted); max-width: 78ch; }
+.px-notes li + li { margin-top: 3px; }

@@ -152,7 +152,7 @@ def test_viewers_and_sims_run_as_the_person(monkeypatch):
     assert container_tools.user_flags("docker") == []
     container_tools._USER_FLAGS_CACHE.clear()
     R.stdout = ""
-    cmd = simulate.build_sim_argv if hasattr(simulate, "build_sim_argv") else None
+    # Simulations: the RTL IDE's own --user (simulate.py user_args, lane 8) and HOME=/tmp.
     text = Path(simulate.__file__).read_text(encoding="utf-8")
-    assert "user_flags(engine)" in text
+    assert "*user_args" in text and '"HOME=/tmp"' in text
     container_tools._USER_FLAGS_CACHE.clear()

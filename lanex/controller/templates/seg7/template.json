@@ -1,0 +1,19 @@
+{
+  "name": "seg7",
+  "title": "7-segment decoder",
+  "description": "A hex digit in, the segments of a display out. Pure logic with no clock: the smallest design that still becomes a chip.",
+  "teaches": "Logic with no clock: a case with a default, and timing from inputs to outputs.",
+  "top": "seg7",
+  "clock_port": null,
+  "clock_period": 10.0,
+  "sources": [
+    "src/seg7.v"
+  ],
+  "testbench": "verify/seg7_tb.v",
+  "order": 2,
+  "config": {
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [0, 0, 80, 80],
+    "PL_TARGET_DENSITY_PCT": 50
+  }
+}

@@ -2,6 +2,7 @@
   "name": "fifo",
   "title": "Synchronous FIFO",
   "description": "A 16-deep, 8-bit FIFO with full and empty flags. Exercises memory, control logic and timing closure.",
+  "teaches": "Memory built from flip-flops, full and empty flags, and closing timing at 12 ns.",
   "top": "fifo",
   "clock_port": "clk",
   "clock_period": 12.0,
@@ -9,7 +10,7 @@
     "src/fifo.v"
   ],
   "testbench": "verify/fifo_tb.v",
-  "order": 4,
+  "order": 7,
   "config": {
     "FP_CORE_UTIL": 40,
     "PL_TARGET_DENSITY_PCT": 55
@@ -20,6 +21,11 @@
       "config": {
         "FP_CORE_UTIL": 38,
         "PL_TARGET_DENSITY_PCT": 50
+      }
+    },
+    "sky130*": {
+      "config": {
+        "MAX_FANOUT_CONSTRAINT": 6
       }
     }
   }

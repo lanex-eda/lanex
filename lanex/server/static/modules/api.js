@@ -148,7 +148,7 @@ export const api = {
   enableDockerGroup: () => _fetch("/api/container/enable-docker-group", { method: "POST", body: "{}" }),
   startEngine: (engine) =>
     _fetch("/api/container/start-engine", { method: "POST", body: JSON.stringify({ engine }) }),
-  runStatus: () => _fetch("/api/run/status"),
+  runStatus: (jobId) => _fetch("/api/run/status" + (jobId ? "?job_id=" + encodeURIComponent(jobId) : "")),
   // The first listing of a big project on /mnt/c summarises every run once
   // (later ones come from the server's cache): give it time.
   // (Opening a project and the shared run list ask at the same moment: one request.)
@@ -197,6 +197,26 @@ export const api = {
     _fetch("/api/layout/instances?sid=" + encodeURIComponent(sid) + "&cell=" + encodeURIComponent(cell)),
   layoutMarkers: (tag) => _fetch("/api/layout/markers?tag=" + encodeURIComponent(tag)),
   layoutCommands: (tag) => _fetch("/api/layout/commands?tag=" + encodeURIComponent(tag)),
+  // Layout pro analysis (lane 3): nets, a path's cells, the OpenROAD export.
+  layoutNets: (sid, q, limit = 60) =>
+    _fetch("/api/layout/nets?sid=" + encodeURIComponent(sid) + "&q=" + encodeURIComponent(q || "") + "&limit=" + limit, { timeout: 120000 }),
+  layoutNet: (sid, name) =>
+    _fetch("/api/layout/net?sid=" + encodeURIComponent(sid) + "&name=" + encodeURIComponent(name), { timeout: 120000 }),
+  layoutLocate: (sid, insts, nets) => _fetch("/api/layout/locate", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, insts, nets }), timeout: 120000,
+  }),
+  layoutAnalysis: (tag, source, data = true) =>
+    _fetch("/api/layout/analysis?tag=" + encodeURIComponent(tag) + "&source=" + encodeURIComponent(source || "final") + (data ? "" : "&data=0")),
+  layoutAnalysisStart: (tag, source, force = false) => _fetch("/api/layout/analysis/start", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag, source, force }),
+  }),
+  layoutAnalysisCancel: (tag, source) => _fetch("/api/layout/analysis/cancel", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag, source }),
+  }),
+  layoutMeshCancel: (sid) => _fetch("/api/layout/mesh/cancel", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid }),
+  }),
+  viewerStatus: (id) => _fetch("/api/layout/viewer-status?id=" + encodeURIComponent(id)),
   runFileUrl: (tag, path) =>
     "/api/run-file?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path),
   deleteRun: (tag, force) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag, force: !!force }) }),
@@ -219,8 +239,25 @@ export const api = {
   setDesignDir: (path) => _fetch("/api/set-design-dir", { method: "POST", body: JSON.stringify({ path }) }),
   diffRuns: (a, b) => _fetch("/api/diff", { method: "POST", body: JSON.stringify({ a, b }) }),
   startRun: (payload) => _fetch("/api/run/start", { method: "POST", body: JSON.stringify(payload) }),
-  cancelRun: () => _fetch("/api/run/cancel", { method: "POST", body: "{}" }),
-  resumeRun: () => _fetch("/api/run/resume", { method: "POST", body: "{}" }),
+  // Stop / next step of one queue job (job_id), else the run the open project follows.
+  cancelRun: (jobId) => _fetch("/api/run/cancel", { method: "POST", body: JSON.stringify(jobId ? { job_id: jobId } : {}) }),
+  resumeRun: (jobId) => _fetch("/api/run/resume", { method: "POST", body: JSON.stringify(jobId ? { job_id: jobId } : {}) }),
+  // ---------- the job queue (controller/jobs.py documents every field)
+  queue: () => _fetch("/api/queue"),
+  queueAdd: (body) => _fetch("/api/queue/add", { method: "POST", body: JSON.stringify(body), timeout: 120000 }),
+  queueMove: (id, to) => _fetch("/api/queue/move", { method: "POST", body: JSON.stringify({ id, to }) }),
+  queueRemove: (sel) => _fetch("/api/queue/remove", { method: "POST", body: JSON.stringify(sel) }),
+  queuePause: (paused) => _fetch("/api/queue/pause", { method: "POST", body: JSON.stringify({ paused: !!paused }) }),
+  queueStop: (sel) => _fetch("/api/queue/stop", { method: "POST", body: JSON.stringify(sel) }),
+  queueStopAfter: (on) => _fetch("/api/queue/stop-after-current", { method: "POST", body: JSON.stringify({ on: !!on }) }),
+  queueSettings: (s) => _fetch("/api/queue/settings", { method: "POST", body: JSON.stringify(s) }),
+  queueRecover: (id, action) => _fetch("/api/queue/recover", { method: "POST", body: JSON.stringify({ id, action }) }),
+  queueResume: (id) => _fetch("/api/queue/resume", { method: "POST", body: JSON.stringify({ id }) }),
+  queueOrphan: (name) => _fetch("/api/queue/orphan", { method: "POST", body: JSON.stringify({ name, action: "stop" }) }),
+  runLog: (designDir, tag, from, to) => _fetch("/api/run/log?design_dir=" + encodeURIComponent(designDir || "") +
+    "&tag=" + encodeURIComponent(tag || "") + (from != null ? "&from=" + from : "") + (to != null ? "&to=" + to : ""), { timeout: 120000 }),
+  runLogUrl: (designDir, tag) => "/api/run/log?download=1&design_dir=" + encodeURIComponent(designDir || "") +
+    "&tag=" + encodeURIComponent(tag || ""),
   reportsDrc: (path) => _fetch("/api/reports/drc?path=" + encodeURIComponent(path)),
   reportsLvs: (path) => _fetch("/api/reports/lvs?path=" + encodeURIComponent(path)),
   getPdkRoot: () => _fetch("/api/settings/pdk-root"),
@@ -344,6 +381,10 @@ export const api = {
   // The fix loop: a run's problems; what a fix would do; apply it as a run
   // resumed from that one; undo a config change.
   problems: (tag) => _fetch("/api/problems?tag=" + encodeURIComponent(tag), { timeout: 60000 }),
+  // The failure cards LanEx knows, for Help's error index (and which runs hit each).
+  kbErrors: () => _fetch("/api/kb/errors"),
+  // Setup's floorplan preview: the PDK's site, margins, straps and the last synthesis area.
+  floorplanEstimate: (pdk, scl, { project = true } = {}) => _fetch("/api/floorplan/estimate?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + (project ? "" : "&project=0")),
   fixPlan: (body) => _fetch("/api/fix/plan", { method: "POST", body: JSON.stringify(body), timeout: 60000 }),
   fixApply: (body) => _fetch("/api/fix/apply", { method: "POST", body: JSON.stringify(body), timeout: 60000 }),
   configUndo: (undo) => _fetch("/api/config/undo", { method: "POST", body: JSON.stringify(undo) }),
@@ -351,6 +392,15 @@ export const api = {
     _fetch("/api/timing-paths?kind=" + encodeURIComponent(kind || "setup") +
       (tag ? "&tag=" + encodeURIComponent(tag) : "") +
       (limit ? "&limit=" + encodeURIComponent(limit) : "")),
+  // Verify's timing explorer (lane 4): one corner's endpoints, one path in
+  // full; the run's warnings with waivers; the sign-off report files.
+  timingList: (q) => _fetch("/api/timing/paths?" + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v != null && v !== "")).toString(), { timeout: 60000 }),
+  timingPath: (q) => _fetch("/api/timing/path?" + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v != null && v !== "")).toString(), { timeout: 60000 }),
+  warnings: (tag, base) => _fetch("/api/warnings?tag=" + encodeURIComponent(tag) + (base ? "&base=" + encodeURIComponent(base) : "")),
+  waive: (entry, mtime, tag) => _fetch("/api/warnings/waive", { method: "POST", body: JSON.stringify({ entry, mtime, tag }) }),
+  unwaive: (id, mtime) => _fetch("/api/warnings/unwaive", { method: "POST", body: JSON.stringify({ id, mtime }) }),
+  verifyReport: (body) => _fetch("/api/verify/report", { method: "POST", body: JSON.stringify(body), timeout: 120000 }),
+  verifySummary: (tag, base) => _fetch("/api/verify/summary?tag=" + encodeURIComponent(tag) + (base ? "&base=" + encodeURIComponent(base) : ""), { timeout: 60000 }),
 
   // ---------- Phase 2: re-verify + DSE
   verifyRerun: (payload) =>
@@ -382,6 +432,23 @@ export const api = {
   waveformUrl: (path) => "/api/waveform?path=" + encodeURIComponent(path),
   openWave: (path, signals) =>
     _fetch("/api/ide/open-wave", { method: "POST", body: JSON.stringify({ path, signals: signals || [] }) }),
+  // RTL IDE: the project index (definition, references, symbols, hierarchy),
+  // project search and replace, run all, the schematic (controller/hdlindex.py,
+  // hdlsearch.py, simulate.py, schematic.py).
+  ideIndex: (payload) => _fetch("/api/ide/index", { method: "POST", body: JSON.stringify(payload || {}) }),
+  ideDefinition: (payload) => _fetch("/api/ide/definition", { method: "POST", body: JSON.stringify(payload) }),
+  ideReferences: (payload) => _fetch("/api/ide/references", { method: "POST", body: JSON.stringify(payload) }),
+  ideSymbols: (payload) => _fetch("/api/ide/symbols", { method: "POST", body: JSON.stringify(payload || {}) }),
+  ideHierarchy: (payload) => _fetch("/api/ide/hierarchy", { method: "POST", body: JSON.stringify(payload || {}) }),
+  ideSearch: (payload) => _fetch("/api/ide/search", { method: "POST", body: JSON.stringify(payload) }),
+  ideReplace: (payload) => _fetch("/api/ide/replace", { method: "POST", body: JSON.stringify(payload) }),
+  ideCaps: (wait) => _fetch("/api/ide/caps" + (wait ? "?wait=1" : ""), { timeout: 40000 }),
+  ideSchematic: (payload) => _fetch("/api/ide/schematic", { method: "POST", body: JSON.stringify(payload || {}) }),
+  ideSchematicResult: (id, cancel) =>
+    _fetch("/api/ide/schematic-result?id=" + encodeURIComponent(id || "") + (cancel ? "&cancel=1" : "")),
+  simRunAll: (payload) => _fetch("/api/sim/run-all", { method: "POST", body: JSON.stringify(payload) }),
+  simBatch: (log) => _fetch("/api/sim/batch" + (log === undefined || log === null ? "" : "?log=" + encodeURIComponent(log))),
+  simPreview: (payload) => _fetch("/api/sim/preview", { method: "POST", body: JSON.stringify(payload) }),
 
   // ---------- Phase 4: viewers + cells
   // (2D/3D layout = the flow's KLayout PNG + "Open in desktop tool"; the old

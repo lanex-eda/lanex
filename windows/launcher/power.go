@@ -41,7 +41,7 @@ import (
 
 const (
 	powerPoll       = 5 * time.Second
-	powerNoAnswer   = 30 * time.Second // server gone this long: let the PC sleep again
+	powerNoAnswer   = 15 * time.Second // three polls with no answer (lane 1 contract): let the PC sleep again
 	powerResumeGap  = 15 * time.Second // a poll gap this long means the PC slept
 	powerHoldReason = "LanEx: a chip design run is in progress"
 )

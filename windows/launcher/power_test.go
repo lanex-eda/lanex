@@ -27,18 +27,18 @@ func TestHoldAcquireAndRelease(t *testing.T) {
 	}
 }
 
-func TestHoldGoneServerReleasesAfter30s(t *testing.T) {
+func TestHoldGoneServerReleasesAfterThreeFailedPolls(t *testing.T) {
 	var s holdState
 	s.ac = -1
 	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
 	s.step(t0, holdAnswer{ok: true, hold: true}, -1)
-	for i := 1; i <= 5; i++ { // 25 s of no answer: a restart, keep holding
+	for i := 1; i <= 2; i++ { // two polls without an answer: a restart, keep holding
 		if a := s.step(t0.Add(time.Duration(i*5)*time.Second), holdAnswer{}, -1); a != holdNone {
 			t.Fatalf("no answer at %ds: got %v", i*5, a)
 		}
 	}
-	if a := s.step(t0.Add(30*time.Second), holdAnswer{}, -1); a != holdRelease {
-		t.Fatalf("30 s without an answer: got %v", a)
+	if a := s.step(t0.Add(15*time.Second), holdAnswer{}, -1); a != holdRelease {
+		t.Fatalf("three polls without an answer: got %v", a)
 	}
 }
 

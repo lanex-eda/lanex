@@ -20,7 +20,9 @@ import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
 import { provBtnHtml, wireProvBtns, needleLine } from "./provenance.js";
 import { renderFileText, fileActionsHtml, wireFileActions } from "./fileview.js";
-import { renderTimingPaths } from "./timing.js";
+import { renderTimingExplorer } from "./timing.js";
+import { renderWarnings } from "./warnings.js";
+import { wireExport } from "./signoff.js";
 import { toast } from "./toast.js";
 import * as AM from "./analytics-model.js";
 import * as V from "./verify-model.js";
@@ -200,7 +202,7 @@ function wireOnce() {
   mountRunBar(document.getElementById("verify-runbar"), { baseline: true });
   ctx.onContext(async (d) => {
     if (!sec.classList.contains("section-active") || d.why === "loaded" || d.why === "settled") return;   // it renders when shown
-    if (d.why === "baseline") { _baseTag = ctx.contextBaseline(); await loadBase(); paint(); return; }
+    if (d.why === "baseline") { _baseTag = ctx.contextBaseline(); await loadBase(); paint(); paintExtras(); return; }
     renderVerify();
   });
   document.getElementById("btn-verify-refresh").addEventListener("click", () => renderVerify());
@@ -209,7 +211,12 @@ function wireOnce() {
     openResolvedSettings(_tag);
   });
   document.getElementById("btn-verify-klayout").addEventListener("click", (e) => openKlayout(e.currentTarget));
-  document.getElementById("btn-verify-copy").addEventListener("click", copySummary);
+  // Export: the sign-off report (HTML, Markdown), the share card, the text summary.
+  wireExport({
+    btn: document.getElementById("btn-verify-export"), menu: document.getElementById("vf-export-menu"),
+    ctx: () => ({ tag: _tag, base: _baseTag, rep: _rep, verdict: _rep ? verdictCopy() : null, design: (ctx.contextRow(_tag) || {})._design || state.designDir }),
+    copySummary,
+  });
   const nav = document.getElementById("verify-jump");
   nav.addEventListener("click", (e) => {
     const b = e.target.closest("[data-jump]");
@@ -268,7 +275,7 @@ async function selectRun(tag) {
   if (!_rep) {
     document.getElementById("vf-overview").innerHTML = "<div class='empty'><span class='ico'>" + icon("alert", { size: 40 }) +
       "</span><h3>Could not read " + esc(tag) + "</h3><p>The run folder may have been moved or deleted. Refresh, or pick another run.</p></div>";
-    for (const id of ["vf-checks", "vf-timing-body", "vf-drc", "vf-lvs", "vf-rel", "vf-reports-body"]) {
+    for (const id of ["vf-checks", "vf-timing-body", "vf-tx", "vf-timing-table", "vf-drc", "vf-lvs", "vf-rel", "vf-warnings", "vf-reports-body"]) {
       const el = document.getElementById(id); if (el) el.innerHTML = "";
     }
     return;
@@ -276,7 +283,22 @@ async function selectRun(tag) {
   // Problems open by default: that is what the user came to read.
   if (!_open.size) for (const c of _rep.checks || []) if (c.status === "fail") _open.add(c.id);
   paint();
-  renderTimingPaths(tag);
+  paintExtras();
+}
+
+// The timing explorer and the warnings: they load their own data (the run's
+// STA reports, its warning.log) and follow the run and the baseline.
+function paintExtras() {
+  if (!_rep) return;
+  renderTimingExplorer({ tag: _tag, base: _baseTag, rep: _rep });
+  renderWarnings(document.getElementById("vf-warnings"), { tag: _tag, base: _baseTag }).then((w) => {
+    const chip = document.getElementById("vf-jump-warn");
+    if (!chip) return;
+    const look = w && w.ok ? (w.look || 0) : 0;
+    chip.hidden = !look;
+    chip.textContent = look ? String(look) : "";
+    chip.title = look ? look + " warning group" + (look === 1 ? "" : "s") + " to look at" : "";
+  }).catch(() => {});
 }
 
 async function loadBase() {
@@ -387,10 +409,17 @@ function diffStrip() {
 function pillar(p) {
   const by = byId();
   const cs = p.checks.map((id) => by.get(id)).filter(Boolean);
-  const st = V.worstStatus(cs.filter((c) => c.gate !== "info"));
+  let st = V.worstStatus(cs.filter((c) => c.gate !== "info"));
   const d = _rep.details || {};
   let hero = "", rows = [], drcFlag = "";
-  if (p.id === "timing") {
+  if (p.id === "timing" && (by.get("setup") || {}).no_clock) {
+    // No clock: nothing was timed, so slew and cap passing says nothing either.
+    st = "not_run";
+    hero = "<span class='vf-hero-v vf-hero-word'>Not timed</span>";
+    rows = [["Why", "no clock reached the registers", { status: "warn" }, ""],
+      ["CLOCK_PORT", (by.get("setup").no_clock.clock_port || "not set"), null, vprov("CLOCK_PORT")],
+      ["Flip-flops", String(by.get("setup").no_clock.registers || "—"), null, ""]];
+  } else if (p.id === "timing") {
     const s = by.get("setup"), h = by.get("hold");
     const corners = (d.timing && d.timing.source === "signoff" && d.timing.corners) || [];
     const sw = s && s.status !== "not_run" && V.isNum(s.worst), hw = h && h.status !== "not_run" && V.isNum(h.worst);
@@ -602,7 +631,9 @@ function renderTiming() {
   const rule = (r) => r.wildcards == null ? "every corner (rule unknown)" : !r.wildcards.length ? "no corner (warnings only)" :
     r.wildcards.length === 1 && r.wildcards[0] === "*" ? "every corner" : "corners matching " + r.wildcards.join(", ");
   const clk = V.isNum(t.clock_period) ? t.clock_period : Number(t.clock_period);
-  const lede = rows.length
+  const lede = rows.length && t.no_clock
+    ? "OpenSTA ran in " + rows.length + " corners but timed no path: no clock reached the registers, so there is no slack to show and \"0 violations\" means nothing was checked."
+    : rows.length
     ? "OpenSTA timed the routed layout in " + rows.length + " corners" + (Number.isFinite(clk) ? " against a " + clk + " ns clock (" + +(1000 / clk).toFixed(2) + " MHz)" + vprov("CLOCK_PERIOD") : "") +
       ". LibreLane fails the run on setup violations in " + esc(rule(sr)) + " (" + esc(sr.var || "TIMING_VIOLATION_CORNERS") + vprov(sr.var) + ") and on hold violations in " + esc(rule(hr)) +
       (hr.var ? " (" + esc(hr.var) + vprov(hr.var) + ")" : "") + "; slew and capacitance only warn."
@@ -615,6 +646,8 @@ function renderTiming() {
     const s = by.get("setup");
     el.innerHTML = head("Timing", "Timing in every corner", "") +
       "<div class='an-none'>" + esc((s && s.detail) || "This run has no per-corner timing.") + "</div>";
+    const all = document.getElementById("vf-timing-table");
+    if (all) all.innerHTML = "";
     return;
   }
   const worst = (k, lo) => rows.reduce((m, r) => (V.isNum(r[k]) && (m === null || (lo ? r[k] < m : r[k] > m)) ? r[k] : m), null);
@@ -656,8 +689,17 @@ function renderTiming() {
     ? "<p class='vf-callout is-warn'>Sign-off timing (OpenROAD.STAPostPNR) didn't run in this run. These are the last estimates an earlier timing step left behind, before routing finished; they are not a sign-off result.</p>" : "";
   el.innerHTML = head("Timing", "Timing in every corner", lede,
       btn("Timing charts in Analytics", "data-go='analytics' data-go-section='an-timing'", { ic: "chevron" })) +
-    est + facts + timingDiag() + "<div class='an-card vf-card-flush'>" + table + "</div>" +
-    "<p class='an-foot'>A corner is a process (tt typical, ss slow, ff fast), temperature and voltage, with wire parasitics at their min, nominal or max. Worst values are outlined; red fails the run, amber only warns.</p>";
+    est + facts + timingDiag();
+  // Every corner's numbers, folded under the explorer: the grids above are the
+  // way in, this is the full table (TNS, counts, slew, cap and fanout too).
+  const all = document.getElementById("vf-timing-table");
+  if (all) {
+    const was = all.querySelector("details")?.open;
+    all.innerHTML = "<details class='tx-allc'" + (was ? " open" : "") + "><summary><span class='vf-chev'>" + icon("chevron", { size: 13 }) + "</span>All corner numbers" +
+      "<small>worst and total slack and violations for setup and hold, slew, capacitance and fanout, in all " + rows.length + " corners</small></summary>" +
+      "<div class='an-card vf-card-flush'>" + table + "</div>" +
+      "<p class='an-foot'>A corner is a process (tt typical, ss slow, ff fast), temperature and voltage, with wire parasitics at their min, nominal or max. Worst values are outlined; red fails the run, amber only warns.</p></details>";
+  }
 }
 
 function timingDiag() {
@@ -977,6 +1019,23 @@ async function rerun(stepId) {
       root = back;
       back.querySelector("[data-rr-add]")?.addEventListener("click", () =>
         back.querySelector(".vf-rr-rows").insertAdjacentHTML("beforeend", row()));
+      // A setting named: say what it takes (LibreLane's type, unit, choices
+      // and default) under the row, so the value is typed right the first
+      // time; the server checks it against that type before planning.
+      const vars = () => new Map((state.variables || []).map((v) => [v.name, v]));
+      if (!(state.variables || []).length) api.variables().then((v) => { if (Array.isArray(v)) state.variables = v; }).catch(() => {});
+      back.querySelector(".vf-rr-rows")?.addEventListener("input", (e) => {
+        const r = e.target.closest(".vf-rr-row");
+        if (!r || e.target !== r.querySelector("input")) return;
+        const v = vars().get(e.target.value.trim());
+        let hint = r.nextElementSibling && r.nextElementSibling.classList.contains("vf-rr-hint") ? r.nextElementSibling : null;
+        if (!v) { if (hint) hint.remove(); r.querySelectorAll("input")[1].placeholder = "Value"; return; }
+        if (!hint) { r.insertAdjacentHTML("afterend", "<p class='vf-rr-hint muted'></p>"); hint = r.nextElementSibling; }
+        const ch = (v.choices || []).length ? "one of " + v.choices.join(", ") : v.type;
+        hint.textContent = ch + (v.units ? " · " + v.units : "") + (v.default !== null && v.default !== undefined && v.default !== "" ? " · LibreLane's default " + v.default : "") +
+          (v.description ? " · " + String(v.description).split(/(?<=\.)\s/)[0] : "");
+        r.querySelectorAll("input")[1].placeholder = ch + (v.units ? " (" + v.units + ")" : "");
+      });
     },
   });
   if (go !== "go" || !root) return;

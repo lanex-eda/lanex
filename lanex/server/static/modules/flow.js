@@ -30,9 +30,9 @@ import * as FS from "./flowstages.js";
 import * as AM from "./analytics-model.js";
 import { LogView } from "./logview.js";
 import { fileActionsHtml, wireFileActions } from "./fileview.js";
-import { liveLines, liveRows, onLiveLog } from "./logs.js";
+import { liveLines, liveRows, onLiveLog, droppedLines } from "./logs.js";
 import { reportCardHtml, verdictOf, fmtDur } from "./reportcard.js";
-import { fixListHtml, problemsOf } from "./problems.js";
+import { fixListHtml, problemsOf, termsRowHtml, codeChipHtml, notesHtml } from "./problems.js";
 import { loadingStart, pageSkeleton } from "./loading.js";
 import "./fixsheet.js";
 
@@ -492,18 +492,21 @@ function headHtml(steps, stages) {
 // The live head is built once per run and then only its text changes, so
 // Stop stays under the pointer while the steps race by.
 function paintLive(head, steps, stages) {
-  const key = "live|" + F.tag + "|" + (state.paused ? "p" : "");
+  // A run started in a terminal: LanEx follows it but cannot stop it.
+  const term = String(state.followJob || "").startsWith("term:");
+  const key = "live|" + F.tag + "|" + (state.paused ? "p" : "") + (term ? "|t" : "");
   if (head._key !== key) {
     head._key = key; head._html = null;
     head.innerHTML = "<div class='an-verdict fl-hero is-live'><div class='an-verdict-main'>" +
-      "<div class='an-eyebrow'><span class='fl-live-dot'></span>Running · " + esc(F.tag) + "</div>" +
+      "<div class='an-eyebrow'><span class='fl-live-dot'></span>Running · " + esc(F.tag) + (term ? " · started in a terminal" : "") + "</div>" +
       "<h2 class='an-title fl-h-title'></h2><div class='fl-h-branch'></div><p class='an-lede fl-h-sub'></p>" +
       "<p class='fl-h-slow muted' hidden>This step can take several minutes on bigger designs. The run is still going.</p>" +
       "<div class='fl-bar' role='progressbar' aria-label='Steps done' aria-valuemin='0' aria-valuemax='100'><span></span></div>" +
       "</div><div class='an-verdict-act'>" +
       "<span class='fl-elapsed' id='fl-elapsed'></span>" +
       (state.paused ? "<button class='btn btn-primary' data-fl='resume'>" + icon("play", { size: 14 }) + " Next step</button>" : "") +
-      "<button class='btn btn-warn' data-fl='stop'>" + icon("stop", { size: 13 }) + " Stop</button></div></div>";
+      (term ? "<span class='muted fl-term-note'>Stop it in the terminal you started it from.</span>"
+        : "<button class='btn btn-warn' data-fl='stop'>" + icon("stop", { size: 13 }) + " Stop</button>") + "</div></div>";
   }
   // FS.stepCounts: the same done/total the status bar and title use.
   const nc = FS.stepCounts(steps.map((s) => s.status));
@@ -596,7 +599,11 @@ function failHtml(rx, stages) {
     "<div class='fl-split-a'><div class='an-eyebrow'>" + word + " · " + esc(where) + "</div>" +
     "<h2 class='an-title'>" + esc(title) + "</h2>" + branchHtml() +
     "<p class='an-lede'>" + esc(plain) + "</p>" +
-    (ev ? "<div class='fl-ev'><pre>" + esc(ev) + "</pre>" + (c.code ? "<span class='fl-code'>" + esc(c.code) + "</span>" : "") + "</div>" : "") +
+    // The card's terms, the evidence with its code (a button to the error
+    // index), and the card's notes (problems.js).
+    termsRowHtml(c.learn) +
+    (ev ? "<div class='fl-ev'><pre>" + esc(ev) + "</pre>" + codeChipHtml(c.code, c.kb) + "</div>" : "") +
+    notesHtml(c.notes) +
     "</div>" +
     (fixes ? "<div class='fl-split-b'><div class='fl-fixes-h'>What to change</div>" + fixes +
       ((c.fixes || []).some((f) => f.kind === "setting")
@@ -955,11 +962,20 @@ async function setLogSource(src, { live = false, step = null } = {}) {
   F.logSrc = src;
   const L = F.log;
   L.setFollowable(live);
+  // The whole run's output on disk (the console LanEx keeps, else flow.log):
+  // Download, and "Load the full log" when the page kept only the newest lines.
+  const runTag = src.startsWith("run:") ? F.tag : (state.liveTag || F.tag);
+  if (runTag && state.designDir && !src.startsWith("step:") && (src === "live" || src.startsWith("stream:") || src.startsWith("run:") || src.startsWith("live:"))) {
+    L.setSource({
+      download: api.runLogUrl(state.designDir, runTag),
+      loadFull: () => api.runLog(state.designDir, runTag).then((r) => (r && r.text) || ""),
+    });
+  } else L.setSource({});
   if (src === "live" || src.startsWith("stream:")) {
     // The whole run as it printed; after it ends the same lines stay (the
     // run you just watched), ending at how it went.
     L.setRaw("");
-    L.setText(liveLines().join("\n"), { empty: "The run's output appears here as it goes." });
+    L.setText(liveLines().join("\n"), { empty: "The run's output appears here as it goes.", dropped: droppedLines() });
     if (live) L.setFollow(true); else L.end();
     return;
   }
@@ -1105,7 +1121,7 @@ function wireOnce() {
     // been going a while (audit G6).
     else if (act === "stop") import("./setup.js").then((m) => m.requestStop());
     else if (act === "stop-start") import("./setup.js").then(async (m) => { await m.requestStop(); paint(); });
-    else if (act === "resume") api.resumeRun().catch(() => {});
+    else if (act === "resume") api.resumeRun(state.followJob).catch(() => {});
     else if (act === "resume-from") {
       import("./setup.js").then((m) => m.resumeFrom(a.dataset.stage))
         .then((why) => { if (why) toast.show(why, "warn", 9000); })

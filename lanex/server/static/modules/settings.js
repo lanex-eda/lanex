@@ -150,6 +150,7 @@ export async function renderSettings() {
     card("Appearance", prefRows("Appearance")) +
     card("Runs", prefRows("Runs")) +
     card("Editor", prefRows("Editor")) +
+    card("Layout", prefRows("Layout")) +
     card("Keyboard", prefRows("Keyboard") + keysHtml()) +
     "</div><div class='st-col'>" +
     card("Getting started",

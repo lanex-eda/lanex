@@ -14,8 +14,20 @@ import { wireJump } from "./jumpnav.js";
 import { pdkFacts, stackHtml } from "./pdkinfo.js";
 import * as FS from "./flowstages.js";
 import { askNotifyOnRun } from "./runend.js";
+import { runMenuChoices, setupRunMenu, onlyChoice } from "./runmenu.js";
+import { followJob } from "./runfollow.js";
 
 const RECENT_KEY = "ll.recentDesigns";
+
+// The run queue's last word on free slots (queue.js keeps it; it loads after
+// setup.js, so it is read through this hook and assumed free until then).
+let _queueMod = null;
+import("./queue.js").then((m) => { _queueMod = m; }).catch(() => {});
+function slotFree() { return !_queueMod || _queueMod.slotFree(); }
+function queuedAhead() {
+  const s = _queueMod && _queueMod.queueSnapshot();
+  return s ? (s.waiting || 0) : 0;
+}
 
 function getRecentDesigns() {
   try {
@@ -184,9 +196,13 @@ export function setupSetup() {
   // no need to navigate back to Setup. Reuses the same start/stop paths.
   document.getElementById("btn-run-global")?.addEventListener("click", () => {
     if (_start || (state.status && state.status.running)) requestStop();
-    else onRunClick({ show: false });
+    // Every slot taken (other runs, other projects): the button says "Add to
+    // queue" and does that; the run starts by itself when one ends.
+    else onRunClick({ show: false, when: slotFree() ? "now" : "queue" });
   });
-  document.getElementById("btn-resume")?.addEventListener("click", () => api.resumeRun().catch(() => {}));
+  document.addEventListener("g:queue_state", () => paintRunLabel());
+  document.addEventListener("g:run_only", () => paintRunLabel());
+  document.getElementById("btn-resume")?.addEventListener("click", () => api.resumeRun(state.followJob).catch(() => {}));
   document.getElementById("btn-preflight")?.addEventListener("click", () => renderPreflight());
 
   wireRunMenu();
@@ -914,7 +930,7 @@ export async function requestStop() {
     } finally { _stopAsking = false; }
     if (!ok || !(state.status && state.status.running)) return false;
   }
-  api.cancelRun().catch(() => {});
+  api.cancelRun(state.followJob).catch((e) => toast.show(e.message || "The run could not be stopped.", "warn", 9000));
   return true;
 }
 
@@ -964,7 +980,7 @@ function startAccepted(tag) {
   }
   paintRunning(true);
   document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "started", tag } }));
-  if (s && s.cancel) api.cancelRun().catch(() => {});
+  if (s && s.cancel) api.cancelRun(state.followJob).catch(() => {});
 }
 
 async function confirmBlockers(blockers, { quiet = false } = {}) {
@@ -987,7 +1003,22 @@ export function hardBlockers(pf) {
     .map((p) => (p.message + (p.fix ? " " + p.fix : "")).trim());
 }
 
-async function onRunClick({ show = false, fixed = false, ack = false } = {}) {
+// Start a run from the Run menu's own buttons: "now" or "queue".
+export function startFromMenu(when) { return onRunClick({ show: false, when }); }
+
+// A run into the queue: the server runs the config check (LibreLane's own
+// loader, the top module, the clock port) before it accepts it.
+function queueRequest(payload) { return api.startRun(Object.assign({}, payload, { when: "queue" })); }
+
+// "Added to the queue: 3rd in line." Pure (tested).
+export function queuedText(position) {
+  const n = Number(position) || 0;
+  if (n <= 1) return "Added to the queue: it starts as soon as a slot is free.";
+  const ord = n + (n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th");
+  return "Added to the queue: " + ord + " in line. It starts by itself when a slot is free.";
+}
+
+async function onRunClick({ show = false, fixed = false, ack = false, when = "now" } = {}) {
   if (_start) return;   // one is already starting (the button is Stop)
   // "Tell me when a run finishes" is on unless turned off: the browser asks
   // for permission once, here, while the click still counts as the person's.
@@ -1030,11 +1061,43 @@ async function onRunClick({ show = false, fixed = false, ack = false } = {}) {
     acked = true;
   }
   const payload = collectRunPayload();
+  payload.when = when === "queue" ? "queue" : "now";
   const rsel = document.getElementById("run-resume-from");
-  if (rsel && rsel.value && rsel.dataset.tag) {
+  const only = onlyChoice();
+  if (only) {
+    // Only one step (LibreLane's --only): a new run of that step on the
+    // results of the run on the results pages, which it needs (-i).
+    payload.branch_from = { tag: only.tag, step: only.step };
+    payload.to = only.step;
+  } else if (rsel && rsel.value && rsel.dataset.tag) {
     // Resume from a stage of the run on the results pages: the server plans it
     // (and starts earlier if something those stages read has changed since).
     payload.branch_from = { tag: rsel.dataset.tag, step: rsel.value };
+  }
+  if (payload.when === "queue") {
+    // Into the queue: the server checks the config now (so a run that would
+    // stop in its first second is told now, not in an hour), and the run
+    // starts by itself. This page stays where it is.
+    try {
+      if (acked) payload.checks_ack = true;
+      const res = await queueRequest(payload);
+      if (res && res.queued) {
+        toast.show(queuedText(queuedAhead() + 1), "success", 7000,
+          { label: "Show the queue", run: () => import("./queue.js").then((q) => q.openQueue()) });
+        if (_queueMod) _queueMod.refreshQueue();
+        return;
+      }
+      const chk = res && res.config_check;
+      if (chk && !chk.blocking && (chk.problems || []).length && !acked) {
+        const lines = chk.problems.map((p) => (p.message + (p.fix ? " " + p.fix : "")).trim());
+        if (await confirmBlockers(lines, { quiet: true })) onRunClick({ show, fixed, ack: true, when });
+        return;
+      }
+      toast.show("Not queued: " + refusalText((res && (res.reason || res.error)) || "unknown"), "error");
+    } catch (ex) {
+      toast.show("Not queued: " + refusalText(ex.message), "error");
+    }
+    return;
   }
   // Pressing Run shows the run on Flow, unless the user turned that off in
   // the Run menu (then the status line shows it, and this says so). Setup's
@@ -1079,6 +1142,19 @@ async function onRunClick({ show = false, fixed = false, ack = false } = {}) {
   if (acked) payload.checks_ack = true;
   try {
     const res = await api.startRun(payload);
+    if (res && res.busy) {
+      // Every slot was taken by the time the request arrived: offer the queue.
+      startRefused(res.reason || "Every slot is taken.");
+      const { choiceDialog } = await import("./dialog.js");
+      const pick = await choiceDialog({
+        title: "Every run slot is taken",
+        body: (res.reason || "Other runs are going.") + " This run can wait in the queue and start by itself when one ends.",
+        choices: [{ label: "Add to queue", value: "queue" }],
+      });
+      if (pick === "queue") onRunClick({ show, fixed, ack: acked, when: "queue" });
+      return;
+    }
+    if (res && res.job_id && res.ok && res.started !== false) followJob(state, res.job_id, true);
     if (!res.ok || res.started === false) {
       if (res.pdk_mismatch && !fixed) {
         startRefused(res.reason || "The PDK picker and the config disagree.", { mismatch: true });
@@ -1171,11 +1247,16 @@ export function collectRunPayload() {
     ticked.every((f) => cfgSrc.includes(f));
   const sources = sameAsConfig ? [] : ticked;
   const extras = (state.extrasFiles || []).filter(Boolean);
+  // The Run menu's How: threads, low priority, keep awake, and steps to skip.
+  const how = runMenuChoices();
   return {
     tag: tag || null,
     frm: null,
     to: to || null,
-    skip: [],
+    skip: how.skip,
+    threads: how.threads,
+    priority: how.priority,
+    keep_awake: how.keep_awake,
     overrides,
     sources,
     extras,
@@ -1234,7 +1315,10 @@ function wireRunMenu() {
   const res = document.getElementById("run-resume-from");
   if (res) {
     res.innerHTML = "<option value=''>The start (a fresh run)</option>";
-    res.addEventListener("change", () => paintRunLabel());
+    // The note under Start speaks about a stage: it shows once one is picked.
+    const syncNote = () => { const n = document.getElementById("run-resume-note"); if (n && n.textContent.startsWith("Reuses ")) n.hidden = !res.value; };
+    res.addEventListener("change", () => { syncNote(); paintRunLabel(); });
+    res._syncNote = syncNote;
     document.getElementById("run-opts-btn")?.addEventListener("click", () => fillResume());
     // It resumes the run on the results pages: picking another run disarms it.
     document.addEventListener("g:context", (e) => {
@@ -1261,6 +1345,8 @@ function wireRunMenu() {
   }
   paintFlowNote();
   document.addEventListener("g:flow_known", () => { paintFlowNote(); paintRunLabel(); });
+  // Skip steps, threads, low priority, keep awake, the live command, Run now / Add to queue.
+  setupRunMenu({ collect: collectRunPayload, start: (when) => onRunClick({ show: false, when }) });
 }
 
 // "Classic (the config names no flow)" or "Chip, from config.yaml (meta.flow)".
@@ -1307,6 +1393,7 @@ async function fillResume() {
   const changed = (d.settings || []).map((x) => x.var).concat((d.files || []).map((f) => f.path));
   if (note) note.textContent = (d.versions || []).length && p.blocked ? p.blocked
     : "Reuses " + tag + "'s results up to that stage." + (changed.length ? " Changed since: " + changed.slice(0, 3).join(", ") + "." : "");
+  if (sel._syncNote) sel._syncNote(); else if (note) note.hidden = false;
   paintRunLabel();
 }
 
@@ -1335,9 +1422,17 @@ function paintRunLabel() {
   const ropt = rsel && rsel.value ? rsel.options[rsel.selectedIndex] : null;
   const rst = ropt ? FS.stage(ropt.dataset.stage) : null;
   const span = g.querySelector("span");
-  if (span) span.textContent = rst ? "Resume from " + rst.label + (st ? " to " + st.label : "") : st ? "Run to " + st.label : "Run";
-  g.classList.toggle("is-partial", !!(st || rst));
-  g.dataset.tip = rst ? "A new run that reuses " + rsel.dataset.tag + "'s results up to " + rst.label + " (r)"
+  const full = !slotFree();
+  const only = onlyChoice();
+  if (span) span.textContent = full ? "Add to queue"
+    : only ? "Run only " + only.step.split(".").pop()
+    : rst ? "Resume from " + rst.label + (st ? " to " + st.label : "") : st ? "Run to " + st.label : "Run";
+  g.classList.toggle("is-partial", !!(st || rst || only));
+  g.classList.toggle("is-queue", full);
+  const ic = g.querySelector("svg");
+  if (ic) ic.outerHTML = icon(full ? "plus" : "play", { size: 15 });
+  g.dataset.tip = full ? "Every run slot is taken. This run waits in the queue and starts by itself when one ends (r)"
+    : rst ? "A new run that reuses " + rsel.dataset.tag + "'s results up to " + rst.label + " (r)"
     : "Run the " + ((flowOf() || {}).name || "Classic") + " flow on this project (r)";
 }
 

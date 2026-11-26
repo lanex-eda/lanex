@@ -7,6 +7,7 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { applyingEntry, sectionWho, writeSetting } from "./configscope.js";
+import { mountClockField, lastRunLine } from "./clockfield.js";
 
 let _info = null;
 let _seq = 0;
@@ -116,8 +117,10 @@ export async function paintDesignRow() {
   $("pd-clock").innerHTML = clkHtml;
 
   const per = $("pd-period");
-  per.value = vals.CLOCK_PERIOD != null ? vals.CLOCK_PERIOD : "";
-  $("pd-mhz").textContent = mhz(per.value);
+  // The clock helper (clockfield.js): ns or MHz, the other unit beside it.
+  if (per._clock) per._clock.set(vals.CLOCK_PERIOD);
+  else { per.value = vals.CLOCK_PERIOD != null ? vals.CLOCK_PERIOD : ""; $("pd-mhz").textContent = mhz(per.value); }
+  paintLastClock(vals.CLOCK_PERIOD);
   // Each value's line in the config file, one click away.
   import("./provenance.js").then((m) => m.paintConfigSrc(box, (k) => vals[k] !== undefined && vals[k] !== null && vals[k] !== "")).catch(() => {});
 
@@ -136,6 +139,30 @@ export async function paintDesignRow() {
   // The file that declares the top gets a "top" tag in Sources.
   const file = (info.module_files || {})[top] || null;
   import("./fs.js").then((m) => m.setTopFile(file)).catch(() => {});
+}
+
+// How the newest finished run did at its clock, as the period field's hover
+// text and, when it missed, a line under the card (an estimate, said so).
+let _lastSeq = 0;
+async function paintLastClock(period) {
+  const small = $("pd-mhz");
+  if (!small || !state.designDir) return;
+  const seq = ++_lastSeq;
+  let t = null;
+  try { t = (await (await import("./fppreview.js")).estimateInputs()).timing; } catch (_e) { t = null; }
+  if (seq !== _lastSeq) return;
+  const line = t ? lastRunLine(t.tag, t.clock_period, t.setup_ws) : "";
+  small.title = line;
+  let miss = document.getElementById("pd-clock-last");
+  if (t && t.setup_ws < 0 && line) {
+    if (!miss) {
+      miss = document.createElement("p");
+      miss.id = "pd-clock-last";
+      miss.className = "pd-status is-warn pd-clock-last";
+      $("pd-status")?.after(miss);
+    }
+    miss.textContent = "Last run: " + line;
+  } else if (miss) miss.remove();
 }
 
 // Save one key where it takes effect for the picked PDK: the top level, or the
@@ -165,17 +192,19 @@ export function wireDesignRow() {
     else save({}, ["CLOCK_PORT"], "clock setting");
   });
   const per = $("pd-period");
-  per?.addEventListener("input", () => { $("pd-mhz").textContent = mhz(per.value); });
-  per?.addEventListener("change", () => {
-    const n = parseFloat(per.value);
-    if (!(n > 0)) {
-      toast.show("The clock period is a positive number of nanoseconds.", "warn");
-      paintDesignRow();
-      return;
-    }
-    save({ CLOCK_PERIOD: n }, [], "clock period");
+  // One field for the period or the frequency (clockfield.js); the config
+  // always gets ns.
+  if (per) mountClockField(per, {
+    unitEl: per.parentElement && per.parentElement.querySelector("em"), otherEl: $("pd-mhz"),
+    onCommit: (ns, err) => {
+      if (!(ns > 0)) {
+        toast.show(err && err !== "empty" ? err : "The clock period is a positive number of nanoseconds, such as 10 (100 MHz).", "warn");
+        paintDesignRow();
+        return;
+      }
+      save({ CLOCK_PERIOD: ns }, [], "clock period");
+    },
   });
-  per?.addEventListener("keydown", (e) => { if (e.key === "Enter") per.blur(); });
   // Anything else that changes the config (Sources ticks, a new SDC) can
   // change the modules or the scoped values shown here.
   document.addEventListener("g:config_changed", () => {

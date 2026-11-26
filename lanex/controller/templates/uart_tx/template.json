@@ -1,0 +1,30 @@
+{
+  "name": "uart_tx",
+  "title": "UART transmitter (SystemVerilog)",
+  "description": "A serial transmitter written in SystemVerilog: logic, always_ff, always_comb and an enum from a package. Its bench decodes the serial line back to bytes.",
+  "teaches": "SystemVerilog the open flow reads: a package listed first, package-scoped names, and when to turn on USE_SLANG.",
+  "top": "uart_tx",
+  "clock_port": "clk",
+  "clock_period": 10.0,
+  "sources": [
+    "src/uart_pkg.sv",
+    "src/uart_tx.sv"
+  ],
+  "verilog_files": [
+    "dir::src/uart_pkg.sv",
+    "dir::src/uart_tx.sv"
+  ],
+  "testbench": "verify/uart_tx_tb.sv",
+  "order": 6,
+  "config": {
+    "FP_CORE_UTIL": 40,
+    "PL_TARGET_DENSITY_PCT": 55
+  },
+  "pdk": {
+    "sky130*": {
+      "config": {
+        "MAX_FANOUT_CONSTRAINT": 6
+      }
+    }
+  }
+}

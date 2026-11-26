@@ -18,6 +18,12 @@ export const PREFS = [
     hint: "Automatic sizes the interface for this screen." },
   { id: "density", key: "ll.density", group: "Appearance", label: "Compact spacing", type: "bool", def: "comfortable", on: "compact", off: "comfortable",
     hint: "Tighter rows and controls, to fit more on screen." },
+  // The inline glossary (term.js) and the clock fields (clockfield.js).
+  { id: "termUnderline", key: "ll.termUnderline", group: "Appearance", label: "Underline glossary terms", type: "bool", def: "on", on: "on", off: "off",
+    hint: "A dotted line under the first label on a page that has a definition. Hover or focus still shows it when this is off." },
+  { id: "clockUnit", key: "ll.clockUnit", group: "Appearance", label: "Type the clock in", type: "choice", def: "ns",
+    options: [["ns", "Nanoseconds (period)"], ["mhz", "MHz (frequency)"]],
+    hint: "The config always stores the period in ns; this only changes how you type and read it." },
 
   // ---- Runs
   { id: "engine", key: "ll.runMode", group: "Runs", label: "Engine", type: "choice", def: "container",
@@ -30,13 +36,27 @@ export const PREFS = [
   { id: "notify", key: "ll.notifyRuns", group: "Runs", label: "Tell me when a run finishes", type: "bool", def: "1", on: "1", off: "0",
     hint: "A notification with the result while LanEx is in the background." },
   { id: "chime", key: "ll.runChime", group: "Runs", label: "Play a sound when a run ends", type: "bool", def: "0", on: "1", off: "0" },
+  // The Run menu's How (runmenu.js). Runs at once and keep-awake belong to the
+  // machine, not this browser: the server keeps them (/api/queue/settings).
+  { id: "runThreads", key: "ll.runThreads", group: "Runs", label: "Threads per run", type: "choice", def: "auto",
+    options: [["auto", "Auto"], ["2", "2"], ["4", "4"], ["8", "8"], ["16", "16"], ["32", "32"]],
+    hint: "Auto sizes routing, KLayout and timing threads to this PC and to the other runs going at the same time." },
+  { id: "runLowPrio", key: "ll.runLowPrio", group: "Runs", label: "Run at low priority", type: "bool", def: "0", on: "1", off: "0",
+    hint: "Other apps stay quick; a run takes a little longer. Container runs only." },
 
   // ---- Editor
   { id: "lintOnSave", key: "ll.lintOnSave", group: "Editor", label: "Check syntax on save", type: "bool", def: "1", on: "1", off: "0",
     hint: "Runs Verilator each time you save a Verilog file." },
   { id: "simTimeLimit", key: "ll.simTimeLimit", group: "Editor", label: "Simulation time limit", type: "choice", def: "120",
-    options: [["30", "30 s"], ["120", "2 min"], ["600", "10 min"], ["1800", "30 min"]],
-    hint: "A testbench that never reaches $finish is stopped after this long. Its waveform so far still shows." },
+    options: [["30", "30 s"], ["120", "2 min"], ["600", "10 min"], ["1800", "30 min"], ["3600", "1 h"]],
+    hint: "A testbench that never reaches $finish is stopped after this long. Its waveform so far still shows. A testbench's own Run settings can set another." },
+
+  // ---- Layout (modules/layout.js)
+  { id: "layoutKey", key: "ll.lx.key", group: "Layout", label: "Show the key on the layout", type: "bool", def: "1", on: "1", off: "0",
+    hint: "The card in the corner of the Layout view that says what each colour is. Its arrow folds it." },
+  { id: "layoutRamp", key: "ll.lx.ramp", group: "Layout", label: "Heat map colours", type: "choice", def: "lanex",
+    options: [["lanex", "LanEx (brighter is more)"], ["turbo", "OpenROAD (rainbow)"]],
+    hint: "LanEx's ramp reads in greyscale and with colour-blindness. OpenROAD's matches its own GUI." },
 
   // ---- Keyboard
   { id: "keys", key: "ll.keys", group: "Keyboard", label: "Single-key shortcuts", type: "bool", def: "1", on: "1", off: "0",
@@ -51,7 +71,7 @@ export const PREFS = [
 // heights, recent lists, drafts). "Reset every preference" leaves these.
 export const STATE_PREFIXES = ["ll.recentDesigns", "ll.tab", "ll.context", "ll.draft:", "ll.rtl:", "ll.wave:", "ll.simok.",
   "ll.guide.", "ll.paletteRecent", "ll.consoleHistory", "ll.runsBaseline", "ll.userPresets", "ll.ranOnce",
-  "ll.updateDismissed", "ll.notifyAsked"];
+  "ll.updateDismissed", "ll.notifyAsked", "ll.bench:", "ll.ideRecent:", "ll.ideSearch", "ll.ideRunSet"];
 
 const BY_ID = Object.fromEntries(PREFS.map((p) => [p.id, p]));
 
