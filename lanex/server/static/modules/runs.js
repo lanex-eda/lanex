@@ -60,7 +60,8 @@ const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const num = (v) => (typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 1e20 ? v : null);
 const km = (r, k) => num((r.key_metrics || {})[k]);
 // "|" joins them: a NUL would not survive an HTML attribute (data-key).
-const keyOf = (r) => normDir(r._design) + "|" + r.tag;
+// Memoised on the row: every render and every tick asks for it, a thousand times.
+const keyOf = (r) => r._k || (r._k = normDir(r._design) + "|" + r.tag);
 const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
 
 // A run whose registers no clock reached (Verify's verdict, no_clock): OpenSTA
@@ -802,6 +803,7 @@ export async function renderRuns({ cached = false } = {}) {
   fitHeight();
   paintTable(table, _model);
   fitColumns(table, scope);
+  freezeCols(table);
   wireTable(table);
   paintFoot(runs, shown);
   syncSelection();
@@ -958,6 +960,7 @@ function paintTable(table, m) {
   const hadFocus = table.contains(document.activeElement);
   if (!m.windowed) {
     m.a = 0; m.b = n;
+    thawCols(table);
     table.innerHTML = headHtml(cols) + "<tbody>" + m.items.map((it, i) => itemHtml(it, cols, i)).join("") + "</tbody>";
     afterInsert(table, m, 0, n);
     restoreFocus(table, focusKey, hadFocus);
@@ -972,11 +975,30 @@ function paintTable(table, m) {
   m.a = a; m.b = b;
   let body = "";
   for (let k = a; k < b; k++) body += itemHtml(m.items[k], cols, k);
+  thawCols(table);
   table.innerHTML = headHtml(cols) + "<tbody>" + sizerHtml(m) + spacerHtml("top", cols, cum[a]) + body + spacerHtml("bot", cols, cum[n] - cum[b]) + "</tbody>";
   afterInsert(table, m, a, b);
   wireWindow(table);
   restoreFocus(table, focusKey, hadFocus);
   requestAnimationFrame(() => paintWindow());
+}
+
+// A long list's columns, once laid out from the sizer rows, are frozen
+// (table-layout: fixed): a scroll then lays out only the rows it adds, not
+// every row of the table again (that was 35 to 50 ms a step on a slow PC).
+function freezeCols(table) {
+  if (!_model || !_model.windowed || !table.tHead) return;
+  const ths = [...table.tHead.rows[0].cells];
+  const w = ths.map((th) => th.offsetWidth);
+  const total = w.reduce((a, b) => a + b, 0);
+  if (!total) return;
+  table.insertAdjacentHTML("afterbegin", "<colgroup class='rn-colg'>" + w.map((x) => "<col style='width:" + x + "px'>").join("") + "</colgroup>");
+  table.style.tableLayout = "fixed";
+  table.style.width = total + "px";
+}
+function thawCols(table) {
+  table.style.tableLayout = "";
+  table.style.width = "";
 }
 
 // The row height and the open summaries' heights, in layout px.
@@ -1053,7 +1075,7 @@ function moveWindow(table, m, a, b) {
   } else ins(botSp, "beforebegin", a, b);
   const was = [m.a, m.b];
   m.a = a; m.b = b;
-  paintViewing();
+  paintViewing(true);
   const fresh = [];
   for (let k = a; k < b; k++) if (!overlap || k < was[0] || k >= was[1]) fresh.push(k);
   if (fresh.length) afterInsert(table, m, fresh[0], fresh[fresh.length - 1] + 1, new Set(fresh));
@@ -1085,7 +1107,15 @@ function afterInsert(table, m, from, to, only = null) {
       if (el && it.group.runs.length) it.group.grouper.summary(el, it.group);
     }
   }
-  syncPickBoxes();
+  // Rows are drawn with their ticks; a group's dash (indeterminate) can only
+  // be set from script. A scroll touches the new rows only.
+  if (!only) { syncPickBoxes(); return; }
+  for (const k of only) {
+    const it = m.items[k];
+    if (!it || !it.group) continue;
+    const cb = table.querySelector("tr.rn-sweep[data-vi='" + k + "']:not(.rn-sizer) input.rn-pick-sweep");
+    if (cb) markBox(cb, it.group.runs);
+  }
 }
 
 // The widest cell of each column, from every row: up to three collapsed rows.
@@ -1377,8 +1407,17 @@ function failCode(r) {
 
 // "today 19:22", "yesterday 19:22", then the date and time ("11 Nov 19:22"):
 // relative words past yesterday make a long history read all the same.
+const _whenMemo = new Map();
 function when(iso) {
   if (!iso) return "";
+  // A day's words change at midnight: the memo is per day.
+  const day = new Date().toDateString();
+  if (_whenMemo.get("") !== day) { _whenMemo.clear(); _whenMemo.set("", day); }
+  let w = _whenMemo.get(iso);
+  if (w === undefined) { w = whenNow(iso); if (_whenMemo.size < 20000) _whenMemo.set(iso, w); }
+  return w;
+}
+function whenNow(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return iso;
   const now = new Date();
@@ -1402,6 +1441,8 @@ function runOfRow(tr) {
 }
 function itemOfRow(tr) {
   if (!tr || !_model) return null;
+  const vi = tr.dataset.vi;
+  if (vi != null && _model.items[+vi]) return _model.items[+vi];
   if (tr.dataset.group) return _model.items.find((x) => x.group && x.gk === tr.dataset.group) || null;
   return _model.items.find((x) => !x.group && x.key === tr.dataset.key) || null;
 }
@@ -1586,10 +1627,12 @@ function toggleOpen(r) {
 }
 
 let _viewingKey = "";
-function paintViewing() {
+function paintViewing(scrolled = false) {
   const run = contextRun(), design = normDir(contextDesign());
-  document.querySelectorAll("#runs-table tr.rn-row").forEach((tr) =>
-    tr.classList.toggle("is-viewing", tr.dataset.tag === run && normDir(tr.dataset.design) === design));
+  // A scroll only needs to look at the rows of the run in view.
+  if (scrolled) document.querySelectorAll("#runs-table tr.rn-row.is-viewing").forEach((tr) => tr.classList.remove("is-viewing"));
+  const rows = scrolled ? document.querySelectorAll("#runs-table tr.rn-row[data-tag='" + CSS.escape(run || "") + "']") : document.querySelectorAll("#runs-table tr.rn-row");
+  rows.forEach((tr) => tr.classList.toggle("is-viewing", tr.dataset.tag === run && normDir(tr.dataset.design) === design));
   const vk = design + "|" + run;
   if (vk !== _viewingKey) { _viewingKey = vk; repaintSizer(); }
 }
@@ -1611,17 +1654,19 @@ function syncPickBoxes() {
     const cb = tr.querySelector("input.rn-pick");
     if (cb) cb.checked = on;
   });
-  const mark = (cb, runs) => {
-    const n = runs.filter((r) => _picked.has(keyOf(r))).length;
-    cb.checked = !!runs.length && n === runs.length;
-    cb.indeterminate = n > 0 && n < runs.length;
-  };
   table.querySelectorAll("tr.rn-sweep:not(.rn-sizer) input.rn-pick-sweep").forEach((cb) => {
     const it = itemOfRow(cb.closest("tr"));
-    if (it) mark(cb, it.group.runs);
+    if (it) markBox(cb, it.group.runs);
   });
   const all = table.querySelector("input.rn-pick-all");
-  if (all) mark(all, _visible);
+  if (all) markBox(all, _visible);
+}
+// A group's box: ticked when all its runs are, a dash when some are.
+function markBox(cb, runs) {
+  let n = 0;
+  for (const r of runs) if (_picked.has(keyOf(r))) n++;
+  cb.checked = !!runs.length && n === runs.length;
+  cb.indeterminate = n > 0 && n < runs.length;
 }
 // The Tag and Export popovers live beside the bar, so the bar can redraw.
 let _barSig = "";
@@ -2074,8 +2119,12 @@ function openSide(r) {
   _sideRow = r;
   el.hidden = false;
   document.getElementById("rn-split")?.classList.add("has-side");
-  if (!was) renderRuns({ cached: true }); else markOpen();
+  markOpen();
   paintSide(r);
+  // The table has less room now: its columns follow on the next frame, so
+  // the panel shows at once (a full redraw of a long list takes a while on a
+  // slow PC).
+  if (!was) requestAnimationFrame(() => { if (_open) renderRuns({ cached: true }); });
 }
 function closeSide() {
   const el = sideEl();
