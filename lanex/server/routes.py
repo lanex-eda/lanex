@@ -153,7 +153,10 @@ def h_health(handler: Any) -> None:
         probe = compat.probe_compat()
     except Exception:  # never let the probe break the health check
         probe = {"ok": True, "issues": []}
-    _respond(handler, {"service": "lanex", "alive": True,
+    from ..controller.events import BOOT_ID
+    # boot: a window that lost the server tells a blip (same boot) from a
+    # restart (a new one) when it reconnects (modules/connection.js).
+    _respond(handler, {"service": "lanex", "alive": True, "boot": BOOT_ID,
                        **current(), "compat": probe})
 
 

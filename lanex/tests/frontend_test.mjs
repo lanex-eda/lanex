@@ -3747,6 +3747,93 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   });
 }
 
+// ---- the shell: connection-lost state, palette reach, #flow (lane Z1) -----------
+{
+  const CN = await import(toUrl(resolve(MOD, "connection.js")));
+  check("connection: nothing for a blip, a chip from 2 s, a card from 10 s", () => {
+    const v = (t, o = {}) => CN.connView({ down: true, since: 0, now: t, ...o });
+    assert.equal(CN.connView({ down: false }).phase, "ok");
+    assert.equal(v(1500).chip, null);
+    assert.equal(v(1500).card, null);
+    assert.equal(v(3000).chip.text, "RECONNECTING…");
+    assert.equal(v(3000).card, null);
+    assert.equal(v(3000, { wokeAt: 2500 }).chip.text, "WAKING UP…");
+    assert.equal(v(12000, { launcher: true }).card.title, "LanEx is restarting");
+    assert.equal(v(12000, { launcher: false }).card.title, "LanEx is not answering");
+    assert.equal(v(12000, { kind: "timeout", launcher: true }).card.title, "LanEx is not answering");
+    assert.match(v(12000, { kind: "timeout", launcher: true }).card.text, /busy with a long job/);
+  });
+  check("connection: 'has not come back' after LanEx.exe's own restart budget, sooner without it", () => {
+    const v = (t, o) => CN.connView({ down: true, since: 0, now: t, ...o });
+    assert.equal(v(95000, { launcher: true }).card.title, "LanEx is restarting");
+    const c = v(130000, { launcher: true }).card;
+    assert.equal(c.title, "LanEx has not come back");
+    assert.equal(c.tone, "fail");
+    assert.equal(c.foot, "log");
+    assert.match(c.text, /tray.*Start menu.*Repair LanEx/);
+    assert.match(c.text, /over 2 minutes/);
+    assert.equal(v(31000, { launcher: false }).card.title, "LanEx has stopped");
+    assert.match(v(31000, { launcher: false }).card.text, /run lanex in a terminal/);
+    // never claims the distro is stopped: the page can't know
+    for (const t of [12000, 130000]) assert.doesNotMatch(v(t, { launcher: true }).card.text, /distro is stopped|WSL is stopped/);
+  });
+  check("connection: something else answering, and a lost key, have their own words", () => {
+    assert.equal(CN.connView({ down: true, since: 0, now: 12000, kind: "foreign" }).card.title, "Something else is answering here");
+    const k = CN.connView({ key: "Close this window and open LanEx again." });
+    assert.equal(k.phase, "key");
+    assert.equal(k.card.retry, false);
+  });
+  check("connection: probe schedule backs off and never stops; a probe answer as one word", () => {
+    assert.deepEqual([0, 1, 2, 3, 4].map((i) => CN.nextDelay(i, 0)), [500, 1000, 2000, 2000, 3000]);
+    assert.equal(CN.nextDelay(9, 60000), 3000);
+    assert.equal(CN.nextDelay(40, 300000), 10000);
+    assert.equal(CN.nextDelay(90, 3600000), 30000);
+    assert.equal(CN.probeKind({ body: { service: "lanex" } }), "ok");
+    assert.equal(CN.probeKind({ body: { error: "nginx" } }), "foreign");
+    assert.equal(CN.probeKind(null, new TypeError("Failed to fetch")), "refused");
+    assert.equal(CN.probeKind(null, Object.assign(new Error("t"), { name: "TimeoutError" })), "timeout");
+    assert.equal(CN.overWords(23000), "over 20 s");
+    assert.equal(CN.overWords(125000), "over 2 minutes");
+    assert.equal(CN.agoWords(75000), "1 min 15 s");
+  });
+  check("connection: the card's words are escaped and the log path is copyable", () => {
+    const h = CN.cardHtml({ eyebrow: "X", title: "<b>", text: "a & b", retry: true, every: "Checking every 3 s", foot: "log" });
+    assert.match(h, /&lt;b&gt;/);
+    assert.match(h, /a &amp; b/);
+    assert.match(h, /data-conn='retry'/);
+    assert.match(h, /LanEx\\logs\\launcher\.log/);
+    assert.match(h, /data-conn='copy-log'/);
+  });
+  const TM = await import(toUrl(resolve(MOD, "toast.js")));
+  check("connection: 'not answering' toasts are held while the state is up, and counted", () => {
+    TM.takeDropped();
+    assert.equal(TM.offlineEcho("Save failed: LanEx is not answering.", "error", "lost"), true);
+    assert.equal(TM.offlineEcho("Save failed: LanEx is not answering.", "error", "probing"), true);
+    assert.equal(TM.offlineEcho("Save failed: LanEx is not answering.", "error", undefined), false, "connected: say it");
+    assert.equal(TM.offlineEcho("Save failed: disk full", "error", "lost"), false);
+    assert.equal(TM.offlineEcho("Connected again", "success", "lost"), false);
+    assert.equal(TM.takeDropped(), 2);
+    assert.equal(TM.takeDropped(), 0);
+  });
+  const NV = await import(toUrl(resolve(MOD, "nav.js")));
+  check("nav: the Flow page's address is #flow, and #pipeline still opens it", () => {
+    assert.equal(NV.addressOf("pipeline"), "flow");
+    assert.equal(NV.addressOf("verify"), "verify");
+    assert.equal(NV.tabOfAddress("flow"), "pipeline");
+    assert.equal(NV.tabOfAddress("pipeline"), "pipeline");
+    assert.equal(NV.tabOfAddress("ide"), "ide");
+    const src = readFileSync(resolve(MOD, "nav.js"), "utf8");
+    // every address written goes through addressOf
+    assert.doesNotMatch(src, /State\(\{ lx: _cur \}, "", "#" \+ (?!addressOf)/);
+  });
+  check("connection: api.js says one thing for 'Failed to fetch' and wires the probe", () => {
+    const a = readFileSync(resolve(MOD, "api.js"), "utf8");
+    assert.match(a, /e\.name === "TypeError"[\s\S]{0,300}noteTrouble\("refused"\)[\s\S]{0,200}LanEx is not answering\./);
+    assert.match(a, /initConnection\(\{ onBack: _serverBack \}\)/);
+    assert.doesNotMatch(a, /sse-conn-chip|_connIndicator/);
+  });
+}
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 
