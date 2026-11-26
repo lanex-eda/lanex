@@ -100,6 +100,12 @@ def test_an_io_path_and_unclocked_registers_is_never_clean(tmp_path: Path) -> No
     assert s["verdict"]["state"] == "incomplete" and s["verdict"]["no_clock"] and s["success"] is False
 
 
+def test_no_clock_outranks_a_failing_io_path(tmp_path: Path) -> None:
+    # The input-to-output path misses the virtual clock: still "never checked".
+    rv = verify.verify_report(_sta_run(tmp_path, ws=-0.5))["run_verdict"]
+    assert rv["state"] == "incomplete" and rv["label"] == "Timing not checked: no clock" and "timing_miss" not in rv
+
+
 def test_clock_port_null_with_registers_is_no_clock(tmp_path: Path) -> None:
     # CLOCK_PORT null: the base SDC makes __VIRTUAL_CLK__, no register is clocked.
     rep = verify.verify_report(_sta_run(tmp_path, port=None, missing="__VIRTUAL_CLK__"))

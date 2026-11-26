@@ -422,7 +422,7 @@ function pillar(p) {
     rows = [
       ["Worst hold slack", hw ? ns(h.worst) + " ns" : "—", h, hw ? mprov("timing__hold__ws") : ""],
       // LibreLane's counts add every corner up: the label says so.
-      [corners.length > 1 ? "Setup / hold violations, summed over " + corners.length + " corners" : "Setup / hold violations",
+      [corners.length > 1 && ((s && s.value > 0) || (h && h.value > 0)) ? "Setup / hold violations, summed over " + corners.length + " corners" : "Setup / hold violations",
         (s && s.value != null ? n(s.value) : "—") + " / " + (h && h.value != null ? n(h.value) : "—"), null,
         (s && s.value != null ? provFor(s) : "") + (h && h.value != null ? provFor(h) : "")],
       ["Corners analysed", corners.length ? String(corners.length) : "—", null],

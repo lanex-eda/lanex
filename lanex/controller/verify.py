@@ -1514,6 +1514,11 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
         if st:
             out["stage"] = st
         return out
+    # No clock reached the registers: that is the verdict, even when an
+    # input-to-output path timed against the virtual clock has negative slack.
+    if v["state"] == "incomplete" and any(c["id"] == "setup" and c.get("no_clock") for c in checks):
+        out.update(state="incomplete", label="Timing not checked: no clock", no_clock=True)
+        return out
     miss = _timing_miss(run)
     if miss:
         # LibreLane passed the run (it only enforces the corners in
@@ -1524,12 +1529,7 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
                          f" ({miss['kind']} {miss['ws']:.2f} ns)")
         return out
     if v["state"] == "incomplete":
-        # No clock reached the registers: LibreLane passed a run that timed
-        # nothing. Say why on the verdict line itself, not only in Verify.
-        nc = next((c.get("no_clock") for c in checks if c["id"] == "setup" and c.get("no_clock")), None)
-        out.update(state="incomplete", label="Timing not checked: no clock" if nc else "Not enough to call it")
-        if nc:
-            out["no_clock"] = True
+        out.update(state="incomplete", label="Not enough to call it")
         return out
     unc = next((c.get("unclocked") for c in checks if c["id"] == "setup" and c.get("unclocked_warn")), None)
     if unc:
