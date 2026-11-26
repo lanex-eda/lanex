@@ -112,3 +112,16 @@ body.cn-dragging { cursor: ns-resize; user-select: none; }
 .cmdk-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .cmdk-pfx { border: 0; background: transparent; color: inherit; font: inherit; padding: 0 2px; cursor: pointer; }
 .cmdk-pfx:hover { color: var(--ink-strong); }
+/* A run's actions page (→ or Tab on a run): its scope line in mono caps with
+   the met1 spine, a chevron on rows that have actions, Delete in the fail
+   colour, and a thin loading line while data arrives. */
+.cmdk-scope.is-page { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.06em; color: var(--ink-strong);
+  border-left: 2px solid var(--met1); padding-left: 18px; }
+.cmdk-chev { flex: none; align-self: center; font-size: 16px; line-height: 1; color: var(--ink-2); padding: 0 2px; }
+.cmdk-item-sel .cmdk-chev { color: var(--met1); }
+.cmdk-danger .cmdk-title, .cmdk-danger .cmdk-ico { color: color-mix(in srgb, var(--fail) 80%, var(--text-strong)); }
+.cmdk-loading { height: 2px; margin-top: -1px; background: linear-gradient(90deg, transparent, var(--met1), transparent);
+  background-size: 40% 100%; background-repeat: no-repeat; animation: cmdk-load 1.1s linear infinite; }
+.cmdk-loading[hidden] { display: none; }
+@keyframes cmdk-load { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+@media (prefers-reduced-motion: reduce) { .cmdk-loading { animation: none; background-size: 100% 100%; opacity: 0.5; } }

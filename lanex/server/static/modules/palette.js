@@ -1,14 +1,18 @@
 // palette.js — command palette (Ctrl K): search everything (spec 5.8).
 //
-//   >  actions (default)   #  LibreLane settings   @  runs   /  project files
-//   ?  help and glossary
+//   >  actions (default)   !  projects   @  runs   :  flow steps
+//   #  LibreLane settings  /  project files        ?  help and glossary
+//   Verify checks, tools and PDKs by name.
 //
 // Each row says where it goes (the tab) and its key if it has one. Fuzzy,
-// recents first (palettemodel.js holds the ranking, tested). ARIA combobox:
-// the input owns the listbox and points at the active row with
-// aria-activedescendant, so screen readers follow the arrow keys.
+// recents first (palettemodel.js holds the ranking, tested). A run row opens
+// its actions with → or Tab (Layout, Verify, Copy command, Export, Delete…);
+// Backspace on an empty box or Esc goes back. ARIA combobox: the input owns
+// the listbox and points at the active row with aria-activedescendant, so
+// screen readers follow the arrow keys.
 
 import { go, recentPlaces } from "./nav.js";
+import { isDown, probeNow } from "./connection.js";
 import { toggleTheme } from "./theme.js";
 import { toggleDensity } from "./density.js";
 import { toggleRunMode } from "./runmode.js";
@@ -17,8 +21,9 @@ import { api } from "./api.js";
 import { openLayer, closeLayer } from "./overlay.js";
 import { state, safeStorage } from "./state.js";
 import { contextRun, contextRuns, contextBaseline, contextDesign, setRun, loadRuns } from "./context.js";
-import { parseQuery, rank, oneLine, pushRecent, PREFIXES, whenLocal } from "./palettemodel.js";
+import { parseQuery, rank, oneLine, pushRecent, PREFIXES, whenLocal, keepSelection } from "./palettemodel.js";
 import { help as pageHelp } from "./help.js";
+import { escapeHtml } from "./html.js";
 
 const RECENT_KEY = "ll.paletteRecent";
 let _el = null;
@@ -30,8 +35,13 @@ let _sel = 0;
 let _glossary = null;
 let _files = null;      // [{ rel, role }] for the open project
 let _filesFor = "";
+let _projects = null;   // every project LanEx knows (shell.knownProjects)
+let _steps = null;      // the flow's steps [{id, label}]
+let _stepLabel = null;  // flow.js stepLabel, once loaded
+let _loading = false;   // data still arriving: "Searching…", not "Nothing matches"
+let _page = null;       // a run's actions: { title, items, back: the query before }
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+const esc = escapeHtml;
 const click = (id) => document.getElementById(id)?.click();
 const tab = (name, params = {}) => go(name, params, { link: false });
 const guide = (action) => document.dispatchEvent(new CustomEvent("g:guide", { detail: { action } }));
@@ -81,7 +91,11 @@ function actions() {
     A("theme", "Toggle dark / light theme", "View", "moon", () => toggleTheme(), "t"),
     A("density", "Compact spacing on or off", "View", "grid", () => toggleDensity(), "d"),
     A("logs", "Show install and tool logs", "Status line › Logs", "file", () => click("logs-btn")),
-    A("reload", "Reload LanEx", "View", "refresh", () => location.reload()),
+    A("import-run", "Import a run… (a run folder or a bundle .zip)", "Runs", "plus",
+      () => import("./runs.js").then((m) => m.importRunFlow())),
+    // Reloading while LanEx is away lands on the browser's error page: check
+    // the connection instead (connection.js).
+    A("reload", "Reload LanEx", "View", "refresh", () => (isDown() ? probeNow() : location.reload())),
     A("tour", "Take the tour", "Help", "bulb", () => guide("tour")),
     A("first-chip", "First-chip guide", "Help", "bulb", () => guide("first-chip")),
     A("reset-hints", "Reset hints", "Help", "refresh", () => guide("reset")),
@@ -101,7 +115,116 @@ function actions() {
     list.push(A("ctx-cmd", "Copy the command of " + run, "Console › Command", "command", () => copyRunCommand(run)));
     list.push(A("ctx-verify", "Sign-off checks of " + run + " (DRC, LVS)", "Verify", "check", () => tab("verify")));
   }
+  // Not connected: checking again is the first thing to offer.
+  if (isDown()) list.unshift(A("reconnect", "Reconnect to LanEx now", "Connection", "refresh", () => probeNow()));
   return list;
+}
+
+// ---------------------------------------------------------------- projects, steps, checks, tools
+const baseOf = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+
+function projects() {
+  return (_projects || []).map((d) => ({
+    id: "pj:" + d, group: "project", title: baseOf(d), mono: true, where: "Project", icon: icon("folder"),
+    value: d === state.designDir ? "open now" : "", sub: d, keys: [d],
+    run: () => import("./shell.js").then((m) => m.switchProject(d)),
+  }));
+}
+
+function steps() {
+  const label = (id) => (_stepLabel ? _stepLabel(id) : id);
+  const stages = (FS_STAGES || []).map((s) => ({
+    id: "st:" + s.id, group: "step", title: s.label + " (stage)", where: "Flow", icon: icon("flow"),
+    sub: oneLine(s.blurb || ""), keys: [s.id, s.blurb || ""],
+    run: () => tab("pipeline", { stage: s.id }),
+  }));
+  return stages.concat((_steps || []).map((s) => ({
+    id: "sp:" + s.id, group: "step", title: label(s.id), where: "Flow", icon: icon("flow"),
+    value: s.id, sub: oneLine(s.summary || ""), keys: [s.id, s.summary || ""],
+    run: () => tab("pipeline", { step: s.id }),
+  })));
+}
+let FS_STAGES = null;
+
+// Verify's checks, in its own order and words (verify-model.js).
+const CHECK_NAMES = {
+  setup: "Setup timing", hold: "Hold timing", slew: "Max slew", cap: "Max capacitance", fanout: "Max fanout",
+  magic_drc: "Magic DRC", klayout_drc: "KLayout DRC", route_drc: "Routing DRC", overlap: "Illegal overlap",
+  klayout_density: "Metal density", lvs: "LVS", xor: "Mask XOR", disc_pin: "Disconnected pins",
+  antenna: "Antenna", pdn: "Power grid connections", klayout_antenna: "KLayout antenna",
+  lint_errors: "Lint errors", lint_warnings: "Lint warnings", lint_timing_constructs: "Timing constructs in RTL",
+  unmapped: "Unmapped cells", synth_check: "Synthesis checks", assign: "Assign statements", latch: "Latches",
+  eqy: "Equivalence (eqy)", wire_length: "Wire length",
+};
+let _short = null;       // verify-model.js SHORT, once loaded
+function checks() {
+  return Object.entries(CHECK_NAMES).map(([id, name]) => ({
+    id: "ck:" + id, group: "check", title: name + " check", where: "Verify", icon: icon("check"),
+    sub: (_short && _short[id]) || "", keys: [id, (_short && _short[id]) || "", "sign-off check verify"],
+    run: () => tab("verify", { check: id }),
+  }));
+}
+
+// Tools and PDKs: the Tools page's rows (tools.js revealItem finds tl-<key>,
+// tl-pdk-<key>, tl-viewer-<key>, tl-helper-<key>, tl-local-<key>).
+const TOOLS = [
+  ["engine", "Container engine (Docker or Podman)"], ["image", "LibreLane image"], ["ciel", "ciel, the PDK manager"],
+  ["klayout", "KLayout"], ["magic", "Magic"], ["openroad", "OpenROAD GUI"], ["gds3d", "GDS3D"],
+  ["iverilog", "Icarus Verilog"], ["gtkwave", "GTKWave"], ["verilator", "Verilator"],
+];
+function tools() {
+  const t = TOOLS.map(([k, name]) => ({
+    id: "tl:" + k, group: "tool", title: name, where: "Tools", icon: icon("tools"), keys: [k, "tool install"],
+    run: () => tab("tools", { item: k }),
+  }));
+  const pdks = (state.pdks || []).map((p) => ({
+    id: "pk:" + p.name, group: "tool", title: p.name + " PDK", mono: true, where: "Tools", icon: icon("layers"),
+    value: p.ready === false ? "not installed" : "installed", keys: [p.name, "pdk process"],
+    run: () => tab("tools", { item: p.name }),
+  }));
+  return t.concat(pdks);
+}
+
+// A run's actions (→ or Tab on a run row): the Runs panel's own (runs.js
+// runAction), so the words, dialogs and checks are the same. Ones that ask
+// first end in "…"; Delete is the last row and red.
+function runActions(r) {
+  const act = (id, title, where, ico, extra = {}) => ({
+    id: "ra:" + id + ":" + r.tag, group: "action", title, where, icon: icon(ico), ...extra,
+    run: () => import("./runs.js").then((m) => m.runAction(id, r)),
+  });
+  return [
+    act("flow", "Open " + r.tag + " in Flow", "Flow", "flow"),
+    act("layout", "Open in Layout", "Layout", "grid"),
+    act("verify", "Its sign-off checks", "Verify", "check"),
+    act("analytics", "Its numbers", "Analytics", "chart"),
+    act("baseline", "Make it the baseline (or stop)", "Runs", "pin"),
+    act("cmd", "Copy its command", "Console", "command"),
+    act("export", "Export a report…", "Runs", "file"),
+    act("bundle", "Download a bundle…", "Runs", "file"),
+    act("files", "Show its files…", "Runs", "folder"),
+    act("archive", r.archived ? "Restore it from the archive" : "Archive it", "Runs", "clock"),
+    act("delete", "Delete run " + r.tag + "…", "Runs", "trash", { danger: true, sub: "Asks first." }),
+  ];
+}
+
+function openRunPage(it) {
+  if (!it || !it.runRow) return false;
+  _page = { title: "RUN " + it.runRow.tag, items: runActions(it.runRow), back: _input.value };
+  _input.value = "";
+  _sel = 0;
+  refresh();
+  return true;
+}
+
+function closePage() {
+  if (!_page) return false;
+  const back = _page.back || "";
+  _page = null;
+  _input.value = back;
+  _sel = 0;
+  refresh();
+  return true;
 }
 
 async function copyRunCommand(tag) {
@@ -144,9 +267,9 @@ function runs() {
       (r.success ? "completed" : r.steps_failed ? "failed" : r.success === false ? "incomplete" : "");
     return {
       id: "r:" + (r._design || design) + ":" + r.tag, group: "run", title: r.tag, mono: true,
-      where: "Flow", icon: icon("clock"), value: st,
+      where: "Flow", icon: icon("clock"), value: st, more: true, runRow: { ...r, _design: r._design || design },
       sub: [whenLocal(r.started_at), r._design && r._design !== design ? r._design.split("/").pop() : ""].filter(Boolean).join(" · "),
-      keys: [st],
+      keys: [st, ...(r.tags || [])],
       run: async () => { await setRun(r.tag, r._design || design); tab("pipeline"); },
     };
   });
@@ -206,11 +329,22 @@ async function loadData() {
     .then((r) => { _files = ((r && r.files) || []).filter((f) => !/^runs\//.test(f.rel)); _filesFor = state.designDir; }).catch(() => { _files = []; }));
   if (!(state.variables || []).length) jobs.push(api.variables().then((v) => { if (Array.isArray(v) && !(state.variables || []).length) state.variables = v; }).catch(() => {}));
   if (!(contextRuns() || []).length) jobs.push(loadRuns().catch(() => {}));
+  // Projects every open (another window may have added one); steps, stages
+  // and check words once.
+  jobs.push(import("./shell.js").then((m) => m.knownProjects()).then((d) => { _projects = d || []; }).catch(() => { _projects = _projects || []; }));
+  if (!_steps) {
+    jobs.push(Promise.resolve(state.steps && state.steps.length ? state.steps : api.steps())
+      .then((s) => { _steps = (Array.isArray(s) ? s : (s && s.steps) || []).filter((x) => x && x.id); }).catch(() => { _steps = []; }));
+    jobs.push(import("./flow.js").then((m) => { _stepLabel = m.stepLabel; }).catch(() => {}));
+    jobs.push(import("./flowstages.js").then((m) => { FS_STAGES = m.STAGES; }).catch(() => {}));
+    jobs.push(import("./verify-model.js").then((m) => { _short = m.SHORT; }).catch(() => {}));
+  }
   await Promise.all(jobs);
 }
 
 function collect() {
-  return recentPlaceItems().concat(actions(), settings(), runs(), files(), help());
+  if (_page) return _page.items;
+  return recentPlaceItems().concat(actions(), projects(), runs(), steps(), checks(), settings(), tools(), files(), help());
 }
 
 // ---------------------------------------------------------------- UI
@@ -222,10 +356,11 @@ function build() {
     '<div class="cmdk-backdrop"></div>' +
     '<div class="cmdk-panel" role="dialog" aria-modal="true" aria-label="Search everything">' +
     '<input class="cmdk-input" type="text" role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list"' +
-      ' aria-label="Search commands, settings, runs, files and help" placeholder="Search everything  ·  > actions  # settings  @ runs  / files  ? help" autocomplete="off" spellcheck="false"/>' +
+      ' aria-label="Search pages, projects, runs, steps, checks, settings, tools, files and help" placeholder="Search pages, projects, runs, steps, checks, settings, tools…" autocomplete="off" spellcheck="false"/>' +
     '<div class="cmdk-scope" aria-live="polite"></div>' +
+    '<div class="cmdk-loading" aria-hidden="true" hidden></div>' +
     '<div class="cmdk-list" id="cmdk-list" role="listbox" aria-label="Results"></div>' +
-    '<div class="cmdk-foot"><kbd>↑</kbd><kbd>↓</kbd> navigate · <kbd>↵</kbd> open · <kbd>esc</kbd> close · ' +
+    '<div class="cmdk-foot"><kbd>↑</kbd><kbd>↓</kbd> navigate · <kbd>↵</kbd> open · <kbd>→</kbd> a run\'s actions · <kbd>esc</kbd> close · ' +
       Object.entries(PREFIXES).map(([p, v]) => "<button type='button' class='cmdk-pfx' data-pfx='" + esc(p) + "'><kbd>" + esc(p) + "</kbd> " + esc(v.label.toLowerCase()) + "</button>").join(" ") +
     "</div></div>";
   document.body.appendChild(_el);
@@ -234,6 +369,11 @@ function build() {
   _el.querySelector(".cmdk-backdrop").addEventListener("click", close);
   _input.addEventListener("input", () => { _sel = 0; refresh(); });
   _input.addEventListener("keydown", onKey);
+  // Esc in a run's actions goes back a level, before the overlay stack (which
+  // listens on document, capturing) closes the whole palette.
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && _el && !_el.hidden && _page) { closePage(); e.preventDefault(); e.stopPropagation(); }
+  }, true);
   _el.querySelectorAll(".cmdk-pfx").forEach((b) => b.addEventListener("click", () => {
     _input.value = b.dataset.pfx + parseQuery(_input.value).q; _sel = 0; refresh(); _input.focus();
   }));
@@ -253,7 +393,13 @@ function onKey(e) {
   else if (e.key === "PageDown") { _sel = Math.min(_sel + 8, _filtered.length - 1); markSel(); e.preventDefault(); }
   else if (e.key === "PageUp") { _sel = Math.max(_sel - 8, 0); markSel(); e.preventDefault(); }
   else if (e.key === "Enter") { runSel(); e.preventDefault(); }
-  else if (e.key === "Escape") { close(); e.preventDefault(); e.stopPropagation(); }
+  // A run row's actions: → at the end of the text, or Tab.
+  else if ((e.key === "Tab" && !e.shiftKey) || (e.key === "ArrowRight" && _input.selectionStart === _input.value.length)) {
+    if (!_page && openRunPage(_filtered[_sel])) e.preventDefault();
+    else if (e.key === "Tab") e.preventDefault();
+  }
+  else if (e.key === "Backspace" && !_input.value && _page) { closePage(); e.preventDefault(); }
+  else if (e.key === "Escape") { if (!closePage()) close(); e.preventDefault(); e.stopPropagation(); }
 }
 
 function recentIds() {
@@ -261,42 +407,55 @@ function recentIds() {
   return places.concat(safeStorage.getJSON(RECENT_KEY, []) || []);
 }
 
-function refresh() {
+function refresh({ keep = false } = {}) {
   const raw = _input.value;
   const { group, q } = parseQuery(raw);
-  _filtered = rank(_items, raw, { recentIds: recentIds(), limit: q || group ? 80 : 40 });
+  const prevId = keep && _filtered[_sel] ? _filtered[_sel].id : null;
+  // A run's actions page lists every action in its order, filtered by what is typed.
+  _filtered = _page ? (q ? rank(_page.items, q, { limit: 80 }) : _page.items.slice())
+    : rank(_items, raw, { recentIds: recentIds(), limit: q || group ? 80 : 40 });
+  if (keep) _sel = keepSelection(_filtered, prevId, _sel);
   const scope = _el.querySelector(".cmdk-scope");
   const label = group ? Object.values(PREFIXES).find((p) => p.group === group).label : "";
-  scope.textContent = group ? "Searching " + label.toLowerCase() + (q ? "" : " (" + _filtered.length + (_filtered.length === 80 ? "+" : "") + ")") : "";
-  scope.hidden = !group;
+  scope.textContent = _page ? _page.title + " ›  Backspace or Esc goes back"
+    : group ? "Searching " + label.toLowerCase() + (q ? "" : " (" + _filtered.length + (_filtered.length === 80 ? "+" : "") + ")") : "";
+  scope.hidden = !group && !_page;
+  scope.classList.toggle("is-page", !!_page);
+  const ld = _el.querySelector(".cmdk-loading");
+  if (ld) ld.hidden = !_loading;
   paint(q);
 }
 
-const GROUP_LABEL = { action: "Action", setting: "Setting", run: "Run", file: "File", help: "Help" };
+const GROUP_LABEL = { action: "Action", project: "Project", run: "Run", step: "Flow", check: "Verify", setting: "Setting",
+  tool: "Tools", file: "File", help: "Help" };
 
 function paint() {
   if (!_filtered.length) {
-    _list.innerHTML = '<div class="cmdk-empty">' + (emptyText()) + "</div>";
+    _list.innerHTML = '<div class="cmdk-empty">' + esc(emptyText()) + "</div>";
     _input.removeAttribute("aria-activedescendant");
     return;
   }
   _list.innerHTML = _filtered.map((a, i) =>
-    '<div class="cmdk-item' + (i === _sel ? " cmdk-item-sel" : "") + '" role="option" id="cmdk-opt-' + i + '" aria-selected="' + (i === _sel) + '" data-i="' + i + '">' +
+    '<div class="cmdk-item' + (i === _sel ? " cmdk-item-sel" : "") + (a.danger ? " cmdk-danger" : "") + '" role="option" id="cmdk-opt-' + i + '" aria-selected="' + (i === _sel) + '" data-i="' + i + '">' +
       '<span class="cmdk-ico">' + a.icon + "</span>" +
       '<span class="cmdk-main"><span class="cmdk-title' + (a.mono ? " is-mono" : "") + '">' + esc(a.title) + "</span>" +
         (a.value ? '<span class="cmdk-val' + (a.valueIsSet ? " is-set" : "") + '">' + esc(a.value) + "</span>" : "") +
         (a.sub ? '<span class="cmdk-sub">' + esc(a.sub) + "</span>" : "") + "</span>" +
       '<span class="cmdk-where">' + esc(a.where || GROUP_LABEL[a.group]) + "</span>" +
       (a.kbd ? '<span class="cmdk-kbd">' + a.kbd.split(" ").map((k) => "<kbd>" + esc(k) + "</kbd>").join("") + "</span>" : "") +
+      (a.more ? '<span class="cmdk-chev" title="Its actions: → or Tab" aria-label="Has actions: right arrow or Tab">›</span>' : "") +
     "</div>").join("");
   markSel();
 }
 
 function emptyText() {
-  const { group } = parseQuery(_input.value);
+  const { group, q } = parseQuery(_input.value);
+  if (_loading) return "Searching…";
   if (group === "file" && !state.designDir) return "Open a project to search its files.";
-  if (group === "run" && !(contextRuns() || []).length) return "No runs yet.";
-  return "Nothing matches. Try a prefix: # settings, @ runs, / files, ? help.";
+  if (group === "run" && !(contextRuns() || []).length) return "No runs yet. Run the flow (Ctrl Enter).";
+  if (group === "project" && !(_projects || []).length) return "No projects yet. New project from a template, or open a folder (> new project).";
+  if (group === "step" && !(_steps || []).length) return "The flow's steps couldn't load.";
+  return "Nothing matches" + (q ? " “" + q + "”" : "") + ". Try ! projects · @ runs · : steps · # settings · / files · ? help.";
 }
 
 function markSel() {
@@ -312,7 +471,14 @@ function markSel() {
 function runSel() {
   const a = _filtered[_sel];
   if (!a) return;
-  if (!a.id.startsWith("p:")) safeStorage.set(RECENT_KEY, JSON.stringify(pushRecent(safeStorage.getJSON(RECENT_KEY, []) || [], a.id)));
+  // A place visited, a run's own action page and anything destructive are
+  // never remembered as a recent pick.
+  if (!a.id.startsWith("p:") && !a.id.startsWith("ra:") && !a.danger) {
+    safeStorage.set(RECENT_KEY, JSON.stringify(pushRecent(safeStorage.getJSON(RECENT_KEY, []) || [], a.id)));
+  }
+  _page = null;
+  // The palette closes first: a dialog the action opens (Delete asks first)
+  // gets the focus, and closing it returns to the page.
   close();
   try { Promise.resolve(a.run()).catch((e) => console.error("palette action failed", e)); }
   catch (e) { console.error("palette action failed", e); }
@@ -320,20 +486,23 @@ function runSel() {
 
 export async function openPalette(initial = "") {
   if (!_el) build();
+  _page = null;
   _items = collect();
   _input.value = initial;
   _sel = 0;
+  _loading = true;
   refresh();
   _el.hidden = false;
   // A dialog on the overlay stack: Tab stays in the panel, Esc closes it,
   // closing puts focus back.
-  openLayer(_el, { kind: "dialog", onClose: () => { _el.hidden = true; }, focus: () => _input });
+  openLayer(_el, { kind: "dialog", onClose: () => { _el.hidden = true; _page = null; }, focus: () => _input });
   requestAnimationFrame(() => _input.focus());
-  // Settings, runs, files and the glossary arrive a moment later: fold them in.
-  await loadData();
+  // Projects, runs, steps, settings, files and the glossary arrive a moment
+  // later: fold them in, keeping the highlighted row where it is.
+  try { await loadData(); } finally { _loading = false; }
   if (_el.hidden) return;
-  _items = collect();
-  refresh();
+  if (!_page) _items = collect();
+  refresh({ keep: true });
 }
 
 export function close() {

@@ -4,6 +4,8 @@
 // the same stream by the server.
 
 import { state } from "./state.js";
+import { initConnection, noteTrouble, noteOk, keyLost as connKeyLost } from "./connection.js";
+import { escapeHtml } from "./html.js";
 
 const base = "";
 
@@ -48,14 +50,28 @@ async function _fetch(path, init) {
     });
   } catch (e) {
     if (timer) clearTimeout(timer);
-    if (e && e.name === "AbortError") {
-      const err = new Error("Request timed out. Please check if the server is still running.");
+    if (e && e.name === "AbortError" && !(init.signal && init.signal.aborted)) {
+      // Too slow is not gone: a probe of /api/health decides (connection.js).
+      noteTrouble("timeout");
+      const err = new Error("LanEx took too long to answer.");
       err.status = 0;
+      err.offline = true;
+      throw err;
+    }
+    if (e && e.name === "TypeError") {
+      // "Failed to fetch": nothing answered. One place says it (the
+      // connection card), so the many callers that show e.message stay quiet.
+      noteTrouble("refused");
+      const err = new Error("LanEx is not answering.");
+      err.status = 0;
+      err.offline = true;
+      err.cause = e;
       throw err;
     }
     throw e;
   }
   if (timer) clearTimeout(timer);
+  noteOk();
   const body = await _readBody(resp);
   if (!resp.ok || body.ok === false) {
     const err = new Error(body.error || "HTTP " + resp.status);
@@ -569,9 +585,8 @@ let _keyGone = false;
 function _keyLost(message) {
   if (typeof document === "undefined") return;
   _keyGone = true;
-  if (_healthTimer) { clearInterval(_healthTimer); _healthTimer = null; }
   if (_es) { try { _es.close(); } catch (_e) {} }
-  _connIndicator(false, "key", message);
+  connKeyLost(message);
 }
 function _connect() {
   if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
@@ -601,13 +616,26 @@ const _pageId = (typeof crypto !== "undefined" && crypto.randomUUID)
 let _presenceOn = false;
 function _hello() {
   fetch("/api/hello?id=" + encodeURIComponent(_pageId), { cache: "no-store" })
-    .then(() => _serverBack()).catch(() => {});
+    .then(() => noteOk()).catch(() => noteTrouble("refused"));
 }
 function _startPresence() {
   if (_presenceOn) return;
   _presenceOn = true;
   _hello();
   setInterval(_hello, 20000);
+  initConnection({ onBack: _serverBack });
+  // A stream can die without an error after sleep (half-open): the server
+  // pings every 15 s, so 40 s of silence while the window is shown means
+  // rebuild it, and check that LanEx is there.
+  setInterval(() => {
+    if (typeof document === "undefined" || document.hidden || _keyGone || !_es) return;
+    if (_es.readyState === 1 && Date.now() - _lastMsgAt > 40000) {
+      try { _es.close(); } catch (_e) {}
+      _wasDisconnected = true;
+      _connect();
+      noteTrouble("refused");
+    }
+  }, 10000);
   const wake = () => { _hello(); if (!_es || _es.readyState === 2) { _retryMs = 2000; _connect(); } };
   document.addEventListener("visibilitychange", () => { if (!document.hidden) wake(); });
   document.addEventListener("resume", wake);      // Page Lifecycle: unfrozen
@@ -626,47 +654,42 @@ function _startPresence() {
   });
 }
 
-// While the stream is down, ask /api/health every few seconds: the chip says
-// whether LanEx is coming back, and the first good answer rebuilds the stream
-// instead of waiting out EventSource's own back-off.
-let _healthTimer = null;
-let _downSince = 0;
-function _watchHealth() {
-  if (_healthTimer) return;
-  _downSince = _downSince || Date.now();
-  _healthTimer = setInterval(() => {
-    if (Date.now() - _downSince > 8000) _connIndicator(false, "long");
-    _fetch("/api/health", { timeout: 2500 }).then(() => _serverBack()).catch(() => {});
-  }, 3000);
-}
-function _serverBack() {
-  if (!_healthTimer) return;
-  clearInterval(_healthTimer);
-  _healthTimer = null;
-  const long = Date.now() - _downSince > 8000;
-  _downSince = 0;
+// LanEx answered again (connection.js probed /api/health): rebuild the
+// stream, and let every page reload what failed while it was away. A new
+// boot means the server restarted: it has no project open, so the window's
+// project is opened again and the run status re-read.
+function _serverBack({ restarted = false, wasShown = false } = {}) {
   _retryMs = 2000;
-  if (!_es || _es.readyState === 2) _connect();
-  // Lists that failed to load while LanEx was away can load again now.
-  if (long) {
-    _broadcast({ type: "server_back" });
-    document.dispatchEvent(new CustomEvent("g:server_back"));
-  }
+  if (!_es || _es.readyState === 2) { _wasDisconnected = true; _connect(); }
+  if (restarted) { _reopenDesign(); _resyncRunStatus("restart"); }
+  _broadcast({ type: "server_back", restarted });
+  document.dispatchEvent(new CustomEvent("g:server_back", { detail: { restarted } }));
+  const name = String(state.designDir || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  import("./toast.js").then(({ toast, takeDropped }) => {
+    const held = takeDropped();
+    if (wasShown) {
+      toast.show(restarted ? "LanEx restarted." + (name ? " " + name + " is open again." : "") : "Connected to LanEx again.",
+        "success", 6000);
+    } else if (held) {
+      // Too short for the card, but something the page asked for failed.
+      toast.show("LanEx didn't answer for a moment. If something you just did didn't happen, do it again.", "warn", 10000);
+    }
+  }).catch(() => {});
 }
+
+let _lastMsgAt = Date.now();
+function _alive() { _lastMsgAt = Date.now(); noteOk(); }
 
 function _wire(es) {
   if (!es) return;
   es.addEventListener("hello", (e) => {
-    _connIndicator(true);
-    _serverBack();
+    _alive();
     _retryMs = 2000;
     try { _broadcast({ type: "hello", data: JSON.parse(e.data) }); } catch (_) {}
   });
-  es.addEventListener("ping", () => {
-    _connIndicator(true); // keep-alive doubles as a liveness signal
-  });
+  es.addEventListener("ping", _alive);   // keep-alive doubles as a liveness signal
   es.onmessage = (e) => {
-    _connIndicator(true);
+    _alive();
     try {
       const data = JSON.parse(e.data);
       _broadcast(Object.assign({ type: data.type || "info" }, data));
@@ -676,15 +699,13 @@ function _wire(es) {
   // The server emits ``gap`` when a reconnect resumed past events already
   // evicted from its ring — those step-transition events are gone, so the live
   // timeline could be stale. Re-hydrate from the authoritative status (N3).
-  es.addEventListener("gap", () => { _connIndicator(true); _resyncRunStatus("gap"); });
-  // A dropped stream (server died, laptop slept) must be VISIBLE: EventSource
-  // retries silently forever, and until it reconnects the UI would just go
-  // quietly stale. Show a small fixed chip while disconnected.
+  es.addEventListener("gap", () => { _alive(); _resyncRunStatus("gap"); });
+  // A dropped stream (server died, laptop slept): EventSource retries by
+  // itself; the connection state (connection.js) probes and says it.
   es.onerror = () => {
     if (es !== _es || _keyGone) return;
-    _connIndicator(false);
     _wasDisconnected = true;
-    _watchHealth();
+    noteTrouble("refused");
     if (es.readyState === 2) {
       // The server refused the stream outright. One plain request tells a
       // lost key (401, _keyLost) from a server that is just coming back.
@@ -694,7 +715,7 @@ function _wire(es) {
   };
   es.onopen = () => {
     if (es !== _es) return;
-    _connIndicator(true);
+    _alive();
     // Belt-and-suspenders to the server ``gap`` event: on ANY reconnect that
     // followed a real drop, re-pull the run status so the pipeline can never
     // sit on stale step states behind a green "connected" chip — even if the
@@ -748,31 +769,6 @@ function _resyncRunStatus(reason) {
     .finally(() => { _resyncing = false; });
 }
 
-// Fixed "reconnecting" chip — created lazily, removed the moment the stream is
-// healthy again. Pure DOM, no dependency on other modules (api.js is a leaf).
-function _connIndicator(ok, how, message) {
-  let el = document.getElementById("sse-conn-chip");
-  if (_keyGone && how !== "key") return;
-  if (ok) {
-    if (el) el.remove();
-    return;
-  }
-  const text = how === "key" ? (message || "This window is not signed in to LanEx. Close it and open LanEx again.")
-    : how === "long"
-    ? "LanEx is not answering yet. Keep this window open: your unsaved edits stay here, and it reconnects by itself."
-    : "Connection to the LanEx server lost. Reconnecting…";
-  if (el) { if (el.textContent !== text) el.textContent = text; return; }
-  el = document.createElement("div");
-  el.id = "sse-conn-chip";
-  el.setAttribute("role", "status");
-  el.textContent = text;
-  el.style.cssText =
-    "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9999;" +
-    "background:var(--danger,#b23b3b);color:#fff;padding:6px 14px;border-radius:999px;" +
-    "font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;";
-  document.body.appendChild(el);
-}
-
 function _broadcast(ev) {
   // Iterate a copy so a handler that registers another handler mid-dispatch
   // can't corrupt the loop.
@@ -783,28 +779,10 @@ function _broadcast(ev) {
 
 // ----------------------------- formatting -----------------------------------
 
-const _AMP = String.fromCharCode(38);
-const _LT = String.fromCharCode(60);
-const _GT = String.fromCharCode(62);
-const _QUOT = String.fromCharCode(34);
-const _APOS = String.fromCharCode(39);
-// Every HTML entity is `&<name>;` — the prefix is ALWAYS the ampersand
-// (`_AMP`), never the character being escaped. Using the char itself (e.g.
-// `_LT + "lt;"` → `<lt;`) left the raw `<`/`>`/`"`/`'` in the output, which is
-// both visible corruption (tool text like `spacing < 0.14um`) and an
-// HTML-injection hole. Built from char codes so no literal entity appears in
-// this source file.
-const _ESCAPE = {
-  [_AMP]: _AMP + "amp;",
-  [_LT]: _AMP + "lt;",
-  [_GT]: _AMP + "gt;",
-  [_QUOT]: _AMP + "quot;",
-  [_APOS]: _AMP + "#39;",
-};
-
 export const fmt = {
+  // The one escaper (html.js). String(s) first, as before: fmt.escape(0) is "0".
   escape(s) {
-    return String(s).replace(/[&<>"']/g, (c) => _ESCAPE[c] || c);
+    return escapeHtml(String(s));
   },
   metric(value) {
     if (value === null || value === undefined) return "—";

@@ -6,6 +6,21 @@ import { icon } from "./icons.js";
 const ICON = { success: "check", warn: "alert", error: "x", info: "dot" };
 const MAX = 4;
 
+// An error that only says LanEx isn't answering (api.js's offline words),
+// shown while the connection state is up. Pure apart from reading the body's
+// data-conn (tested).
+export function offlineEcho(message, type, conn = typeof document !== "undefined" && document.body ? document.body.dataset.conn : "") {
+  if (type !== "error" && type !== "warn") return false;
+  if (!(conn === "lost" || conn === "weak" || conn === "probing")) return false;
+  if (!/LanEx is not answering\.|LanEx took too long to answer\./.test(String(message || ""))) return false;
+  _dropped += 1;
+  return true;
+}
+// How many were held back since the last call (connection.js asks when LanEx
+// answers again: a blip too short for the card still says something failed).
+let _dropped = 0;
+export function takeDropped() { const n = _dropped; _dropped = 0; return n; }
+
 export const toast = {
   container: null,
 
@@ -24,6 +39,10 @@ export const toast = {
   // that a burst of newer toasts must not push out). ``opts.onClose(why)``:
   // called once when it goes, why = "timeout" | "close" | "action".
   show(message, type = "info", duration, action, opts = {}) {
+    // While LanEx isn't answering, the connection card says so once
+    // (connection.js); the many "… failed: LanEx is not answering." toasts
+    // from pages that tried to load something would only repeat it.
+    if (offlineEcho(message, type)) return null;
     if (!this.container) this.init();
     // Cap the stack — drop the oldest so a burst can't wallpaper the screen.
     // Kept toasts don't count and are never dropped.

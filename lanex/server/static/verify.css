@@ -281,7 +281,6 @@ body.theme-light .vf-step-n { color: var(--accent); border-color: color-mix(in s
 .vf-gdot { color: var(--text-disabled); cursor: help; font-size: 14px; line-height: 1; }
 .vf-gdot.is-on { color: var(--met1); }
 body.theme-light .vf-gdot.is-on { color: var(--accent); }
-.vf-paths .an-card-h { margin-bottom: var(--s-3); }
 
 /* ---------- DRC / LVS / reliability cards ---------- */
 .vf-tool { display: flex; flex-direction: column; gap: var(--s-3); }

@@ -393,15 +393,63 @@ def test_a_container_still_running_is_followed_again(sched, tmp_path, monkeypatc
         sched._save(jobs.design_key(a))
     monkeypatch.setattr("lanex.controller.events.BOOT_ID", "eeeeeeee")
     s2 = jobs.Scheduler(persist=True)
-    monkeypatch.setattr(jobs, "flow_containers", lambda: [{"name": "lanex-flow-abc", "id": "x", "workdir": str(a)},
-                                                          {"name": "lanex-flow-zzz", "id": "y", "workdir": "/elsewhere"}])
+    import os
+    home = str(Path(os.environ["LANEX_HOME"]).resolve())
+    monkeypatch.setattr(jobs, "flow_containers", lambda: [
+        {"name": "lanex-flow-abc", "id": "x", "workdir": str(a)},
+        # no labels (from before they existed), elsewhere: not this home's
+        {"name": "lanex-flow-zzz", "id": "y", "workdir": "/elsewhere"},
+        # no labels, in a project of this home: a leftover
+        {"name": "lanex-flow-old", "id": "z", "workdir": str(a / "runs")},
+        # another LanEx home on the same engine (the integration smoke test's case)
+        {"name": "lanex-flow-other", "id": "o", "workdir": str(a),
+         "labels": {"lanex.home": "/home/x/.lanex-other", "lanex.boot": "11111111", "lanex.pid": "1"}},
+        # this home, an earlier boot whose server is gone
+        {"name": "lanex-flow-gone", "id": "g", "workdir": "/elsewhere",
+         "labels": {"lanex.home": home, "lanex.boot": "22222222", "lanex.pid": "999999999"}},
+        # this home, this boot: this server's own
+        {"name": "lanex-flow-mine", "id": "m", "workdir": "/elsewhere",
+         "labels": {"lanex.home": home, "lanex.boot": "eeeeeeee", "lanex.pid": str(os.getpid())}},
+    ])
     started = []
     monkeypatch.setattr(termwatch.Follower, "start", lambda self: started.append(self.job_id))
     found = s2.recover_all([a])
     assert found["reattached"] == 1 and started == [r["job_id"]]
     assert s2.job(r["job_id"])["state"] == "running" and s2.job(r["job_id"])["reattached"]
-    # A container no queue knows is listed as an orphan.
-    assert [o["name"] for o in s2.snapshot()["orphans"]] == ["lanex-flow-zzz"]
+    # Only this home's leftovers are orphans.
+    assert sorted(o["name"] for o in s2.snapshot()["orphans"]) == ["lanex-flow-gone", "lanex-flow-old"]
+
+
+def test_a_container_of_a_live_server_of_this_home_is_not_an_orphan(monkeypatch):
+    import os
+    c = {"name": "lanex-flow-q", "labels": {"lanex.home": "/h", "lanex.boot": "aaaa", "lanex.pid": str(os.getpid())}}
+    assert jobs.is_orphan(c, home="/h", boot="bbbb", known_dirs=[]) is False
+    c["labels"]["lanex.pid"] = "999999999"
+    assert jobs.is_orphan(c, home="/h", boot="bbbb", known_dirs=[]) is True
+    assert jobs.is_orphan(c, home="/other", boot="bbbb", known_dirs=[]) is False
+
+
+def test_run_containers_carry_the_starting_servers_labels(monkeypatch):
+    from lanex.controller import librelane_entry, runner
+    from lanex.controller.events import BOOT_ID
+    import os
+    text = runner.container_labels()
+    kv = dict(line.split("=", 1) for line in text.splitlines())
+    assert kv["lanex.boot"] == BOOT_ID and kv["lanex.pid"] == str(os.getpid())
+    assert kv["lanex.home"] == str(Path(os.environ["LANEX_HOME"]).resolve())
+    args = librelane_entry._label_args(text + "\nevil=1\nlanex.bad=a\nb")
+    assert args[:2] == ["--label", "lanex.home=" + kv["lanex.home"]] and "evil=1" not in " ".join(args)
+    # Inserted right after `run` in LibreLane's exec of the engine.
+    import types
+    calls = []
+    fake = types.SimpleNamespace(os=os)
+    monkeypatch.setitem(__import__("sys").modules, "librelane.container", fake)
+    monkeypatch.setitem(__import__("sys").modules, "librelane", types.SimpleNamespace(container=fake))
+    monkeypatch.setenv("LANEX_CONTAINER_LABELS", "lanex.boot=abcd")
+    monkeypatch.setattr(os, "execlp", lambda f, *a: calls.append(a))
+    librelane_entry._label_the_container()
+    fake.os.execlp("docker", "docker", "run", "--rm", "--name", "n", "img")
+    assert calls == [("docker", "run", "--label", "lanex.boot=abcd", "--rm", "--name", "n", "img")]
 
 
 def test_a_continued_run_is_not_failed_by_its_cut_step(tmp_path):

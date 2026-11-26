@@ -51,6 +51,12 @@ _SKIPPED, _NOT_RUN = "skipped", "not_run"
 # Kept for callers of the old API: "absent" meant "no data".
 _ABSENT = "absent"
 
+# The one run vocabulary (run_verdict_from's states), and the check statuses.
+# modules/verdict.js says the same words; test_verdict_parity.py holds them
+# together.
+RUN_STATES = ("passed", "warning", "failed", "stopped", "incomplete", "running")
+CHECK_STATUSES = (_PASS, _WARN, _FAIL, _INFO, _SKIPPED, _NOT_RUN, _ABSENT)
+
 # LibreLane 3 defaults for the switches a run's resolved.json may omit
 # (steps/checker.py and flows/classic.py).
 _DEFAULTS: Dict[str, Any] = {
@@ -1329,7 +1335,12 @@ def _flow_state(run: _Run) -> Dict[str, Any]:
         state = "stopped"
     else:
         state = "unknown"
-    first_stop = stopped[0] if stopped else None
+    # A checker with a deferred error ("4 Routing DRC errors found. -
+    # deferred") leaves no state_out either, and the flow goes on: in a run
+    # that didn't finish, the step that stopped it is the last one that didn't
+    # finish, not the first (forced: an SRAM with no power hookup stops at
+    # Checker.DisconnectedPins after Checker.TrDRC deferred).
+    first_stop = (stopped[0] if run.completed else stopped[-1]) if stopped else None
     last = run.steps[-1] if run.steps else None
     planned, off = _planned_steps(run)
     return {
@@ -1486,6 +1497,16 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
         if st:
             out["stage"] = st
         return out
+    # LibreLane's SynthesisExploration has no final/ and no layout steps, so the
+    # rules below read it as "Stopped after step 1". Its recipes say how it went:
+    # the same verdict the Runs table shows (history.summarize_run).
+    try:
+        from . import synthexplore
+        if synthexplore.is_exploration(run.dir):
+            out.update(synthexplore.verdict(run.dir))
+            return out
+    except Exception:
+        pass
     if v["state"] == "blocked":
         k = len(v["blocker_ids"])
         first = next(c for c in checks if c["status"] == _FAIL)

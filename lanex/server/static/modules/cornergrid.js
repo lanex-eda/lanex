@@ -12,6 +12,8 @@
 // nom_fast_1p32V_m40C has one RC, fine; an unknown naming isn't) falls back to
 // one row ordered slow -> typical -> fast.
 
+import { escapeHtml } from "./html.js";
+
 const PROC = {
   ff: "fast", fast: "fast", f: "fast",
   tt: "typical", typ: "typical", typical: "typical", t: "typical",
@@ -22,7 +24,7 @@ const SPEED_ORDER = { fast: 0, typical: 1, skewed: 2, slow: 3 };
 const RC_ORDER = { min: 0, nom: 1, max: 2 };
 const RC_WORDS = { min: "min wire RC", nom: "nominal wire RC", max: "max wire RC" };
 
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = escapeHtml;
 
 export function parseCorner(name) {
   const out = { name: String(name || ""), rc: null, process: null, speed: null, temp: null, volt: null };

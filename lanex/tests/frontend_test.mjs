@@ -2982,6 +2982,21 @@ await checkAsync("setup: the server's refusals read in plain words", async () =>
     assert.match(WZ.createProblem({ ...ok, pdk: "" }), /Install one in Tools/);
     assert.match(WZ.createProblem({ ...ok, dest: "/mnt/c/Users/Jo Smith/p" }), /space/);
   });
+  check("wizard: the SRAM example is sky130 only, and says so on another PDK", () => {
+    const sram = { name: "sram", pdks: ["sky130*"] };
+    assert.equal(WZ.tplPdkOk(sram, "sky130A"), true);
+    assert.equal(WZ.tplPdkOk(sram, "sky130B"), true);
+    assert.equal(WZ.tplPdkOk(sram, "gf180mcuD"), false);
+    assert.equal(WZ.tplPdkOk(sram, ""), false);
+    assert.equal(WZ.tplPdkOk({ name: "blinky", pdks: [] }, "ihp-sg13g2"), true);
+    assert.equal(WZ.pdkOnlyWords(sram), "sky130 only");
+    assert.equal(WZ.pdkOnlyWords({ pdks: [] }), "");
+    const pdks = [{ name: "sky130A", ready: true }, { name: "gf180mcuD", ready: true }];
+    const base = { dest: "/home/u/p", clock: 25, hasClock: true, pdks, tpl: sram };
+    assert.equal(WZ.createProblem({ ...base, pdk: "sky130A" }), "");
+    assert.match(WZ.createProblem({ ...base, pdk: "gf180mcuD" }), /needs a sky130 PDK.*gf180mcuD has no such block\. Pick sky130A/);
+    assert.match(WZ.createProblem({ ...base, pdk: "gf180mcuD", pdks: [pdks[1]] }), /Install sky130 in Tools/);
+  });
   check("words: no false claim that the config file is never written", () => {
     const cfg = readFileSync(resolve(MOD, "config.js"), "utf8");
     const help = readFileSync(resolve(MOD, "help.js"), "utf8");
@@ -3304,7 +3319,8 @@ check("dialog: the title is text (textContent), never parsed as HTML", () => {
   });
   check("glossary: the popover's words are escaped and link to Help", () => {
     const h = TM.termHtml({ id: "x", term: "<b>X</b>", short: "a & b", lanex: "in LanEx", see: [] });
-    assert.ok(!h.includes("<b>X</b>") && h.includes("&#60;b&#62;X") && h.includes("a &#38; b"));
+    // (html.js's escaper: named entities)
+    assert.ok(!h.includes("<b>X</b>") && h.includes("&lt;b&gt;X") && h.includes("a &amp; b"));
     assert.match(h, /data-term-more='x'/);
     assert.match(h, /term-lanex/);
   });
@@ -3799,7 +3815,7 @@ check("runs: no-clock runs count as Warnings, summed violation counts say so, vo
 
 await checkAsync("toasts: the Undo toast stays outside the cap and clear(); the trash is purged only on timeout or close", async () => {
   class El {
-    constructor() { this.children = []; this.parent = null; this.cls = new Set(); this.on = {}; this.attrs = {}; }
+    constructor() { this.children = []; this.parent = null; this.cls = new Set(); this.on = {}; this.attrs = {}; this.dataset = {}; }
     set className(v) { this.cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
     get className() { return [...this.cls].join(" "); }
     get classList() { const c = this.cls; return { add: (x) => c.add(x), remove: (x) => c.delete(x), contains: (x) => c.has(x) }; }
@@ -3845,6 +3861,156 @@ await checkAsync("toasts: the Undo toast stays outside the cap and clear(); the 
     globalThis.requestAnimationFrame = oldRaf;
   }
 });
+
+// ---- the shell: connection-lost state, palette reach, #flow (lane Z1) -----------
+{
+  const CN = await import(toUrl(resolve(MOD, "connection.js")));
+  check("connection: nothing for a blip, a chip from 2 s, a card from 10 s", () => {
+    const v = (t, o = {}) => CN.connView({ down: true, since: 0, now: t, ...o });
+    assert.equal(CN.connView({ down: false }).phase, "ok");
+    assert.equal(v(1500).chip, null);
+    assert.equal(v(1500).card, null);
+    assert.equal(v(3000).chip.text, "RECONNECTING…");
+    assert.equal(v(3000).card, null);
+    assert.equal(v(3000, { wokeAt: 2500 }).chip.text, "WAKING UP…");
+    assert.equal(v(12000, { launcher: true }).card.title, "LanEx is restarting");
+    assert.equal(v(12000, { launcher: false }).card.title, "LanEx is not answering");
+    assert.equal(v(12000, { kind: "timeout", launcher: true }).card.title, "LanEx is not answering");
+    assert.match(v(12000, { kind: "timeout", launcher: true }).card.text, /busy with a long job/);
+  });
+  check("connection: 'has not come back' after LanEx.exe's own restart budget, sooner without it", () => {
+    const v = (t, o) => CN.connView({ down: true, since: 0, now: t, ...o });
+    assert.equal(v(95000, { launcher: true }).card.title, "LanEx is restarting");
+    const c = v(130000, { launcher: true }).card;
+    assert.equal(c.title, "LanEx has not come back");
+    assert.equal(c.tone, "fail");
+    assert.equal(c.foot, "log");
+    assert.match(c.text, /tray.*Start menu.*Repair LanEx/);
+    assert.match(c.text, /over 2 minutes/);
+    assert.equal(v(31000, { launcher: false }).card.title, "LanEx has stopped");
+    assert.match(v(31000, { launcher: false }).card.text, /run lanex in a terminal/);
+    // never claims the distro is stopped: the page can't know
+    for (const t of [12000, 130000]) assert.doesNotMatch(v(t, { launcher: true }).card.text, /distro is stopped|WSL is stopped/);
+  });
+  check("connection: something else answering, and a lost key, have their own words", () => {
+    assert.equal(CN.connView({ down: true, since: 0, now: 12000, kind: "foreign" }).card.title, "Something else is answering here");
+    const k = CN.connView({ key: "Close this window and open LanEx again." });
+    assert.equal(k.phase, "key");
+    assert.equal(k.card.retry, false);
+  });
+  check("connection: probe schedule backs off and never stops; a probe answer as one word", () => {
+    assert.deepEqual([0, 1, 2, 3, 4].map((i) => CN.nextDelay(i, 0)), [500, 1000, 2000, 2000, 3000]);
+    assert.equal(CN.nextDelay(9, 60000), 3000);
+    assert.equal(CN.nextDelay(40, 300000), 10000);
+    assert.equal(CN.nextDelay(90, 3600000), 30000);
+    assert.equal(CN.probeKind({ body: { service: "lanex" } }), "ok");
+    assert.equal(CN.probeKind({ body: { error: "nginx" } }), "foreign");
+    assert.equal(CN.probeKind(null, new TypeError("Failed to fetch")), "refused");
+    assert.equal(CN.probeKind(null, Object.assign(new Error("t"), { name: "TimeoutError" })), "timeout");
+    assert.equal(CN.overWords(23000), "over 20 s");
+    assert.equal(CN.overWords(125000), "over 2 minutes");
+    assert.equal(CN.agoWords(75000), "1 min 15 s");
+  });
+  check("connection: the card's words are escaped and the log path is copyable", () => {
+    const h = CN.cardHtml({ eyebrow: "X", title: "<b>", text: "a & b", retry: true, every: "Checking every 3 s", foot: "log" });
+    assert.match(h, /&lt;b&gt;/);
+    assert.match(h, /a &amp; b/);
+    assert.match(h, /data-conn='retry'/);
+    assert.match(h, /LanEx\\logs\\launcher\.log/);
+    assert.match(h, /data-conn='copy-log'/);
+  });
+  const TM = await import(toUrl(resolve(MOD, "toast.js")));
+  check("connection: 'not answering' toasts are held while the state is up, and counted", () => {
+    TM.takeDropped();
+    assert.equal(TM.offlineEcho("Save failed: LanEx is not answering.", "error", "lost"), true);
+    assert.equal(TM.offlineEcho("Save failed: LanEx is not answering.", "error", "probing"), true);
+    assert.equal(TM.offlineEcho("Save failed: LanEx is not answering.", "error", undefined), false, "connected: say it");
+    assert.equal(TM.offlineEcho("Save failed: disk full", "error", "lost"), false);
+    assert.equal(TM.offlineEcho("Connected again", "success", "lost"), false);
+    assert.equal(TM.takeDropped(), 2);
+    assert.equal(TM.takeDropped(), 0);
+  });
+  const PM = await import(toUrl(resolve(MOD, "palettemodel.js")));
+  check("palette: ! projects and : flow steps scope the search; checks and tools come up by name", () => {
+    assert.deepEqual(PM.parseQuery("!spm"), { group: "project", q: "spm", prefix: "!" });
+    assert.deepEqual(PM.parseQuery(":cts"), { group: "step", q: "cts", prefix: ":" });
+    const items = [
+      { id: "a:run", group: "action", title: "Run the flow" },
+      { id: "pj:/p/spm", group: "project", title: "spm", keys: ["/p/spm"] },
+      { id: "sp:OpenROAD.CTS", group: "step", title: "Clock tree synthesis", keys: ["OpenROAD.CTS"] },
+      { id: "ck:magic_drc", group: "check", title: "Magic DRC check", keys: ["magic_drc"] },
+      { id: "tl:klayout", group: "tool", title: "KLayout", keys: ["klayout"] },
+    ];
+    assert.deepEqual(PM.rank(items, ":cts").map((x) => x.id), ["sp:OpenROAD.CTS"]);
+    assert.deepEqual(PM.rank(items, "!spm").map((x) => x.id), ["pj:/p/spm"]);
+    assert.equal(PM.rank(items, "drc")[0].id, "ck:magic_drc");
+    assert.equal(PM.rank(items, "klayout")[0].id, "tl:klayout");
+  });
+  check("palette: data that arrives late keeps the highlighted row", () => {
+    const a = [{ id: "x" }, { id: "y" }, { id: "z" }];
+    assert.equal(PM.keepSelection([{ id: "n" }, ...a], "y", 1), 2);
+    assert.equal(PM.keepSelection(a, "gone", 7), 2);
+    assert.equal(PM.keepSelection([], "gone", 3), 0);
+  });
+  check("palette: a run's actions are the Runs panel's own, Delete asks first and is never a recent", () => {
+    const p = readFileSync(resolve(MOD, "palette.js"), "utf8");
+    assert.match(p, /m\.runAction\(id, r\)/);
+    assert.match(p, /act\("delete", "Delete run " \+ r\.tag \+ "…"[^\n]*danger: true/);
+    assert.match(p, /!a\.danger\)/);
+    assert.match(p, /m\.switchProject\(d\)/);
+    assert.match(p, /tab\("verify", \{ check: id \}\)/);
+    assert.match(p, /tab\("tools", \{ item: k \}\)/);
+    assert.match(p, /isDown\(\) \? probeNow\(\) : location\.reload\(\)/);
+    assert.match(readFileSync(resolve(MOD, "runs.js"), "utf8"), /export async function runAction\(id, r\)/);
+  });
+  const HT = await import(toUrl(resolve(MOD, "html.js")));
+  check("html: one escaper and a tagged template that escapes every value", () => {
+    assert.equal(HT.escapeHtml(`<a href="x" title='y'>&</a>`), "&lt;a href=&quot;x&quot; title=&#39;y&#39;&gt;&amp;&lt;/a&gt;");
+    assert.equal(HT.escapeHtml(null), "");
+    assert.equal(HT.escapeText(`"q" <b>`), `"q" &lt;b&gt;`);
+    const name = "<img src=x onerror=alert(1)>";
+    const out = String(HT.html`<b title="${name}">${name}</b>${HT.raw("<i>ok</i>")}${[1, "<2>"]}${null}${HT.html`<u>${"&"}</u>`}`);
+    assert.equal(out, '<b title="&lt;img src=x onerror=alert(1)&gt;">&lt;img src=x onerror=alert(1)&gt;</b><i>ok</i>1&lt;2&gt;<u>&amp;</u>');
+    assert.equal(fmt.escape(0), "0");
+    assert.equal(fmt.escape("a<b"), HT.escapeHtml("a<b"));
+  });
+  check("html: no module builds its own HTML escaper (they use html.js)", () => {
+    const files = [];
+    const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const p = resolve(d, e.name); if (e.isDirectory()) walk(p); else if (/\.m?js$/.test(e.name)) files.push(p); } };
+    walk(MOD);
+    walk(resolve(MOD, ".."));   // static/*.js too (app.js); the vendor folder holds no .js at its top
+    const own = [];
+    for (const f of new Set(files)) {
+      if (/[\\/]vendor[\\/]/.test(f) || /[\\/]html\.js$/.test(f)) continue;
+      const t = readFileSync(f, "utf8");
+      // an entity map, or a replace over the characters an escaper escapes
+      if (/replace\(\/\[&<>/.test(t) || /"&":\s*"&amp;"/.test(t) || /fromCharCode\(38\)/.test(t)) own.push(f.split(/[\\/]/).slice(-2).join("/"));
+    }
+    assert.deepEqual(own, [], "escapers outside html.js: " + own.join(", "));
+  });
+  check("dialog: a title is text, never parsed as HTML", () => {
+    const d = readFileSync(resolve(MOD, "dialog.js"), "utf8");
+    assert.match(d, /\.dlg-head"\)\.textContent = title == null \? "" : String\(title\)/);
+    assert.doesNotMatch(d, /dlg-head[^\n]*innerHTML/);
+  });
+  const NV = await import(toUrl(resolve(MOD, "nav.js")));
+  check("nav: the Flow page's address is #flow, and #pipeline still opens it", () => {
+    assert.equal(NV.addressOf("pipeline"), "flow");
+    assert.equal(NV.addressOf("verify"), "verify");
+    assert.equal(NV.tabOfAddress("flow"), "pipeline");
+    assert.equal(NV.tabOfAddress("pipeline"), "pipeline");
+    assert.equal(NV.tabOfAddress("ide"), "ide");
+    const src = readFileSync(resolve(MOD, "nav.js"), "utf8");
+    // every address written goes through addressOf
+    assert.doesNotMatch(src, /State\(\{ lx: _cur \}, "", "#" \+ (?!addressOf)/);
+  });
+  check("connection: api.js says one thing for 'Failed to fetch' and wires the probe", () => {
+    const a = readFileSync(resolve(MOD, "api.js"), "utf8");
+    assert.match(a, /e\.name === "TypeError"[\s\S]{0,300}noteTrouble\("refused"\)[\s\S]{0,200}LanEx is not answering\./);
+    assert.match(a, /initConnection\(\{ onBack: _serverBack \}\)/);
+    assert.doesNotMatch(a, /sse-conn-chip|_connIndicator/);
+  });
+}
 
 // ------------------------------------------------ fix lane F3: results read like the tools' reports
 {

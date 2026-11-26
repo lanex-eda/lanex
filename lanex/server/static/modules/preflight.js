@@ -11,10 +11,6 @@ let _lastAt = 0;
 let _lastKey = "";
 let _inflight = null;   // { key, p }: the check now on its way
 
-export function lastPreflight() {
-  return _last;
-}
-
 // What a check is a check of: the project, the PDK and library picked, and
 // the run mode. A result for anything else says nothing about this run.
 export function preflightKey(s = state) {

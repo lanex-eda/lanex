@@ -39,10 +39,6 @@
   border-radius: var(--r-sm); background: var(--surface-3); color: var(--text-strong); font: inherit; font-weight: 600; cursor: pointer; }
 .toast-act:hover { border-color: var(--accent); }
 
-/* ---- E4.3 timing compare Δ ------------------------------------------------ */
-.tp-pos { color: var(--pass); }
-.tp-neg { color: var(--fail); }
-
 /* ---- E4.2 metric watch ---------------------------------------------------- */
 .watch-row { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; }
 .watch-row code { color: var(--text); }
@@ -56,13 +52,6 @@
 .run-pin:hover { color: var(--text-muted); }
 .run-pin.pinned { color: var(--warn); }
 
-/* ---- E5.1 first-run checklist (live ✓/○ on the hero steps) ---------------- */
-#onboard-checklist .ck-mark {
-  display: inline-block; width: 1.2em; font-weight: 700; color: var(--text-muted);
-}
-#onboard-checklist li.ck-done .ck-mark { color: var(--pass); }
-#onboard-checklist li.ck-done { color: var(--text-muted); }
-
 /* ---- shared bits ---------------------------------------------------------- */
 .inp {
   background: var(--surface-2); color: var(--text);
@@ -70,19 +59,6 @@
   padding: var(--s-2) var(--s-3); font: inherit;
 }
 .inp:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.chart-box { width: 100%; }
-
-/* Verify/DSE status DOTS (renamed from .pf* to end the collision with
-   preflight.js's .pf-ok/.pf-warn/.pf-bad glyph TEXT colors in styles.css — B7). */
-.vdot { width: 9px; height: 9px; border-radius: var(--r-pill); display: inline-block; flex: 0 0 auto; }
-.vdot-pass { background: var(--pass); }
-.vdot-fail { background: var(--fail); }
-.vdot-warn { background: var(--warn); }
-.vdot-absent { background: var(--text-disabled); }
-
-.chip-pass { background: var(--pass-soft); color: var(--pass); }
-.chip-fail { background: var(--fail-soft); color: var(--fail); }
-.chip-warn { background: var(--warn-soft); color: var(--warn); }
 
 /* ---- Shared file viewer (download / locate / find) ------------------------ */
 .fv-toolbar { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-2); }
@@ -140,20 +116,13 @@
   width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   box-shadow: 0 0 0 2px var(--surface); }
 
-/* ---- Desktop viewers card ------------------------------------------------- */
-.tool-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-2) 0; border-bottom: 1px solid var(--border); }
-.tool-row:last-child { border-bottom: 0; }
-
-/* ---- Runs scope toggle ---------------------------------------------------- */
-.runs-scope-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-
 /* ---- Inline SVG icons (icons.js) ------------------------------------------ */
 /* icon() returns an <svg class="ic ic-NAME"> sized in px; these rules keep it
    aligned with adjacent text in badges, buttons, list rows and empty states. */
 .ic { vertical-align: -0.15em; flex: none; }
 .empty .ico { color: var(--text-muted); }
 .empty .ico .ic { vertical-align: middle; }
-.fs-ico, .out-cat-ico { display: inline-flex; vertical-align: middle; color: var(--text-muted); }
+.fs-ico { display: inline-flex; vertical-align: middle; color: var(--text-muted); }
 .fs-ico { margin-right: var(--s-1); }
 .filesel-row.dir .fs-ico { color: var(--accent); }
 /* File picking in the folder browser: the wanted type is clickable, the
@@ -191,16 +160,11 @@
 }
 .pw-banner-close:hover { background: rgba(255, 255, 255, .3); }
 
-/* ---- Compare -------------------------------------------------------------- */
-.cmp-checks { display: flex; flex-wrap: wrap; gap: var(--s-3); margin: var(--s-2) 0; }
-.cmp-summary-card { font-weight: 600; }
 .cmp-table td.cmp-num { font-family: var(--mono); text-align: right; }
 .cmp-table caption { text-align: left; font-weight: 600; padding: var(--s-2) 0; color: var(--text); }
-.cmp-check { display: inline-flex; gap: var(--s-1); align-items: center; }
 .cmp-table { border-collapse: collapse; width: 100%; font-size: var(--t-sm); margin: var(--s-3) 0; }
 .cmp-table th, .cmp-table td { border: 1px solid var(--border); padding: var(--s-1) var(--s-2); text-align: left; }
 .cmp-table th { background: var(--surface-2); }
-.cmp-best { background: var(--pass-soft); color: var(--pass); font-weight: 600; }
 .cmp-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--s-3); margin: var(--s-3) 0; align-items: start; }
 .cmp-fig { margin: 0; padding: 12px 14px 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); min-width: 0; }
 .cmp-fig figcaption { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
@@ -213,51 +177,6 @@
 /* DSE's jump bar sits under the page's own heading, not at the top of the
    section: no pull-up, or it covers the line above it. */
 #dse-body > .section-jump { margin-top: 0; }
-.dse-builder { padding: var(--s-4); }
-.dse-add { display: flex; gap: var(--s-2); margin: var(--s-2) 0; flex-wrap: wrap; }
-.dse-add > select { flex: 0 1 380px; width: auto; min-width: 220px; }
-.dse-add > input { flex: 1 1 320px; width: auto; min-width: 0; }
-.dse-add > .btn { flex: none; }
-.dse-axis { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; }
-.dse-mode { display: flex; gap: var(--s-4); margin: var(--s-2) 0; }
-.dse-foot { display: flex; align-items: center; gap: var(--s-3); margin-top: var(--s-3); }
-.dse-qrow { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; }
-.dse-runpick { padding: var(--s-4); margin-top: var(--s-3); }
-.dse-runpick-head { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-2); }
-.dse-runpick-head h3 { margin: 0; }
-.dse-spacer { flex: 1; }
-.dse-runs { display: grid; gap: var(--s-1); grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); max-height: 240px; overflow: auto; }
-.dse-run-row { display: flex; align-items: center; gap: var(--s-2); padding: 2px 0; cursor: pointer; }
-.dse-run-row code { overflow-wrap: anywhere; }
-.dse-runs .vdot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.dse-runs .vdot-pass { background: var(--pass); }
-.dse-runs .vdot-fail { background: var(--fail); }
-.dse-sweep-lbl { font-size: var(--t-sm); color: var(--text-muted); display: inline-flex; align-items: center; gap: var(--s-1); }
-/* DSE results: comparison table + side-by-side charts */
-.dse-results { padding: var(--s-4); margin-top: var(--s-3); }
-.dse-results-head { display: flex; align-items: baseline; gap: var(--s-3); margin-bottom: var(--s-2); }
-.dse-results-head h3 { margin: 0; }
-.dse-results-table { overflow: auto; }
-.dse-results-table .cmp-table td.rk { font-weight: 600; white-space: nowrap; }
-.dse-results-table .cmp-table td .mu { color: var(--text-muted); font-weight: 400; font-size: var(--t-xs); }
-.dse-results-table .cmp-table th.ok { color: var(--pass); }
-.dse-results-table .cmp-table th.bad { color: var(--fail); }
-.dse-results-table .cmp-table td.best { background: color-mix(in srgb, var(--pass) 18%, transparent); font-weight: 700; }
-.dse-results-table .cmp-table tr.sec td { background: var(--surface-2); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: var(--t-xs); letter-spacing: 0.04em; }
-.dse-charts { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-top: var(--s-3); }
-.dse-chart-col { min-width: 0; }
-.dse-chart-title { font-size: var(--t-sm); color: var(--text-muted); margin-bottom: var(--s-1); display: flex; align-items: center; gap: var(--s-2); }
-.dse-bar-metric { font-size: var(--t-xs); }
-
-/* ---- Cells ---------------------------------------------------------------- */
-.cells-bar { display: flex; gap: var(--s-3); align-items: center; margin-bottom: var(--s-3); flex-wrap: wrap; }
-.cells-grid { display: grid; gap: var(--s-2); grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
-.cell-card { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); }
-.cell-card code { overflow-wrap: anywhere; }
-
-/* Cells PDK/SCL picker. */
-.cells-pick { display: flex; gap: var(--s-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--s-3); }
-.cells-pick select { background-color: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 30px 4px 8px; }
 
 /* ---- Wizard --------------------------------------------------------------- */
 .wizard { max-width: 640px; }
@@ -265,21 +184,7 @@
 
 [data-explain] { cursor: help; }
 
-/* Cell-usage breakdown (Analytics tab): donut of top masters + full count table. */
-.cu-stats { margin-bottom: var(--s-3); font-size: var(--t-xs); }
-.cu-layout { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
-  gap: var(--s-4); align-items: start; }
-.cu-chart { height: 300px; min-width: 0; }
-.cu-tablewrap { max-height: 360px; overflow: auto; border: 1px solid var(--border);
-  border-radius: var(--r-sm); }
-.cu-table { width: 100%; border-collapse: collapse; font-size: var(--t-xs); }
-.cu-table th { position: sticky; top: 0; background: var(--surface-2); text-align: left;
-  padding: 6px 10px; border-bottom: 1px solid var(--border); z-index: 1; }
-.cu-table td { padding: 5px 10px; border-bottom: 1px solid var(--border); font-family: var(--mono); }
-.cu-table tr:hover td { background: var(--surface-2); }
-.cu-cell { overflow-wrap: anywhere; }
-.cu-count, .cu-pct { text-align: right; white-space: nowrap; }
-@media (max-width: 720px) { .cu-layout { grid-template-columns: 1fr; } }
+@media (max-width: 720px) {  }
 
 /* ---- Auto-generate config (Setup) -------------------------------------- */
 .autoconfig-banner {
@@ -322,10 +227,6 @@
 }
 .v-open-container .open-in-container[disabled] { opacity: .5; cursor: not-allowed; }
 
-/* ---- Custom cells (advanced cell swap, #5) ----------------------------- */
-.cc-panel { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--border); }
-.cc-head { display: flex; align-items: center; gap: var(--s-3); }
-.cc-head h2 { margin: 0; flex: 1; }
 .cc-badge { font-size: var(--t-xs); padding: 1px 8px; border-radius: var(--r-sm); border: 1px solid var(--accent); color: var(--accent); vertical-align: middle; font-family: var(--mono); }
 .cc-table { width: 100%; border-collapse: collapse; margin: var(--s-3) 0; font-size: var(--t-sm); }
 .cc-table th, .cc-table td { text-align: left; padding: var(--s-2); border-bottom: 1px solid var(--border); }
@@ -333,45 +234,7 @@
 .cc-chip { font-size: var(--t-xs); padding: 1px 6px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); }
 .cc-add { margin-top: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
 .cc-add > summary { padding: var(--s-3); cursor: pointer; font-weight: 600; }
-.cc-form { padding: 0 var(--s-3) var(--s-3); display: flex; flex-direction: column; gap: var(--s-3); }
-.cc-form > label { display: flex; flex-direction: column; gap: 4px; font-size: var(--t-sm); color: var(--text-muted); }
-.cc-form input[type=text] { padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--text); }
-.cc-views { display: grid; gap: var(--s-2); grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
-.cc-view { display: flex; flex-direction: column; gap: 4px; font-size: var(--t-sm); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-2); }
-.cc-form-actions { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
-/* ---- Custom macros: instance rows -------------------------------------- */
-.mc-instances { display: flex; flex-direction: column; gap: var(--s-2); }
-.mc-inst-head { font-size: var(--t-sm); color: var(--text-muted); }
-.mc-inst-row { display: grid; grid-template-columns: 1.6fr 0.7fr 0.7fr auto auto; gap: var(--s-2); align-items: center; }
-.mc-inst-row input[type=text], .mc-inst-row select {
-  padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm);
-  background: var(--surface); color: var(--text); font-size: var(--t-sm); min-width: 0; }
-.mc-inst-del { padding: 2px 8px; }
-@media (max-width: 640px) { .mc-inst-row { grid-template-columns: 1fr 1fr; } }
-
-.cc-help { white-space: normal; }
-.cc-help h3 { margin: var(--s-3) 0 var(--s-1); color: var(--text-strong); }
-.cc-help ul, .cc-help ol { margin: 0 0 var(--s-2); padding-left: 1.4em; }
-.cc-help li { margin: 3px 0; }
-.cc-help-modal { width: min(760px, calc(94vw / var(--ll-zoom, 1))); }
-
-/* ---- Manual / advanced (#4) -------------------------------------------- */
-.manual-card { margin-bottom: var(--s-4); }
-.manual-input-row { display: flex; gap: var(--s-2); margin: var(--s-2) 0; }
-.manual-input-row input { flex: 1; font-family: var(--mono); padding: var(--s-2);
-  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--text); }
-.manual-output {
-  margin: var(--s-2) 0 0; max-height: 360px; overflow: auto;
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
-  padding: var(--s-3); font-family: var(--mono); font-size: var(--t-sm); line-height: 1.45;
-  white-space: pre-wrap; word-break: break-word; color: var(--text);
-}
-.cli-reveal { margin-top: var(--s-3); }
-.cli-block { margin-bottom: var(--s-3); }
-.cli-label { font-size: var(--t-sm); color: var(--text-muted); margin-bottom: 4px; }
-.cli-row { display: flex; gap: var(--s-2); align-items: stretch; }
-.cli-cmd { flex: 1; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
-  padding: var(--s-2); font-family: var(--mono); font-size: var(--t-sm); overflow-x: auto; white-space: pre; }
+@media (max-width: 640px) {  }
 
 /* ---- Segmented control (Timing setup/hold, reusable) ------------------- */
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-md);
@@ -390,19 +253,6 @@
 .data-table td { padding: 5px var(--s-2); border-bottom: 1px solid var(--border); vertical-align: top; }
 .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .data-table .mono { font-family: var(--mono); font-size: var(--t-xs); }
-.tp-sortable { cursor: pointer; user-select: none; }
-.tp-sortable:hover { color: var(--accent); }
-
-/* ---- Timing paths card ------------------------------------------------- */
-.tp-summary { display: flex; gap: var(--s-2); flex-wrap: wrap; align-items: center;
-  margin: var(--s-3) 0; }
-.tp-hist { width: 100%; }
-.tp-table tbody tr.tp-row { cursor: pointer; }
-.tp-table tbody tr.tp-row:hover { background: var(--hover, var(--surface-2)); }
-.tp-table tbody tr.tp-row-fail td { background: var(--fail-soft); }
-.tp-pre { margin: 0; padding: var(--s-2); background: var(--surface-2); border-radius: var(--r-sm);
-  font-family: var(--mono); font-size: var(--t-xs); line-height: 1.5; overflow-x: auto;
-  white-space: pre; max-height: 360px; color: var(--text); }
 
 /* ---- In-app dialogs (dialog.js) --------------------------------------- */
 .dlg-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: flex;
@@ -447,21 +297,6 @@
 /* ---- Runs list: status border, filter, inline note -------------------- */
 .runs-filter { flex: 1; min-width: 0; padding: 5px var(--s-2); background: var(--surface-2);
   border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); font-size: var(--t-sm); }
-.runs-list li.run-pass { border-left: 3px solid var(--pass); }
-.runs-list li.run-fail { border-left: 3px solid var(--fail); }
-/* The run the results pages show (context.js): a click on a card picks it. */
-.runs-list li[data-tag] { cursor: pointer; }
-.runs-list li.is-viewing { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
-.run-viewing { display: none; }
-.runs-list li.is-viewing .run-viewing {
-  display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 3px;
-  font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-.run-note-row { margin: var(--s-2) 0; }
-.run-note-ta { width: 100%; box-sizing: border-box; background: var(--surface-2);
-  border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text);
-  font-size: var(--t-sm); padding: var(--s-2); resize: vertical; }
 
 /* ---- Config: per-variable reset-to-default ---------------------------- */
 .var-reset { background: transparent; border: 1px solid var(--border); border-radius: var(--r-sm);
@@ -480,7 +315,6 @@
 }
 .user-preset-del:hover { color: var(--fail); }
 .ide-autolint { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-sm); color: var(--text-muted); white-space: nowrap; }
-.run-pick { margin-right: var(--s-2); accent-color: var(--accent); cursor: pointer; }
 
 /* ---- shared run-scope toggle (Analytics/Verify/DSE/Layout pickers) ------ */
 .run-scope-toggle {
@@ -489,38 +323,12 @@
 }
 .run-scope-toggle input { accent-color: var(--accent); cursor: pointer; }
 
-/* ---- global topbar Run/Stop button -------------------------------------- */
-/* It reuses .btn-cta for the accent gradient, but .btn-cta is the big, column-
-   stacked Setup "Run flow" button (label + hint, t-lg font). In the fixed-height
-   topbar that made it oversized, so these overrides — scoped to .topbar-run
-   ONLY, never .btn-cta — put it back to a normal single-row toolbar button that
-   lines up with the icon buttons/pills beside it. */
-.topbar-run {
-  flex-direction: row;
-  align-items: center;
-  gap: var(--s-2);
-  height: 34px;              /* match .iconbtn so the toolbar row is even */
-  padding: 0 14px;
-  font-size: var(--t-sm);
-  font-weight: 600;
-  white-space: nowrap;
-  box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset, 0 4px 14px var(--accent-glow);
-}
-.topbar-run svg { flex: 0 0 auto; }
-.topbar-run.is-stop {
-  background: var(--fail); border-color: var(--fail); color: var(--on-accent);
-}
-.topbar-run.is-stop:hover { filter: brightness(1.08); }
-
 /* ---- bundle download checklist dialog ---------------------------------- */
 .dlg-checklist { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-2); max-height: calc(50vh / var(--ll-zoom, 1)); overflow: auto; }
 .dlg-check-tools { display: flex; gap: var(--s-2); margin-bottom: var(--s-1); }
 .dlg-check { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; font-size: var(--t-sm); }
 .dlg-check input { accent-color: var(--accent); cursor: pointer; }
 
-/* ---- compare toolbar (CSV export) -------------------------------------- */
-.cmp-toolbar { display: flex; justify-content: flex-end; margin-bottom: var(--s-2); }
-.cmp-pick-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
 /* Full-width, readable compare error (was a tiny pill that clipped the text). */
 .cmp-error {
   margin: var(--s-3) 0; padding: var(--s-3) var(--s-4); border-radius: var(--r-md);
@@ -532,7 +340,6 @@
 /* ---- scroll-spy: highlight the jump chip for the section in view -------- */
 
 /* ---- Layout: one unified tool button per tool (incl. GDS3D/OpenROAD) ---- */
-
 
 /* ---------- liability disclaimer (LanEx is a viewer, not sign-off) ---------- */
 

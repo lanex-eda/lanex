@@ -32,7 +32,7 @@ import { LogView } from "./logview.js";
 import { fileActionsHtml, wireFileActions } from "./fileview.js";
 import { liveLines, liveRows, onLiveLog, droppedLines } from "./logs.js";
 import { reportCardHtml, verdictOf, fmtDur } from "./reportcard.js";
-import { fixListHtml, problemsOf, termsRowHtml, codeChipHtml, notesHtml } from "./problems.js";
+import { fixListHtml, problemsOf, onProblems, termsRowHtml, codeChipHtml, notesHtml } from "./problems.js";
 import { loadingStart, pageSkeleton } from "./loading.js";
 import "./fixsheet.js";
 
@@ -242,6 +242,8 @@ async function load(tok) {
   vfP.then((vf) => { if (ok()) { F.vf = vf; paint(); } });
   // A run whose checks failed leads with its problems (diagnosis and fixes).
   if (rx && rx.kind === "checks-failed") problemsOf(tag).then((px) => { if (ok()) { F.px = px; paint(); } });
+  // A big DRC report's rules and places come in a later answer (px.pending).
+  if (!F.pxSub) F.pxSub = onProblems((t, px) => { if (F.tag === t && F.px && F.px.pending) { F.px = px; paint(); } });
   if (flows) F.flows = Object.fromEntries((Array.isArray(flows) ? flows : []).map((f) => [f.name, f.steps || []]));
   if (!F.stepInfo.size) for (const s of state.steps || []) F.stepInfo.set(s.id, s);
   paint();

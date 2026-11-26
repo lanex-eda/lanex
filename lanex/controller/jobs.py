@@ -581,8 +581,10 @@ def _engine_out(*args: str, timeout: float = 8.0) -> Optional[str]:
 
 
 def flow_containers() -> List[Dict[str, Any]]:
-    """Every live LanEx flow container: ``[{name, id, workdir}]`` (empty when
-    the engine can't be asked)."""
+    """Every live LanEx flow container: ``[{name, id, workdir, labels}]``
+    (empty when the engine can't be asked). ``labels`` are the ``lanex.*``
+    ones the starting server put on it (runner.container_labels): its home,
+    boot and process id; older containers have none."""
     out = _engine_out("ps", "--filter", "name=lanex-flow-", "--format", "{{.ID}} {{.Names}}")
     if not out:
         return []
@@ -590,11 +592,64 @@ def flow_containers() -> List[Dict[str, Any]]:
     for line in out.splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[1].startswith("lanex-flow-"):
-            found.append({"id": parts[0], "name": parts[1], "workdir": None})
+            found.append({"id": parts[0], "name": parts[1], "workdir": None, "labels": {}})
     for c in found:
-        wd = _engine_out("inspect", "--format", "{{.Config.WorkingDir}}", c["name"], timeout=5)
-        c["workdir"] = (wd or "").strip() or None
+        # Docker and Podman both answer .Config.WorkingDir and .Config.Labels.
+        got = _engine_out("inspect", "--format", "{{.Config.WorkingDir}}\t{{json .Config.Labels}}", c["name"], timeout=5)
+        wd, _, lab = (got or "").strip().partition("\t")
+        c["workdir"] = wd.strip() or None
+        try:
+            doc = json.loads(lab) if lab.strip() not in ("", "null") else {}
+            c["labels"] = {k: str(v) for k, v in (doc or {}).items() if str(k).startswith("lanex.")}
+        except ValueError:
+            c["labels"] = {}
     return found
+
+
+def _server_alive(pid: Any) -> bool:
+    """Whether a LanEx server runs as process *pid* here (its command line
+    names lanex)."""
+    try:
+        n = int(pid)
+        if n == os.getpid():
+            return True
+        if n <= 0:
+            return False
+        with open(f"/proc/{n}/cmdline", "rb") as f:
+            return b"lanex" in f.read(4096)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def is_orphan(c: Dict[str, Any], *, home: str, boot: str, known_dirs: Iterable[Any]) -> bool:
+    """Whether a ``lanex-flow-*`` container is a leftover of *this* LanEx
+    home: started by a server of this home whose server is gone (another boot,
+    and that process no longer runs). A container another LanEx started on
+    the same engine (another home, or a live server) is never this home's.
+    A container from before labels counts when it works in one of this
+    home's projects."""
+    lab = c.get("labels") or {}
+    if lab.get("lanex.home"):
+        if os.path.normpath(lab["lanex.home"]) != os.path.normpath(home):
+            return False
+        if lab.get("lanex.boot") == boot:
+            return False                  # this server's own (a job starting or just ended)
+        return not _server_alive(lab.get("lanex.pid"))
+    wd = c.get("workdir")
+    if not wd:
+        return False
+    try:
+        w = Path(wd).resolve()
+    except Exception:
+        return False
+    for d in known_dirs or []:
+        try:
+            p = Path(str(d)).resolve()
+        except Exception:
+            continue
+        if w == p or p in w.parents:
+            return True
+    return False
 
 
 def remove_container(name: str) -> bool:
@@ -1622,6 +1677,7 @@ class Scheduler:
         else becomes ``interrupted`` with where Continue would start, and its
         project's queue comes back paused (a crash may have been the queue)."""
         from .events import BOOT_ID
+        design_dirs = list(design_dirs or [])
         conts = None
         found = {"reattached": 0, "interrupted": 0}
         for d in design_dirs:
@@ -1656,7 +1712,15 @@ class Scheduler:
         if conts is None:
             conts = {c["name"]: c for c in flow_containers()}
         known = {j.get("container") for j in self._all_jobs() if j.get("container")}
-        self._orphans = [c for n, c in conts.items() if n not in known]
+        # Only this home's leftovers: another LanEx server on the same engine
+        # (another home, or one still running) keeps its containers.
+        from . import platform_env
+        try:
+            home = str(platform_env.home().expanduser().resolve())
+        except Exception:
+            home = os.environ.get("LANEX_HOME") or ""
+        self._orphans = [c for n, c in conts.items()
+                         if n not in known and is_orphan(c, home=home, boot=BOOT_ID, known_dirs=design_dirs)]
         self._dirty = True
         return found
 

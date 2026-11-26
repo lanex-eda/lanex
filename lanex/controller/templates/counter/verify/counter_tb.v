@@ -3,6 +3,9 @@
 // past 255 and resets mid-count, checks every cycle against a model, and
 // ends with PASS, or with FAIL and a non-zero exit when a value is wrong.
 module counter_tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     reg        clk = 1'b0;
     reg        rst = 1'b1;
     reg        en  = 1'b0;
@@ -23,7 +26,7 @@ module counter_tb;
         begin
             if (count !== expected) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: count = %0d, expected %0d", $time, count, expected);
+                $display("FAIL at %t: count = %0d, expected %0d", $realtime, count, expected);
             end
         end
     endtask

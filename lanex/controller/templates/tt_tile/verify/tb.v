@@ -6,6 +6,9 @@
 // enables every cycle against a model. It ends with PASS, or with FAIL and a
 // non-zero exit.
 module tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     reg  [7:0] ui_in = 8'd0;
     reg  [7:0] uio_in = 8'd0;
     reg        ena = 1'b1;
@@ -32,8 +35,8 @@ module tb;
             checks = checks + 1;
             if (uo_out !== model || uio_out !== {model[7:4], 4'b0} || uio_oe !== 8'hf0) begin
                 errors = errors + 1;
-                $display("FAIL at %0t ns: uo_out = %0d uio_out = %h uio_oe = %h, expected %0d %h f0",
-                         $time, uo_out, uio_out, uio_oe, model, {model[7:4], 4'b0});
+                $display("FAIL at %t: uo_out = %0d uio_out = %h uio_oe = %h, expected %0d %h f0",
+                         $realtime, uo_out, uio_out, uio_oe, model, {model[7:4], 4'b0});
             end
         end
     endtask

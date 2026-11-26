@@ -162,3 +162,17 @@ def test_create_project_no_path_escape(tmp_path: Path):
     for rel in res["files"]:
         resolved = (dest / rel).resolve()
         assert str(resolved).startswith(str(dest.resolve()))
+
+
+def test_the_sram_template_is_sky130_only(tmp_path: Path):
+    """Its block (sky130_sram_1kbyte_1rw1r_32x256_8) ships with the sky130 PDK
+    only: the list says so, and making it for another PDK is refused in
+    words instead of making a project whose run can't work."""
+    by = {t["name"]: t for t in scaffold.list_templates()}
+    assert by["sram"]["pdks"] == ["sky130*"]
+    assert all(t["pdks"] == [] for n, t in by.items() if n != "sram")
+    res = scaffold.create_project(tmp_path / "s", "sram", top="", pdk="gf180mcuD", scl="gf180mcu_fd_sc_mcu7t5v0")
+    assert not res["ok"] and "needs the sky130 PDK" in res["error"] and "gf180mcuD" in res["error"]
+    assert not (tmp_path / "s").exists()
+    assert scaffold.pdk_refusal({"name": "sram", "macros": [{"pdk": "sky130*"}]}, "sky130B") is None
+    assert scaffold.pdk_refusal({"name": "x"}, "ihp-sg13g2") is None

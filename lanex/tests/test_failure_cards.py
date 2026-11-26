@@ -25,8 +25,8 @@ def _run(tmp: Path, case: str, *, cfg_extra=None, outcome=None) -> Path:
         sd = run / d
         sd.mkdir()
         (sd / "state_in.json").write_text("{}")
-        if d != rec["stopped"]:
-            (sd / "state_out.json").write_text(json.dumps({"metrics": {}}))
+        if d != rec["stopped"] and d not in rec.get("deferred", []):
+            (sd / "state_out.json").write_text(json.dumps({"metrics": rec.get("metrics") or {}}))
         else:
             if rec.get("step_log_name") and rec.get("step_log_tail"):
                 (sd / rec["step_log_name"]).write_text("\n".join(rec["step_log_tail"]) + "\n", encoding="utf-8")
@@ -73,7 +73,112 @@ def test_every_case_in_the_fixture_is_covered():
                         # forced 2026-11-26 with scripts/failure_goldens.py
                         "latch", "modmissing", "modmissing_yosys", "include_missing", "implicit_wire", "dup_module",
                         "dup_module_lint", "sv_import", "bad_type", "pdk_missing", "unknown_key", "margin_negative",
-                        "pdn_pitch", "pin_order", "rsz_slew", "corner_wildcard"}
+                        "pdn_pitch", "pin_order", "rsz_slew", "corner_wildcard",
+                        # the SRAM template, one thing broken in its macro overlay
+                        "macro_inst", "macro_unplaced", "macro_orient_e", "macro_nopower", "macro_channel",
+                        "macro_ihp_halo"}
+
+
+# ---------------------------------------------------------------- macros (forced 2026-11-26)
+# LanEx's SRAM template on sky130A, LibreLane 3.0.4, the overlay LanEx writes
+# with one thing broken (scripts/failure_goldens.py macro_*); macro_ihp_halo
+# is lane 7's real IHP run with the grid an earlier LanEx wrote.
+
+def test_a_macro_instance_the_rtl_does_not_have_names_the_rtl_s_name(tmp_path):
+    rec = FIX["macro_inst"]
+    assert rec["error_log"].strip() == "No macro instance u_wrong found."
+    src = tmp_path / "rtl" / "sram_demo.v"
+    src.parent.mkdir()
+    src.write_text((Path(problems.__file__).parent / "templates" / "sram" / "src" / "sram_demo.v").read_text())
+    rx, c = _card(tmp_path, "macro_inst", cfg_extra={"VERILOG_FILES": [str(src)]})
+    assert rx["step"]["dir"] == "11-openroad-checkmacroinstances"
+    assert c["kb"] == "macro-instance" and c["title"] == "u_wrong isn't an instance in your RTL"
+    assert "your RTL names it u_sram" in c["plain"] and "never the macro's cell name" in c["plain"]
+    assert c["fixes"][0]["go"] == {"tab": "cells", "section": "cl-macros"}
+    assert "Rename u_wrong to u_sram" in c["fixes"][0]["why"]
+
+
+def test_a_macro_instance_card_without_the_rtl_still_says_what_to_use(tmp_path):
+    _rx, c = _card(tmp_path, "macro_inst")          # the RTL path of the golden isn't on disk
+    assert c["title"] == "u_wrong isn't an instance in your RTL"
+    assert "LibreLane found no instance by that name" in c["plain"]
+
+
+def test_an_unplaced_macro_reads_tap_and_pdn_and_says_give_it_a_position(tmp_path):
+    rec = FIX["macro_unplaced"]
+    assert rec["error_log"].strip() == "[PDN-0235] Design has unplaced macros."
+    assert rec["warnings"]["TAP-0032"].endswith("Macro u_sram is not placed.")
+    rx, c = _card(tmp_path, "macro_unplaced")
+    assert rx["step"]["dir"] == "21-openroad-generatepdn"
+    assert c["kb"] == "pdn-0235" and c["title"] == "u_sram has no position"
+    assert 'TAP-0032 "Macro u_sram is not placed"' in c["plain"]
+    assert c["fixes"][0]["label"] == "Give u_sram a position"
+
+
+def test_a_macro_turned_90_degrees_says_use_n_s_fn_or_fs(tmp_path):
+    rec = FIX["macro_orient_e"]
+    assert "[PDN-0233] Failed to generate full power grid." in rec["error_log"]
+    assert 'The grid "macro - u_sram" (Instance) does not contain any shapes or vias.' in rec["warnings"]["PDN-0232"]
+    _rx, c = _card(tmp_path, "macro_orient_e")
+    assert c["kb"] == "pdn-0233" and c["title"] == "u_sram is turned 90° (E), so no power strap reaches it"
+    assert "Use N, S, FN or FS." in c["plain"] and "met5 straps over its met4 pins" in c["plain"]
+
+
+def test_unhooked_macro_power_pins_stop_at_the_disconnected_pins_check(tmp_path):
+    rec = FIX["macro_nopower"]
+    # Only warnings at the power grid; the run routes, Checker.TrDRC defers its
+    # error, and Checker.DisconnectedPins stops it.
+    assert "PDN-0231" in rec["warnings"] and "Supply pin u_sram/" in rec["warnings"]["PDN-0189"]
+    assert rec["stopped"] == "49-checker-disconnectedpins" and rec["deferred"] == ["47-checker-trdrc"]
+    assert "1 critical disconnected pins found." in rec["error_log"]
+    rx, c = _card(tmp_path, "macro_nopower")
+    assert rx["step"]["dir"] == "49-checker-disconnectedpins", rx["step"]
+    assert c["kb"] == "macro-power" and c["title"] == "u_sram's power pins aren't hooked up"
+    assert "(vccd1" in c["plain"] and "PDN-0231" in c["plain"]
+    assert c["fixes"][0]["label"] == "Hook up its power pins"
+
+
+def test_a_disconnected_pin_without_macro_warnings_gets_the_plain_card():
+    c = problems.explain_error("2 critical disconnected pins found.", {})
+    assert c["kb"] == "macro-power" and c["title"] == "A pin is connected to nothing"
+    assert "2 critical pins" in c["plain"]
+
+
+def test_a_narrow_strip_of_rows_by_a_macro_says_twenty_microns(tmp_path, monkeypatch):
+    rec = FIX["macro_channel"]
+    assert rec["error_log"].strip() == "[DPL-0036] Detailed placement failed."
+    assert rec["metrics"]["design__core__bbox"].split()[0] == "5.52"
+    # The size the SRAM's LEF gives (read on the PC that forced the run).
+    monkeypatch.setattr(problems, "_macro_size", lambda cfg, mod: (479.78, 397.5))
+    rx, c = _card(tmp_path, "macro_channel")
+    assert rx["step"]["dir"] == "32-openroad-repairdesignpostgpl"
+    assert c["kb"] == "dpl-0036" and c["title"] == "The rows beside u_sram are too narrow"
+    assert "a 7.02 µm strip of cell rows on its left" in c["plain"]
+    assert "Leave at least 20 µm of rows beside a macro, or none" in c["plain"]
+    assert c["fixes"][0]["label"] == "Move u_sram"
+
+
+def test_dpl_0036_without_a_narrow_strip_keeps_the_placement_card(tmp_path, monkeypatch):
+    monkeypatch.setattr(problems, "_macro_size", lambda cfg, mod: (479.78, 397.5))
+    _rx, c = _card(tmp_path, "macro_channel", cfg_extra={"FP_MACRO_HORIZONTAL_HALO": 30})
+    assert c["title"] != "The rows beside u_sram are too narrow"
+
+
+def test_an_unconnected_power_grid_names_the_net_and_the_halo(tmp_path):
+    rec = FIX["macro_ihp_halo"]
+    assert rec["error_log"].startswith("[PSM-0069] Check connectivity failed on VGND.")
+    rx, c = _card(tmp_path, "macro_ihp_halo")
+    assert rx["step"]["dir"] == "56-openroad-irdropreport"
+    assert c["kb"] == "psm-0069" and c["title"] == "Part of the VGND grid isn't connected"
+    assert "PSM-0038; the first is a Metal1 piece at (328.8, 67.82) µm" in c["plain"]
+    assert "keep-out halo" in c["plain"] and "running again fixes it" in c["plain"]
+    assert any(f["go"].get("box") == "328.80,67.82,394.08,68.26" for f in c["fixes"])
+
+
+def test_the_macro_cards_are_marked_checked_on_a_real_run():
+    by = {e["id"]: e for e in problems.KB}
+    for k in ("macro-instance", "pdn-0235", "pdn-0233", "macro-power", "psm-0069", "dpl-0036"):
+        assert by[k]["source"].startswith("forced:"), k
 
 
 # ---------------------------------------------------------------- forced 2026-11-26

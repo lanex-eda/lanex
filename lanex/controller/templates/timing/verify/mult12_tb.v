@@ -5,6 +5,9 @@
 // 200 random ones. It ends with PASS, or with FAIL and a non-zero exit.
 // Simulation has no wire delays: it checks the logic, the run checks timing.
 module mult12_tb;
+    // Times print in ns: %t follows $timeformat (without it, a time prints
+    // in the simulator's picosecond steps).
+    initial $timeformat(-9, 3, " ns", 0);
     localparam W = 12;
     reg            clk = 1'b0;
     reg            rst = 1'b1;
@@ -35,7 +38,7 @@ module mult12_tb;
                 checks = checks + 1;
                 if (p !== want2) begin
                     errors = errors + 1;
-                    $display("FAIL at %0t ns: p = %0d, expected %0d", $time, p, want2);
+                    $display("FAIL at %t: p = %0d, expected %0d", $realtime, p, want2);
                 end
             end
             a = x; b = y;

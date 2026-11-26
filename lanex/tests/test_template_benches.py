@@ -48,7 +48,9 @@ def _simulate(d: Path, tb: str, engine: str):
     argv = simulate.build_sim_command(d, top=top, sources=m["sources"], testbench=tb,
                                       defines=m["defines"], include_dirs=m["include_dirs"],
                                       run_mode="local", sim_engine=engine)
-    p = subprocess.run(argv, cwd=d, capture_output=True, text=True, timeout=600)
+    # No core dump from a bench that aborts (a failing Verilator bench), as the
+    # IDE runs it: WSL would write ~260 MB to the Windows temp folder each time.
+    p = subprocess.run(argv, cwd=d, capture_output=True, text=True, timeout=600, preexec_fn=simulate._limit_core)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -104,6 +106,22 @@ def test_template_bench_catches_a_wrong_design(tmp_path: Path, name: str, engine
     assert rc != 0, out[-3000:]
     assert re.search(r"\bFAIL\b", out), out[-3000:]
     assert not re.search(r"^PASS\b", out, re.M), out[-3000:]
+    # A time in a FAIL line is in ns ($timeformat), never picoseconds labelled ns.
+    for t in re.findall(r"FAIL at ([^:]+):", out):
+        assert re.fullmatch(r"\s*\d+\.\d{3} ns", t), (t, out[-3000:])
+        assert float(t.split()[0]) < 1e6, t
+
+
+def test_bench_times_follow_timeformat():
+    """``%0t`` prints the simulator's precision (ps under 1ns/1ps), so the old
+    "FAIL at %0t ns" said 25000 ns for 25 ns. Every bench that prints a time
+    sets ``$timeformat`` to ns and prints it with ``%t``."""
+    root = Path(scaffold.__file__).resolve().parent / "templates"
+    for tb in [p for p in root.glob("*/verify/*") if p.suffix in (".v", ".sv")]:
+        text = tb.read_text()
+        assert "%0t" not in text, tb
+        if "%t" in text:
+            assert re.search(r'\$timeformat\(-9,\s*\d+,\s*" ns"', text), tb
 
 
 def test_benches_drive_inputs_away_from_the_sampling_edge():

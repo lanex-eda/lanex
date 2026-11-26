@@ -2379,7 +2379,8 @@ async function paintSide(r) {
   if (top) top.innerHTML = sideTopHtml(r, rx, vf);
 }
 
-async function runAction(id, r) {
+// The palette opens a run's actions with this same function (palette.js).
+export async function runAction(id, r) {
   const d = r._design;
   if (["flow", "layout", "analytics", "verify"].includes(id)) { await setRun(r.tag, d); go(id === "flow" ? "pipeline" : id); return; }
   if (id === "baseline") return toggleBaseline(r);
@@ -2531,7 +2532,7 @@ async function togglePin(tag, designDir, pinned) {
 
 // Import a run from elsewhere: adopt a run directory, or restore a LanEx
 // export bundle (.zip). Both land under the active design's runs/.
-async function importRunFlow() {
+export async function importRunFlow() {
   if (!state.designDir) {
     await alertDialog({
       title: "No active design",

@@ -451,14 +451,3 @@ export async function ensureActiveDesignFor(run) {
   return state.designDir;
 }
 
-// DSE's own multi-run picker still carries a scope box (it joins Runs later).
-export function scopeToggleHtml(id) {
-  return "<label class='run-scope-toggle' title=\"Show runs from every design you've opened recently, not just the active one\">" +
-    "<input type='checkbox' id='" + id + "'" + (getRunScope() === "all" ? " checked" : "") + "/> All designs</label>";
-}
-export function wireScopeToggle(id, onChange) {
-  const cb = document.getElementById(id);
-  if (!cb || cb._wired) return;
-  cb._wired = true;
-  cb.addEventListener("change", () => { setRunScope(cb.checked ? "all" : "design"); if (onChange) onChange(); });
-}

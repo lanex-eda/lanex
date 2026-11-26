@@ -1,13 +1,16 @@
 // palettemodel.js — the command palette's search, kept pure (no DOM) so it is
 // tested: prefix parsing, fuzzy scoring and ranking with recents first.
 //
-//   >  actions (the default)      #  LibreLane settings     @  runs
-//   /  project files              ?  help and glossary
+//   >  actions (the default)   !  projects   @  runs   :  flow steps
+//   #  LibreLane settings      /  project files        ?  help and glossary
+//   (Verify checks, tools and PDKs come up by name.)
 
 export const PREFIXES = {
   ">": { group: "action", label: "Actions" },
-  "#": { group: "setting", label: "Settings" },
+  "!": { group: "project", label: "Projects" },
   "@": { group: "run", label: "Runs" },
+  ":": { group: "step", label: "Flow steps" },
+  "#": { group: "setting", label: "Settings" },
   "/": { group: "file", label: "Files" },
   "?": { group: "help", label: "Help" },
 };
@@ -44,7 +47,18 @@ export function fuzzyScore(q, text) {
   return Math.max(1, 200 - spread * 4 - first);
 }
 
-const GROUP_ORDER = { action: 0, setting: 1, run: 2, file: 3, help: 4 };
+const GROUP_ORDER = { action: 0, project: 1, run: 2, step: 3, check: 4, setting: 5, tool: 6, file: 7, help: 8 };
+
+// After data arrives the list is ranked again: keep the row the user had
+// highlighted by its id (VS Code fixed the same jump, issue #102480), else
+// stay at the same place, clamped. Pure (tested).
+export function keepSelection(list, prevId, prevIndex) {
+  if (prevId) {
+    const i = list.findIndex((it) => it.id === prevId);
+    if (i >= 0) return i;
+  }
+  return Math.max(0, Math.min(prevIndex || 0, list.length - 1));
+}
 
 // Score of query *q* against an item's title and, below it, its keys.
 function itemScore(q, it) {
